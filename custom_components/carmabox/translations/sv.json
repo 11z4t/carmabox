@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CARMA Box",
+        "description": "Vi letar efter din utrustning..."
+      },
+      "no_inverter": {
+        "title": "Ingen inverter hittad",
+        "description": "CARMA Box stödjer: {supported}.\n\nInstallera rätt HA-integration för din inverter först.\n\nKontakta support@carmabox.se om du behöver hjälp."
+      },
+      "confirm": {
+        "title": "Hittad utrustning",
+        "description": "{detected}\n\nStämmer detta?"
+      },
+      "ev": {
+        "title": "Elbil",
+        "description": "Konfigurera din elbil och laddning.",
+        "data": {
+          "ev_enabled": "Jag har elbil",
+          "ev_model": "Bilmodell",
+          "ev_capacity_kwh": "Batterikapacitet (kWh)",
+          "ev_night_target_soc": "Minsta SoC varje morgon (%)",
+          "ev_full_charge_days": "Max dagar mellan 100%-laddning"
+        }
+      },
+      "grid": {
+        "title": "Elnät",
+        "description": "Välj ditt prisområde och nätägare.",
+        "data": {
+          "price_area": "Prisområde",
+          "grid_operator": "Nätägare",
+          "peak_cost_per_kw": "Effektavgift (kr/kW)"
+        }
+      },
+      "household": {
+        "title": "Hushåll",
+        "description": "Berätta om ditt hushåll så vi kan optimera bättre.",
+        "data": {
+          "household_size": "Antal personer",
+          "has_pool_pump": "Pool med värmepump"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "CARMA Box är redan konfigurerad.",
+      "no_inverter": "Ingen stödd inverter hittades."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "CARMA Box Inställningar",
+        "description": "Ändra inställningar. Uppdateras direkt utan omstart.",
+        "data": {
+          "target_weighted_kw": "Effektmål (kW viktat timmedel)",
+          "min_soc": "Minsta batteri-SoC (%)",
+          "ev_night_target_soc": "EV minsta SoC varje morgon (%)",
+          "ev_full_charge_days": "Max dagar mellan EV 100%",
+          "peak_cost_per_kw": "Effektavgift (kr/kW)",
+          "household_size": "Antal personer",
+          "has_pool_pump": "Pool med värmepump"
+        }
+      }
+    }
+  }
+}

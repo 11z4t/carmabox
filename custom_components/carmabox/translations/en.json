@@ -1,0 +1,67 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "CARMA Box",
+        "description": "Searching for your equipment..."
+      },
+      "no_inverter": {
+        "title": "No inverter found",
+        "description": "CARMA Box supports: {supported}.\n\nInstall the correct HA integration for your inverter first.\n\nContact support@carmabox.se for help."
+      },
+      "confirm": {
+        "title": "Detected equipment",
+        "description": "{detected}\n\nIs this correct?"
+      },
+      "ev": {
+        "title": "Electric vehicle",
+        "description": "Configure your EV and charging.",
+        "data": {
+          "ev_enabled": "I have an EV",
+          "ev_model": "Car model",
+          "ev_capacity_kwh": "Battery capacity (kWh)",
+          "ev_night_target_soc": "Minimum morning SoC (%)",
+          "ev_full_charge_days": "Max days between 100% charge"
+        }
+      },
+      "grid": {
+        "title": "Electricity grid",
+        "description": "Select your price area and grid operator.",
+        "data": {
+          "price_area": "Price area",
+          "grid_operator": "Grid operator",
+          "peak_cost_per_kw": "Peak power charge (kr/kW)"
+        }
+      },
+      "household": {
+        "title": "Household",
+        "description": "Tell us about your household for better optimization.",
+        "data": {
+          "household_size": "Number of people",
+          "has_pool_pump": "Pool with heat pump"
+        }
+      }
+    },
+    "abort": {
+      "already_configured": "CARMA Box is already configured.",
+      "no_inverter": "No supported inverter found."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "CARMA Box Settings",
+        "description": "Change settings. Updates immediately without restart.",
+        "data": {
+          "target_weighted_kw": "Power target (kW weighted hourly average)",
+          "min_soc": "Minimum battery SoC (%)",
+          "ev_night_target_soc": "EV minimum morning SoC (%)",
+          "ev_full_charge_days": "Max days between EV 100%",
+          "peak_cost_per_kw": "Peak power charge (kr/kW)",
+          "household_size": "Number of people",
+          "has_pool_pump": "Pool with heat pump"
+        }
+      }
+    }
+  }
+}
