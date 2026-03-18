@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .coordinator import CarmaboxCoordinator
+from .coordinator import BatteryCommand, CarmaboxCoordinator
 
 
 async def async_setup_entry(
@@ -68,9 +68,9 @@ class CarmaboxPlanStatusSensor(CarmaboxBaseSensor):
             return "standby"
         # Check what coordinator last commanded
         last = self.coordinator._last_command
-        if "discharge" in last:
+        if last == BatteryCommand.DISCHARGE:
             return "discharging"
-        if "charge" in last:
+        if last == BatteryCommand.CHARGE_PV:
             return "charging"
         return "idle"
 

@@ -39,7 +39,7 @@ def calculate_target(
 
     for _ in range(50):
         target = (lo + hi) / 2
-        total_batt = 0
+        total_batt = 0.0
         for i in range(min(hours, len(hourly_loads))):
             w = hourly_weights[i] if i < len(hourly_weights) else 1.0
             load = hourly_loads[i]
