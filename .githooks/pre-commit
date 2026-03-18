@@ -1,0 +1,9 @@
+#!/bin/bash
+set -e
+echo "Pre-commit: quality gates..."
+cd "$(git rev-parse --show-toplevel)"
+python3 -m ruff check . || { echo "❌ ruff FAILED"; exit 1; }
+python3 -m ruff format --check . || { echo "❌ format FAILED"; exit 1; }
+python3 -m mypy --strict custom_components/carmabox/ || { echo "❌ mypy FAILED"; exit 1; }
+python3 -m pytest tests/unit/ -q --tb=short || { echo "❌ tests FAILED"; exit 1; }
+echo "✅ All gates passed"

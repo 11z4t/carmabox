@@ -35,6 +35,6 @@ def test_ha_login_via_keyboard(page: Page) -> None:
     page.wait_for_timeout(5000)
 
     url = page.url
-    assert any(
-        x in url for x in ["lovelace", "onboarding", "config", "states"]
-    ), f"Unexpected URL after login: {url}"
+    assert any(x in url for x in ["lovelace", "onboarding", "config", "states"]), (
+        f"Unexpected URL after login: {url}"
+    )
