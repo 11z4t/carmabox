@@ -417,3 +417,29 @@ async def test_flow_price_area_se3(hass: HomeAssistant) -> None:
             },
         )
     assert result["step_id"] == "grid"
+
+
+async def test_auto_detect_dual_price_sources(hass: HomeAssistant) -> None:
+    """Two price sources → primary + fallback entity mapping."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    np_entry = MockConfigEntry(domain="nordpool", title="Nordpool")
+    np_entry.add_to_hass(hass)
+    tibber_entry = MockConfigEntry(domain="tibber", title="Tibber")
+    tibber_entry.add_to_hass(hass)
+
+    hass.states.async_set("sensor.nordpool_kwh_se3", "85")
+    hass.states.async_set("sensor.tibber_energy_price", "90")
+
+    from custom_components.carmabox.config_flow import CarmaboxConfigFlow
+
+    flow = CarmaboxConfigFlow()
+    flow.hass = hass
+    detected = await flow._auto_detect()
+
+    assert len(detected["price_sources"]) == 2
+
+    flow._detected = detected
+    mappings = flow._build_entity_mappings()
+    assert "price_entity" in mappings
+    assert "price_entity_fallback" in mappings

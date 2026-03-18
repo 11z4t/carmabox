@@ -306,10 +306,12 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             mappings["ev_current_entity"] = f"sensor.{ev_prefix}_current"
             mappings["ev_power_entity"] = f"sensor.{ev_prefix}_power"
 
-        # Price
+        # Price — primary + fallback
         price_sources = self._detected.get("price_sources", [])
         if price_sources:
             mappings["price_entity"] = price_sources[0].get("entity_id", "")
+            if len(price_sources) > 1:
+                mappings["price_entity_fallback"] = price_sources[1].get("entity_id", "")
 
         return mappings
 

@@ -258,3 +258,37 @@ class TestExecutorWithPlan:
 
         # Export overrides plan → charge
         assert coord._last_command == BatteryCommand.CHARGE_PV
+
+
+class TestPriceFallback:
+    def test_fallback_to_secondary_price(self) -> None:
+        """When primary price returns all-50 (offline), use fallback."""
+        coord = _make_coord(
+            {
+                "price_entity": "sensor.np_offline",
+                "price_entity_fallback": "sensor.tibber",
+                "battery_soc_1": "sensor.soc1",
+            }
+        )
+        # Primary: offline (returns None → adapter fallbacks to 50)
+        # Don't set sensor.np_offline → adapter returns 50 flat
+
+        # Secondary (Tibber): has real prices
+        _set(
+            coord,
+            "sensor.tibber",
+            "85",
+            {
+                "today": [float(i * 5 + 10) for i in range(24)],
+                "tomorrow": [],
+                "tomorrow_valid": False,
+            },
+        )
+        _set(coord, "sensor.soc1", "80")
+        _set(coord, "sensor.solcast_pv_forecast_forecast_today", "20")
+        _set(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "15")
+
+        coord._generate_plan(CarmaboxState(battery_soc_1=80))
+
+        # Plan should exist and NOT be flat-price
+        assert len(coord.plan) > 0

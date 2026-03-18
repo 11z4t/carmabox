@@ -144,10 +144,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             now = datetime.now()
             start_hour = now.hour
 
-            # Collect prices
-            nordpool = NordpoolAdapter(self.hass, self._get_entity("price_entity", ""))
-            today_prices = nordpool.today_prices
-            tomorrow_prices = nordpool.tomorrow_prices
+            # Collect prices — try primary, fallback to secondary
+            price_entity = self._get_entity("price_entity", "")
+            price_entity_fallback = self._get_entity("price_entity_fallback", "")
+            price_adapter = NordpoolAdapter(self.hass, price_entity)
+            today_prices = price_adapter.today_prices
+
+            # If primary returns all-fallback (50 öre), try secondary
+            if price_entity_fallback and all(p == 50.0 for p in today_prices):
+                _LOGGER.info("Primary price source offline, trying fallback")
+                price_adapter = NordpoolAdapter(self.hass, price_entity_fallback)
+                today_prices = price_adapter.today_prices
+
+            tomorrow_prices = price_adapter.tomorrow_prices
             prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
 
             # Collect PV forecast
