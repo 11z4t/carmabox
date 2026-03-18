@@ -209,3 +209,180 @@ class TestBatteryCommand:
 
         asyncio.get_event_loop().run_until_complete(coord._cmd_standby(CarmaboxState()))
         coord.hass.services.async_call.assert_not_called()
+
+
+class TestCoordinatorInit:
+    def test_init_defaults(self) -> None:
+        """Test coordinator initializes with defaults when no options."""
+        hass = MagicMock()
+        entry = MagicMock()
+        entry.options = {}
+        entry.entry_id = "test"
+
+        # Patch super().__init__ to avoid HA internals
+        with patch.object(CarmaboxCoordinator, "__init__", lambda self, h, e: None):
+            coord = CarmaboxCoordinator.__new__(CarmaboxCoordinator)
+            coord.hass = hass
+            coord.entry = entry
+            coord.safety = MagicMock()
+            coord.plan = []
+            coord._plan_counter = 0
+            coord._last_command = BatteryCommand.IDLE
+            coord.target_kw = entry.options.get("target_weighted_kw", 2.0)
+            coord.min_soc = entry.options.get("min_soc", 15.0)
+
+        assert coord.target_kw == 2.0
+        assert coord.min_soc == 15.0
+        assert coord._last_command == BatteryCommand.IDLE
+
+    def test_init_with_options(self) -> None:
+        coord = _make_coordinator(
+            {
+                "target_weighted_kw": 3.0,
+                "min_soc": 20.0,
+            }
+        )
+        assert coord.target_kw == 3.0
+        assert coord.min_soc == 20.0
+
+
+class TestReadHelpers:
+    def test_read_float_valid(self) -> None:
+        coord = _make_coordinator()
+        _set_state(coord, "sensor.test", "42.5")
+        assert coord._read_float("sensor.test") == 42.5
+
+    def test_read_float_invalid(self) -> None:
+        coord = _make_coordinator()
+        _set_state(coord, "sensor.test", "not_a_number")
+        assert coord._read_float("sensor.test") == 0.0
+
+    def test_read_float_unreasonable(self) -> None:
+        coord = _make_coordinator()
+        _set_state(coord, "sensor.test", "999999")
+        assert coord._read_float("sensor.test") == 0.0
+
+    def test_read_float_empty_entity_id(self) -> None:
+        coord = _make_coordinator()
+        assert coord._read_float("") == 0.0
+
+    def test_read_str_valid(self) -> None:
+        coord = _make_coordinator()
+        _set_state(coord, "select.test", "charge_pv")
+        assert coord._read_str("select.test") == "charge_pv"
+
+    def test_read_str_unavailable(self) -> None:
+        coord = _make_coordinator()
+        _set_state(coord, "select.test", "unavailable")
+        assert coord._read_str("select.test") == ""
+
+    def test_read_str_missing(self) -> None:
+        coord = _make_coordinator()
+        assert coord._read_str("select.nonexistent") == ""
+
+    def test_read_str_empty_entity_id(self) -> None:
+        coord = _make_coordinator()
+        assert coord._read_str("") == ""
+
+
+class TestAsyncUpdateData:
+    @pytest.mark.asyncio
+    async def test_update_collects_and_executes(self) -> None:
+        coord = _make_coordinator({"grid_entity": "sensor.grid"})
+        _set_state(coord, "sensor.grid", "1500")
+
+        with patch.object(coord, "_execute", new_callable=AsyncMock) as mock_exec:
+            result = await coord._async_update_data()
+
+        assert result.grid_power_w == 1500.0
+        mock_exec.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_update_triggers_replan(self) -> None:
+        coord = _make_coordinator()
+        coord._plan_counter = 9  # Will hit threshold (10)
+
+        with (
+            patch.object(coord, "_execute", new_callable=AsyncMock),
+            patch.object(coord, "_generate_plan") as mock_plan,
+        ):
+            await coord._async_update_data()
+
+        mock_plan.assert_called_once()
+        assert coord._plan_counter == 0
+
+    @pytest.mark.asyncio
+    async def test_update_error_raises_update_failed(self) -> None:
+        coord = _make_coordinator()
+
+        with patch.object(coord, "_collect_state", side_effect=RuntimeError("boom")):
+            from homeassistant.helpers.update_coordinator import UpdateFailed
+
+            with pytest.raises(UpdateFailed, match="boom"):
+                await coord._async_update_data()
+
+
+class TestGeneratePlan:
+    def test_generate_plan_runs(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState()
+        coord._generate_plan(state)  # Should not raise
+
+
+class TestDischargeProportional:
+    @pytest.mark.asyncio
+    async def test_discharge_splits_by_soc(self) -> None:
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+                "battery_limit_1": "number.limit1",
+                "battery_limit_2": "number.limit2",
+            }
+        )
+
+        state = CarmaboxState(
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=20,
+        )
+        await coord._cmd_discharge(state, 1000)
+
+        calls = coord.hass.services.async_call.call_args_list
+        # Should have 4 calls: ems1, limit1, ems2, limit2
+        assert len(calls) == 4
+        # Battery 1 gets 80% of 1000 = 800W
+        limit1_call = calls[1]
+        assert limit1_call[0][2]["value"] == 800
+        # Battery 2 gets 20% of 1000 = 200W
+        limit2_call = calls[3]
+        assert limit2_call[0][2]["value"] == 200
+
+    @pytest.mark.asyncio
+    async def test_discharge_zero_soc_returns(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(battery_soc_1=0, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+        coord.hass.services.async_call.assert_not_called()
+
+
+class TestNoDuplicateCommands:
+    @pytest.mark.asyncio
+    async def test_charge_pv_no_duplicate(self) -> None:
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._last_command = BatteryCommand.CHARGE_PV
+        await coord._cmd_charge_pv(CarmaboxState())
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_sends_when_different(self) -> None:
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_soc_1": "sensor.soc1",
+            }
+        )
+        _set_state(coord, "sensor.soc1", "50")
+        coord._last_command = BatteryCommand.IDLE
+        await coord._cmd_charge_pv(CarmaboxState(battery_soc_1=50))
+        coord.hass.services.async_call.assert_called()
