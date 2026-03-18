@@ -27,7 +27,6 @@ from .adapters.solcast import SolcastAdapter
 from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_FALLBACK_PRICE_ORE,
-    DEFAULT_NIGHT_WEIGHT,
     DEFAULT_TARGET_WEIGHTED_KW,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
@@ -224,13 +223,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 ev_demand = [0.0] * len(prices)
 
             # Calculate target from PV forecast + reserve
-            battery_kwh = (state.battery_soc_1 / 100 * 15) + (
-                max(0, state.battery_soc_2) / 100 * 10
+            bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
+            bat2_kwh = float(opts.get("battery_2_kwh", 10.0))
+            total_bat_kwh = bat1_kwh + bat2_kwh
+            daily_consumption = float(opts.get("daily_consumption_kwh", 15.0))
+            daily_battery_need = float(opts.get("daily_battery_need_kwh", 5.0))
+
+            battery_kwh = (state.battery_soc_1 / 100 * bat1_kwh) + (
+                max(0, state.battery_soc_2) / 100 * bat2_kwh
             )
             pv_daily = solcast.forecast_daily_3d
-            reserve = calculate_reserve(pv_daily, 15.0, 5.0)
+            reserve = calculate_reserve(pv_daily, daily_consumption, daily_battery_need)
             target = calculate_target(
-                battery_kwh_available=battery_kwh - (self.min_soc / 100 * 25),
+                battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
                 hourly_loads=consumption[: len(prices)],
                 hourly_weights=[ellevio_weight((start_hour + i) % 24) for i in range(len(prices))],
                 reserve_kwh=reserve,
@@ -334,7 +339,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── RULE 3: Load > target → discharge ────────────────
         hour = datetime.now().hour
-        weight = DEFAULT_NIGHT_WEIGHT if (hour >= 22 or hour < 6) else 1.0
+        weight = ellevio_weight(hour)
         # Net load = grid import + EV charging - PV production
         net_w = max(0, state.grid_power_w + state.ev_power_w - state.pv_power_w)
         weighted_net = net_w * weight
@@ -391,7 +396,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     def _track_savings(self, state: CarmaboxState) -> None:
         """Track savings data from current state."""
         hour = datetime.now().hour
-        weight = DEFAULT_NIGHT_WEIGHT if (hour >= 22 or hour < 6) else 1.0
+        weight = ellevio_weight(hour)
         # Net load for peak tracking (what Ellevio meters see)
         grid_kw = max(0, state.grid_power_w) / 1000
         weighted_kw = grid_kw * weight
