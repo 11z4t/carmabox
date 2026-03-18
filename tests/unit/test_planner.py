@@ -168,3 +168,91 @@ class TestGeneratePlan:
         )
         for h in plan:
             assert h.grid_kw >= -0.1, f"Hour {h.hour}: negative grid {h.grid_kw}"
+
+
+class TestGridCharge:
+    def test_charges_at_cheap_price(self) -> None:
+        """Very cheap price should trigger grid charge."""
+        plan = generate_plan(
+            num_hours=8,
+            start_hour=0,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.0] * 8,
+            hourly_pv=[0.0] * 8,
+            hourly_prices=[10.0] * 8,  # Below threshold (15)
+            hourly_ev=[0.0] * 8,
+            battery_soc=30,
+            ev_soc=-1,
+            grid_charge_price_threshold=15.0,
+        )
+        grid_charge_hours = [h for h in plan if h.action == "g"]
+        assert len(grid_charge_hours) > 0
+
+    def test_no_charge_at_expensive_price(self) -> None:
+        """Expensive price should not trigger grid charge."""
+        plan = generate_plan(
+            num_hours=8,
+            start_hour=0,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.0] * 8,
+            hourly_pv=[0.0] * 8,
+            hourly_prices=[80.0] * 8,  # Way above threshold
+            hourly_ev=[0.0] * 8,
+            battery_soc=30,
+            ev_soc=-1,
+            grid_charge_price_threshold=15.0,
+        )
+        grid_charge_hours = [h for h in plan if h.action == "g"]
+        assert len(grid_charge_hours) == 0
+
+    def test_no_charge_when_battery_full(self) -> None:
+        """Battery near max SoC should not grid charge."""
+        plan = generate_plan(
+            num_hours=4,
+            start_hour=0,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.0] * 4,
+            hourly_pv=[0.0] * 4,
+            hourly_prices=[5.0] * 4,  # Very cheap
+            hourly_ev=[0.0] * 4,
+            battery_soc=95,
+            ev_soc=-1,
+            grid_charge_price_threshold=15.0,
+            grid_charge_max_soc=90.0,  # Already above max
+        )
+        grid_charge_hours = [h for h in plan if h.action == "g"]
+        assert len(grid_charge_hours) == 0
+
+    def test_grid_charge_increases_soc(self) -> None:
+        """Grid charge should increase battery SoC."""
+        plan = generate_plan(
+            num_hours=4,
+            start_hour=2,
+            target_weighted_kw=3.0,
+            hourly_loads=[1.0] * 4,
+            hourly_pv=[0.0] * 4,
+            hourly_prices=[8.0] * 4,
+            hourly_ev=[0.0] * 4,
+            battery_soc=30,
+            ev_soc=-1,
+            grid_charge_price_threshold=15.0,
+        )
+        assert plan[-1].battery_soc > 30
+
+    def test_solar_charge_takes_priority_over_grid(self) -> None:
+        """Solar surplus should charge (action 'c') even if price is cheap."""
+        plan = generate_plan(
+            num_hours=4,
+            start_hour=10,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.0] * 4,
+            hourly_pv=[5.0] * 4,  # Big surplus
+            hourly_prices=[5.0] * 4,  # Also cheap
+            hourly_ev=[0.0] * 4,
+            battery_soc=30,
+            ev_soc=-1,
+            grid_charge_price_threshold=15.0,
+        )
+        # Solar surplus → charge from PV, not grid
+        for h in plan:
+            assert h.action != "g", f"Hour {h.hour}: grid charge during surplus"

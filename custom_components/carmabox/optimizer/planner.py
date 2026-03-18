@@ -12,6 +12,7 @@ Philosophy:
   - Never discharge during export
   - Never drain batteries unnecessarily
   - Reserve for next day if solar forecast is low
+  - Grid charge at very cheap hours if battery needs it
 """
 
 from __future__ import annotations
@@ -71,18 +72,30 @@ def generate_plan(
     ev_cap_kwh: float = 98.0,
     ev_efficiency: float = 0.92,
     night_weight: float = 0.5,
+    grid_charge_price_threshold: float = 15.0,
+    grid_charge_max_soc: float = 90.0,
+    max_discharge_kw: float = 5.0,
+    max_grid_charge_kw: float = 3.0,
 ) -> list[HourPlan]:
     """Generate per-hour plan.
 
+    Actions:
+    - 'c' = charge from PV (solar surplus)
+    - 'd' = discharge battery (load above target)
+    - 'g' = charge from grid (cheap price)
+    - 'i' = idle (grid handles it)
+
     For each hour:
-    - If exporting (load < 0): charge battery
-    - If weighted load > target: discharge battery
-    - If weighted load < target: idle (grid handles it)
+    1. If price below threshold and battery not full → grid charge
+    2. If exporting (load < 0): charge battery from PV
+    3. If weighted load > target: discharge battery
+    4. Otherwise: idle
     """
     plan = []
     soc_kwh = battery_soc / 100 * battery_cap_kwh
-    ev_soc_kwh = ev_soc / 100 * ev_cap_kwh
+    ev_soc_kwh = ev_soc / 100 * ev_cap_kwh if ev_soc >= 0 else 0.0
     min_soc_kwh = battery_min_soc / 100 * battery_cap_kwh
+    max_charge_kwh = grid_charge_max_soc / 100 * battery_cap_kwh
 
     for i in range(num_hours):
         abs_h = (start_hour + i) % 24
@@ -90,14 +103,14 @@ def generate_plan(
         load = hourly_loads[i] if i < len(hourly_loads) else 1.5
         pv = hourly_pv[i] if i < len(hourly_pv) else 0
         ev = hourly_ev[i] if i < len(hourly_ev) else 0
-        price = hourly_prices[i] if i < len(hourly_prices) else 50
+        price = hourly_prices[i] if i < len(hourly_prices) else 100
 
         net = load + ev - pv
         battery_kw = 0.0
         action = "i"
 
         if net < -0.5:
-            # Solar surplus — charge battery
+            # Solar surplus — charge battery from PV
             surplus = abs(net)
             charge = min(surplus, battery_cap_kwh - soc_kwh)
             if charge > 0.3:
@@ -105,19 +118,31 @@ def generate_plan(
                 soc_kwh += charge * battery_efficiency
                 action = "c"
 
+        elif price <= grid_charge_price_threshold and soc_kwh < max_charge_kwh:
+            # Very cheap price — charge from grid
+            headroom = max_charge_kwh - soc_kwh
+            charge_kw = min(max_grid_charge_kw, headroom)
+            if charge_kw > 0.3:
+                battery_kw = charge_kw
+                soc_kwh += charge_kw * battery_efficiency
+                action = "g"
+                # Grid charge adds to net load
+                net += charge_kw
+
         elif net * w > target_weighted_kw:
             # Load above target — discharge battery
             need = (net * w - target_weighted_kw) / w
             available = soc_kwh - min_soc_kwh
             if available > 0.3:
-                discharge = min(need, available, 5.0)  # Max 5kW
+                discharge = min(need, available, max_discharge_kw)
                 battery_kw = -discharge
                 soc_kwh -= discharge / battery_efficiency
                 action = "d"
 
         # EV SoC tracking
-        ev_soc_kwh += ev * ev_efficiency
-        ev_soc_pct = min(100, ev_soc_kwh / ev_cap_kwh * 100)
+        if ev_soc >= 0:
+            ev_soc_kwh += ev * ev_efficiency
+        ev_soc_pct = min(100, ev_soc_kwh / ev_cap_kwh * 100) if ev_cap_kwh > 0 else 0
 
         grid = max(0, net + battery_kw)
         weighted = grid * w

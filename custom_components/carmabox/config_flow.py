@@ -18,6 +18,7 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_EV_FULL_CHARGE_DAYS,
     DEFAULT_EV_NIGHT_TARGET_SOC,
+    DEFAULT_FALLBACK_PRICE_ORE,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
     DOMAIN,
@@ -207,6 +208,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Optional("peak_cost_per_kw", default=DEFAULT_PEAK_COST_PER_KW): vol.All(
                         vol.Coerce(float), vol.Range(min=0, max=200)
                     ),
+                    vol.Optional("fallback_price_ore", default=DEFAULT_FALLBACK_PRICE_ORE): vol.All(
+                        vol.Coerce(float), vol.Range(min=10, max=500)
+                    ),
                 }
             ),
         )
@@ -254,6 +258,14 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "price_area": self._user_input.get("price_area", "SE3"),
             "grid_operator": self._user_input.get("grid_operator", "ellevio"),
             "peak_cost_per_kw": self._user_input.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW),
+            "fallback_price_ore": self._user_input.get(
+                "fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE
+            ),
+            # Grid charge
+            "grid_charge_price_threshold": self._user_input.get(
+                "grid_charge_price_threshold", 15.0
+            ),
+            "grid_charge_max_soc": self._user_input.get("grid_charge_max_soc", 90.0),
             # Household
             "household_size": self._user_input.get("household_size", 4),
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
@@ -431,6 +443,18 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "peak_cost_per_kw",
                         default=opts.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+                    vol.Required(
+                        "fallback_price_ore",
+                        default=opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
+                    vol.Required(
+                        "grid_charge_price_threshold",
+                        default=opts.get("grid_charge_price_threshold", 15.0),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+                    vol.Required(
+                        "grid_charge_max_soc",
+                        default=opts.get("grid_charge_max_soc", 90.0),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=50, max=100)),
                     vol.Required(
                         "household_size",
                         default=opts.get("household_size", 4),

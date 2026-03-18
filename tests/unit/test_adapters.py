@@ -194,7 +194,7 @@ class TestNordpoolAdapter:
     def test_current_price_unavailable(self) -> None:
         hass = self._make_np_hass("unavailable")
         adapter = NordpoolAdapter(hass, "sensor.np")
-        assert adapter.current_price == 50.0  # Fallback
+        assert adapter.current_price == 100.0  # Default fallback
 
     def test_today_prices_24_entries(self) -> None:
         hass = self._make_np_hass(today=list(range(24)))
@@ -220,7 +220,7 @@ class TestNordpoolAdapter:
         adapter = NordpoolAdapter(hass, "sensor.np")
         prices = adapter.today_prices
         assert len(prices) == 24
-        assert all(p == 50.0 for p in prices)
+        assert all(p == 100.0 for p in prices)
 
     def test_tomorrow_prices_valid(self) -> None:
         hass = self._make_np_hass(
@@ -306,13 +306,20 @@ class TestNordpoolAdapterEdgeCases:
         state.attributes = {}
         hass.states.get = MagicMock(return_value=state)
         adapter = NordpoolAdapter(hass, "sensor.np")
-        assert adapter.current_price == 50.0
+        assert adapter.current_price == 100.0  # Default fallback
 
     def test_attrs_missing_entity(self) -> None:
         hass = MagicMock()
         hass.states.get = MagicMock(return_value=None)
         adapter = NordpoolAdapter(hass, "sensor.np")
-        assert adapter.today_prices == [50.0] * 24
+        assert adapter.today_prices == [100.0] * 24
+
+    def test_custom_fallback_price(self) -> None:
+        hass = MagicMock()
+        hass.states.get = MagicMock(return_value=None)
+        adapter = NordpoolAdapter(hass, "sensor.np", fallback_price=75.0)
+        assert adapter.current_price == 75.0
+        assert adapter.today_prices == [75.0] * 24
 
     def test_tomorrow_prices_empty_list(self) -> None:
         hass = MagicMock()

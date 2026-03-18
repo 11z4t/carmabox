@@ -31,6 +31,20 @@ def season_mode(pv_forecast_3d: list[float]) -> str:
     return "transition"
 
 
+def season_reserve_multiplier(mode: str) -> float:
+    """Season-based reserve multiplier.
+
+    Summer: batteries refill daily from PV → minimal reserve.
+    Winter: no PV → maximum reserve.
+    Transition: moderate.
+    """
+    if mode == "summer":
+        return 0.5
+    if mode == "winter":
+        return 1.5
+    return 1.0
+
+
 def calculate_reserve(
     pv_forecast_daily: list[float],
     daily_consumption_kwh: float,
@@ -40,6 +54,7 @@ def calculate_reserve(
 
     Looks ahead day-by-day until a sunny day (surplus >10 kWh) is found.
     Accumulates shortfall for each cloudy day.
+    Applies season-based multiplier for extra safety in winter.
 
     Args:
         pv_forecast_daily: Daily PV forecast [today, tomorrow, day3, ...].
@@ -49,8 +64,11 @@ def calculate_reserve(
     Returns:
         Reserve in kWh that should NOT be discharged.
     """
+    mode = season_mode(pv_forecast_daily)
+    multiplier = season_reserve_multiplier(mode)
+
     if not pv_forecast_daily:
-        return daily_battery_need_kwh * 2  # No forecast = assume 2 cloudy days
+        return daily_battery_need_kwh * 2 * multiplier
 
     reserve = 0.0
     for day_ahead, pv_kwh in enumerate(pv_forecast_daily[1:], 1):
@@ -65,7 +83,7 @@ def calculate_reserve(
         if day_ahead >= 7:
             break  # Max 7 day horizon
 
-    return reserve
+    return reserve * multiplier
 
 
 def calculate_target(

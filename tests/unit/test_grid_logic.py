@@ -1,4 +1,4 @@
-"""Tests for grid_logic — target calculation + Ellevio weighting."""
+"""Tests for grid_logic — target calculation + Ellevio weighting + season."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from custom_components.carmabox.optimizer.grid_logic import (
     calculate_target,
     ellevio_weight,
     season_mode,
+    season_reserve_multiplier,
 )
 
 
@@ -40,51 +41,87 @@ class TestSeasonMode:
         assert season_mode([30]) == "summer"
 
 
+class TestSeasonReserveMultiplier:
+    def test_summer_halves(self) -> None:
+        assert season_reserve_multiplier("summer") == 0.5
+
+    def test_winter_increases(self) -> None:
+        assert season_reserve_multiplier("winter") == 1.5
+
+    def test_transition_neutral(self) -> None:
+        assert season_reserve_multiplier("transition") == 1.0
+
+
 class TestCalculateReserve:
     def test_sunny_tomorrow_zero_reserve(self) -> None:
-        """Sunny day ahead → no reserve needed."""
+        """Sunny day ahead → no reserve needed (summer ×0.5)."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 28, 25],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
+        # avg=27.7 → summer (×0.5), surplus>10 → base=0, ×0.5=0
         assert reserve == 0
 
     def test_cloudy_tomorrow_needs_reserve(self) -> None:
-        """Cloudy tomorrow → reserve for one day."""
+        """Cloudy tomorrow → reserve with season multiplier."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 4, 28],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve == 5  # 4 kWh PV < 15 consumption → 0 surplus → need 5
+        # avg=20.7 → summer (×0.5). Base=5, ×0.5=2.5
+        assert reserve == 2.5
 
-    def test_multiple_cloudy_days(self) -> None:
-        """3 cloudy days → reserve for all."""
+    def test_multiple_cloudy_days_transition(self) -> None:
+        """3 cloudy days in transition season → ×1.0."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 4, 3, 5, 28],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve == 15  # 3 days × 5 kWh
+        # avg=14 → transition (×1.0). 3 days × 5 kWh = 15
+        assert reserve == 15
 
-    def test_empty_forecast_double_reserve(self) -> None:
-        """No forecast → assume 2 cloudy days."""
+    def test_empty_forecast_winter_reserve(self) -> None:
+        """No forecast → winter assumption (×1.5)."""
         reserve = calculate_reserve(
             pv_forecast_daily=[],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve == 10  # 2 × 5 kWh
+        # winter: 2 × 5 × 1.5 = 15
+        assert reserve == 15
 
-    def test_partial_surplus_reduces_reserve(self) -> None:
-        """Partly cloudy → partial surplus reduces reserve."""
+    def test_partial_surplus_summer(self) -> None:
+        """Partly cloudy in summer → summer multiplier."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 18, 28],  # 18-15=3 surplus
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve == 2  # need 5 - surplus 3 = 2
+        # avg=25.3 → summer (×0.5). Base: need 5-3=2, ×0.5=1.0
+        assert reserve == 1.0
+
+    def test_winter_forecast_high_reserve(self) -> None:
+        """Winter (low PV avg) → 1.5× reserve."""
+        reserve = calculate_reserve(
+            pv_forecast_daily=[3, 4, 2],
+            daily_consumption_kwh=15,
+            daily_battery_need_kwh=5,
+        )
+        # avg=3.0 → winter (×1.5). Days: 4kWh→5, 2kWh→5. Base=10, ×1.5=15
+        assert reserve == 15
+
+    def test_transition_season_neutral(self) -> None:
+        """Transition (5-15 kWh avg) → ×1.0."""
+        reserve = calculate_reserve(
+            pv_forecast_daily=[10, 4, 3, 28],
+            daily_consumption_kwh=15,
+            daily_battery_need_kwh=5,
+        )
+        # avg=11.25 → transition (×1.0). Days: 4→5, 3→5. Base=10, ×1.0=10
+        assert reserve == 10
 
 
 class TestCalculateTarget:
@@ -148,14 +185,15 @@ class TestCalculateTarget:
 
 class TestEdgeCases:
     def test_reserve_7_day_cap(self) -> None:
-        """Reserve caps at 7 days horizon."""
-        # 10 cloudy days — should only count 7
+        """Reserve caps at 7 days horizon, with season multiplier."""
+        # [30]+[2]*10 → avg≈4.5 → winter (×1.5)
         reserve = calculate_reserve(
             pv_forecast_daily=[30] + [2] * 10,
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve == 35  # 7 × 5
+        # 7 × 5 × 1.5 = 52.5
+        assert reserve == 52.5
 
     def test_target_empty_loads(self) -> None:
         """Empty loads returns fallback 5.0."""

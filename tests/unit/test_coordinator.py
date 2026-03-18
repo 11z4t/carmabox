@@ -11,6 +11,8 @@ from custom_components.carmabox.coordinator import (
     CarmaboxCoordinator,
 )
 from custom_components.carmabox.optimizer.models import CarmaboxState
+from custom_components.carmabox.optimizer.report import ReportCollector
+from custom_components.carmabox.optimizer.savings import SavingsState
 
 
 def _make_coordinator(
@@ -45,6 +47,11 @@ def _make_coordinator(
     coord.logger = MagicMock()
     coord.name = "carmabox"
     coord._states = states
+    coord.savings = SavingsState(month=3, year=2026)
+    coord.report_collector = ReportCollector(month=3, year=2026)
+    coord._daily_discharge_kwh = 0.0
+    coord._daily_safety_blocks = 0
+    coord._daily_plans = 0
 
     return coord
 
@@ -386,3 +393,45 @@ class TestNoDuplicateCommands:
         coord._last_command = BatteryCommand.IDLE
         await coord._cmd_charge_pv(CarmaboxState(battery_soc_1=50))
         coord.hass.services.async_call.assert_called()
+
+
+class TestTrackSavings:
+    def test_tracks_peak_samples(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(grid_power_w=2000, battery_power_1=0, battery_power_2=0)
+        coord._track_savings(state)
+        assert len(coord.savings.peak_samples) == 1
+
+    def test_tracks_battery_discharge(self) -> None:
+        coord = _make_coordinator({"fallback_price_ore": 80.0})
+        state = CarmaboxState(
+            grid_power_w=1000,
+            battery_power_1=-1500,  # Discharging 1.5kW
+            battery_power_2=-500,  # Discharging 0.5kW
+            current_price=120.0,
+        )
+        coord._track_savings(state)
+        # Should record discharge savings (price 120 > avg 80)
+        assert coord.savings.discharge_savings_kr > 0
+        assert coord.savings.total_discharge_kwh > 0
+
+    def test_baseline_includes_discharge(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(
+            grid_power_w=1000,
+            battery_power_1=-2000,  # Discharging
+            battery_power_2=0,
+        )
+        coord._track_savings(state)
+        # Baseline should be higher (grid + battery discharge)
+        assert coord.savings.baseline_peak_samples[0] > coord.savings.peak_samples[0]
+
+    def test_no_discharge_savings_when_price_low(self) -> None:
+        coord = _make_coordinator({"fallback_price_ore": 100.0})
+        state = CarmaboxState(
+            grid_power_w=1000,
+            battery_power_1=-1000,
+            current_price=50.0,  # Below avg price
+        )
+        coord._track_savings(state)
+        assert coord.savings.discharge_savings_kr == 0.0

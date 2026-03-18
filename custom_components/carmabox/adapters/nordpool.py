@@ -10,28 +10,30 @@ from typing import Any
 
 from homeassistant.core import HomeAssistant
 
+from . import PriceAdapter
+
 _LOGGER = logging.getLogger(__name__)
 
 
-class NordpoolAdapter:
+class NordpoolAdapter(PriceAdapter):
     """Adapter for Nordpool electricity prices via HA integration.
 
     Reads: today prices, tomorrow prices, current price.
     Handles: 96-entry (15 min) and 24-entry (hourly) formats.
-    Fallback: flat 50 öre if unavailable.
+    Fallback: configurable flat price if unavailable.
     """
 
-    FALLBACK_PRICE = 50.0  # öre/kWh
-
-    def __init__(self, hass: HomeAssistant, entity_id: str) -> None:
+    def __init__(self, hass: HomeAssistant, entity_id: str, fallback_price: float = 100.0) -> None:
         """Initialize Nordpool adapter.
 
         Args:
             hass: Home Assistant instance.
             entity_id: Nordpool sensor entity (e.g. sensor.nordpool_kwh_se3_sek_3_10_025).
+            fallback_price: Price (öre/kWh) to use when data is unavailable.
         """
         self.hass = hass
         self.entity_id = entity_id
+        self.fallback_price = fallback_price
 
     def _attrs(self) -> dict[str, Any]:
         """Get entity attributes."""
@@ -61,11 +63,11 @@ class NordpoolAdapter:
         """Current electricity price (öre/kWh)."""
         state = self.hass.states.get(self.entity_id)
         if state is None or state.state in ("unknown", "unavailable", ""):
-            return self.FALLBACK_PRICE
+            return self.fallback_price
         try:
             return float(state.state)
         except (ValueError, TypeError):
-            return self.FALLBACK_PRICE
+            return self.fallback_price
 
     @property
     def today_prices(self) -> list[float]:
@@ -78,7 +80,7 @@ class NordpoolAdapter:
         prices = self._to_hourly(raw)
         if not prices or len(prices) < 24:
             _LOGGER.debug("Nordpool today unavailable — using fallback")
-            return [self.FALLBACK_PRICE] * 24
+            return [self.fallback_price] * 24
         return prices
 
     @property

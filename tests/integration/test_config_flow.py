@@ -163,6 +163,9 @@ async def test_options_flow(hass: HomeAssistant) -> None:
             "ev_night_target_soc": 75,
             "ev_full_charge_days": 7,
             "peak_cost_per_kw": 80.0,
+            "fallback_price_ore": 100.0,
+            "grid_charge_price_threshold": 15.0,
+            "grid_charge_max_soc": 90.0,
             "household_size": 4,
             "has_pool_pump": False,
         },
@@ -182,6 +185,9 @@ async def test_options_flow(hass: HomeAssistant) -> None:
             "ev_night_target_soc": 80,
             "ev_full_charge_days": 5,
             "peak_cost_per_kw": 90.0,
+            "fallback_price_ore": 120.0,
+            "grid_charge_price_threshold": 20.0,
+            "grid_charge_max_soc": 85.0,
             "household_size": 2,
             "has_pool_pump": True,
         },
@@ -189,6 +195,9 @@ async def test_options_flow(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     assert entry.options["target_weighted_kw"] == 3.0
     assert entry.options["min_soc"] == 20.0
+    assert entry.options["fallback_price_ore"] == 120.0
+    assert entry.options["grid_charge_price_threshold"] == 20.0
+    assert entry.options["grid_charge_max_soc"] == 85.0
     assert entry.options["has_pool_pump"] is True
 
 

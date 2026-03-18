@@ -9,10 +9,12 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
+from . import InverterAdapter
+
 _LOGGER = logging.getLogger(__name__)
 
 
-class GoodWeAdapter:
+class GoodWeAdapter(InverterAdapter):
     """Adapter for GoodWe inverter via HA integration.
 
     Reads: SoC, battery power, temperature, EMS mode

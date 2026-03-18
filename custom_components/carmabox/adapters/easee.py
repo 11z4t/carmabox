@@ -9,10 +9,12 @@ import logging
 
 from homeassistant.core import HomeAssistant
 
+from . import EVAdapter
+
 _LOGGER = logging.getLogger(__name__)
 
 
-class EaseeAdapter:
+class EaseeAdapter(EVAdapter):
     """Adapter for Easee EV charger via HA integration.
 
     Reads: status, current (A), power (W), cable state.

@@ -10,6 +10,8 @@ from datetime import datetime
 
 from homeassistant.core import HomeAssistant
 
+from . import PVAdapter
+
 _LOGGER = logging.getLogger(__name__)
 
 # Entity IDs used by solcast_solar integration
@@ -18,7 +20,7 @@ _TOMORROW = "sensor.solcast_pv_forecast_forecast_tomorrow"
 _DAY_PREFIX = "sensor.solcast_pv_forecast_forecast_day_"
 
 
-class SolcastAdapter:
+class SolcastAdapter(PVAdapter):
     """Adapter for Solcast PV forecast via HA integration.
 
     Reads: today kWh, tomorrow kWh, 3-7 day daily forecast, hourly forecast.

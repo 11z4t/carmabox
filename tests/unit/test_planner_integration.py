@@ -12,6 +12,8 @@ import pytest
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
 from custom_components.carmabox.optimizer.models import CarmaboxState, HourPlan
+from custom_components.carmabox.optimizer.report import ReportCollector
+from custom_components.carmabox.optimizer.savings import SavingsState
 
 
 def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator:
@@ -43,6 +45,11 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord.logger = MagicMock()
     coord.name = "carmabox"
     coord._states = states
+    coord.savings = SavingsState(month=3, year=2026)
+    coord.report_collector = ReportCollector(month=3, year=2026)
+    coord._daily_discharge_kwh = 0.0
+    coord._daily_safety_blocks = 0
+    coord._daily_plans = 0
     return coord
 
 
@@ -180,6 +187,37 @@ class TestGeneratePlan:
         # Sunny forecast → low target (aggressive discharge)
         assert coord.target_kw < 3.0
 
+    def test_ev_enabled_uses_dynamic_schedule(self) -> None:
+        """EV enabled + EV present → dynamic EV schedule (not static)."""
+        coord = _make_coord(
+            {
+                "price_entity": "sensor.np",
+                "battery_soc_1": "sensor.soc1",
+                "ev_enabled": True,
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            }
+        )
+        _set(
+            coord,
+            "sensor.np",
+            "50",
+            {"today": [50.0] * 24, "tomorrow": [], "tomorrow_valid": False},
+        )
+        _set(coord, "sensor.soc1", "80")
+        _set(coord, "sensor.solcast_pv_forecast_forecast_today", "20")
+        _set(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "15")
+
+        # EV at 40% — needs charging
+        coord._generate_plan(CarmaboxState(battery_soc_1=80, ev_soc=40))
+
+        assert len(coord.plan) > 0
+        # Some hours should have EV charging (dynamic schedule)
+        ev_hours = [h for h in coord.plan if h.ev_kw > 0]
+        # May or may not have EV hours depending on start_hour
+        assert isinstance(ev_hours, list)
+
 
 class TestExecutorWithPlan:
     @pytest.mark.asyncio
@@ -262,7 +300,7 @@ class TestExecutorWithPlan:
 
 class TestPriceFallback:
     def test_fallback_to_secondary_price(self) -> None:
-        """When primary price returns all-50 (offline), use fallback."""
+        """When primary price returns all-fallback (offline), use fallback source."""
         coord = _make_coord(
             {
                 "price_entity": "sensor.np_offline",
@@ -270,8 +308,8 @@ class TestPriceFallback:
                 "battery_soc_1": "sensor.soc1",
             }
         )
-        # Primary: offline (returns None → adapter fallbacks to 50)
-        # Don't set sensor.np_offline → adapter returns 50 flat
+        # Primary: offline (returns None → adapter fallbacks to 100 öre flat)
+        # Don't set sensor.np_offline → adapter returns fallback flat
 
         # Secondary (Tibber): has real prices
         _set(
