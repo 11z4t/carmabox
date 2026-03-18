@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import BatteryCommand, CarmaboxCoordinator
+from .optimizer.savings import savings_breakdown, total_savings
 
 
 async def async_setup_entry(
@@ -115,11 +116,18 @@ class CarmaboxSavingsSensor(CarmaboxBaseSensor):
         super().__init__(coordinator, entry, "savings_month", "Besparing Månad")
         self._attr_native_unit_of_measurement = "kr"
         self._attr_icon = "mdi:piggy-bank"
+        self._entry = entry
 
     @property
     def native_value(self) -> float:
-        # TODO: Calculate from peak reduction + price optimization
-        return 0.0
+        cost_per_kw = float(self._entry.options.get("peak_cost_per_kw", 80.0))
+        return total_savings(self.coordinator.savings, cost_per_kw)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Savings breakdown as attributes."""
+        cost_per_kw = float(self._entry.options.get("peak_cost_per_kw", 80.0))
+        return dict(savings_breakdown(self.coordinator.savings, cost_per_kw))
 
 
 class CarmaboxBatterySocSensor(CarmaboxBaseSensor):

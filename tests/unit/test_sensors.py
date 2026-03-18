@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
 from custom_components.carmabox.optimizer.models import CarmaboxState
+from custom_components.carmabox.optimizer.savings import SavingsState
 from custom_components.carmabox.sensor import (
     CarmaboxBatterySocSensor,
     CarmaboxEVSocSensor,
@@ -26,9 +27,11 @@ def _make_sensor_deps(
     coord.data = state
     coord._last_command = last_command
     coord.target_kw = target_kw
+    coord.savings = SavingsState(month=3, year=2026)
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
+    entry.options = {"peak_cost_per_kw": 80.0}
 
     return coord, entry
 
@@ -107,10 +110,29 @@ class TestTargetSensor:
 
 
 class TestSavingsSensor:
-    def test_returns_zero_for_now(self) -> None:
+    def test_returns_zero_when_no_data(self) -> None:
         coord, entry = _make_sensor_deps()
         sensor = CarmaboxSavingsSensor(coord, entry)
         assert sensor.native_value == 0.0
+
+    def test_returns_savings_with_data(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.savings.peak_samples = [2.0, 2.0, 2.0]
+        coord.savings.baseline_peak_samples = [4.0, 4.0, 4.0]
+        coord.savings.discharge_savings_kr = 10.0
+        sensor = CarmaboxSavingsSensor(coord, entry)
+        # Peak: (4-2)×80=160, discharge: 10, total: 170
+        assert sensor.native_value == 170.0
+
+    def test_extra_attributes(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.savings.discharge_savings_kr = 5.0
+        coord.savings.total_discharge_kwh = 12.0
+        sensor = CarmaboxSavingsSensor(coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert "peak_reduction_kr" in attrs
+        assert "discharge_savings_kr" in attrs
+        assert attrs["total_discharge_kwh"] == 12.0
 
 
 class TestBatterySocSensor:

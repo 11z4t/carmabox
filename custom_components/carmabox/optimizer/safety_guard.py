@@ -9,6 +9,7 @@ Pure Python. No HA imports. Fully testable.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,12 +39,20 @@ class SafetyGuard:
         crosscharge_threshold_w: float = 500.0,
         temperature_min_c: float = 0.0,
         temperature_max_c: float = 45.0,
+        max_mode_changes_per_hour: int = 10,
     ) -> None:
         """Initialize with safety thresholds."""
         self.min_soc = min_soc
         self.crosscharge_threshold_w = crosscharge_threshold_w
         self.temp_min = temperature_min_c
         self.temp_max = temperature_max_c
+        self.max_mode_changes = max_mode_changes_per_hour
+
+        # #7 Rate guard — track mode changes
+        self._mode_change_timestamps: list[float] = []
+
+        # #8 Heartbeat — track last successful update
+        self._last_heartbeat: float = time.monotonic()
 
     def check_discharge(
         self,
@@ -142,6 +151,69 @@ class SafetyGuard:
 
         if opposite_signs and both_significant:
             reason = f"crosscharge: battery_1={power_1_w:.0f}W, battery_2={power_2_w:.0f}W"
+            _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
+            return SafetyResult(ok=False, reason=reason)
+
+        return SafetyResult(ok=True)
+
+    def check_rate_limit(self) -> SafetyResult:
+        """#7 Rate guard — block if too many mode changes per hour.
+
+        Prevents oscillation and Modbus flooding.
+        """
+        now = time.monotonic()
+        cutoff = now - 3600  # 1 hour window
+
+        # Prune old timestamps
+        self._mode_change_timestamps = [t for t in self._mode_change_timestamps if t > cutoff]
+
+        if len(self._mode_change_timestamps) >= self.max_mode_changes:
+            reason = (
+                f"rate limit: {len(self._mode_change_timestamps)} "
+                f"changes in 1h (max {self.max_mode_changes})"
+            )
+            _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
+            return SafetyResult(ok=False, reason=reason)
+
+        return SafetyResult(ok=True)
+
+    def record_mode_change(self) -> None:
+        """Record a mode change for rate limiting."""
+        self._mode_change_timestamps.append(time.monotonic())
+
+    def check_heartbeat(self, max_stale_seconds: float = 120.0) -> SafetyResult:
+        """#8 Heartbeat — block if coordinator hasn't updated recently.
+
+        If the coordinator stops updating (crash, freeze, Modbus lockup),
+        all commands should be blocked to prevent stale-state actions.
+        """
+        elapsed = time.monotonic() - self._last_heartbeat
+        if elapsed > max_stale_seconds:
+            reason = f"heartbeat stale: {elapsed:.0f}s since last update (max {max_stale_seconds}s)"
+            _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
+            return SafetyResult(ok=False, reason=reason)
+
+        return SafetyResult(ok=True)
+
+    def update_heartbeat(self) -> None:
+        """Update heartbeat timestamp. Called every successful update cycle."""
+        self._last_heartbeat = time.monotonic()
+
+    def check_write_verify(
+        self,
+        expected_mode: str,
+        actual_mode: str,
+    ) -> SafetyResult:
+        """#9 Write-verify — confirm command was applied.
+
+        After sending a mode change, verify the inverter actually
+        changed. If not, Modbus lockup is likely.
+        """
+        if expected_mode and actual_mode and expected_mode != actual_mode:
+            reason = (
+                f"write-verify failed: expected '{expected_mode}', "
+                f"actual '{actual_mode}' — possible Modbus lockup"
+            )
             _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
             return SafetyResult(ok=False, reason=reason)
 

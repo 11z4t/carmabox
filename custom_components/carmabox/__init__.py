@@ -8,12 +8,16 @@ electricity costs and peak power charges.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 from .const import PLATFORMS
 from .coordinator import CarmaboxCoordinator
+
+CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
+CARD_URL = "/carmabox/carmabox-card.js"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -28,6 +32,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    # Register Lovelace card (may not be available during tests)
+    if hass.http is not None:
+        hass.http.register_static_path(CARD_URL, str(CARD_JS), cache_headers=False)
 
     _LOGGER.info("CARMA Box started: %s", entry.title)
     return True
