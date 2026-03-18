@@ -2,6 +2,7 @@
 
 Exposes optimizer state as HA sensors for dashboard + automations.
 """
+
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -20,14 +21,16 @@ async def async_setup_entry(
 ) -> None:
     """Set up CARMA Box sensors."""
     coordinator: CarmaboxCoordinator = entry.runtime_data
-    async_add_entities([
-        CarmaboxPlanStatusSensor(coordinator, entry),
-        CarmaboxTargetSensor(coordinator, entry),
-        CarmaboxSavingsSensor(coordinator, entry),
-        CarmaboxBatterySocSensor(coordinator, entry),
-        CarmaboxGridImportSensor(coordinator, entry),
-        CarmaboxEVSocSensor(coordinator, entry),
-    ])
+    async_add_entities(
+        [
+            CarmaboxPlanStatusSensor(coordinator, entry),
+            CarmaboxTargetSensor(coordinator, entry),
+            CarmaboxSavingsSensor(coordinator, entry),
+            CarmaboxBatterySocSensor(coordinator, entry),
+            CarmaboxGridImportSensor(coordinator, entry),
+            CarmaboxEVSocSensor(coordinator, entry),
+        ]
+    )
 
 
 class CarmaboxBaseSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):

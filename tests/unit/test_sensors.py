@@ -1,4 +1,5 @@
 """Tests for CARMA Box sensors."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock
@@ -78,8 +79,11 @@ class TestPlanStatusSensor:
 
     def test_extra_attributes(self) -> None:
         state = CarmaboxState(
-            grid_power_w=2000, battery_soc_1=80, battery_soc_2=70,
-            ev_soc=50, target_weighted_kw=2.0,
+            grid_power_w=2000,
+            battery_soc_1=80,
+            battery_soc_2=70,
+            ev_soc=50,
+            target_weighted_kw=2.0,
         )
         coord, entry = _make_sensor_deps(state)
         sensor = CarmaboxPlanStatusSensor(coord, entry)

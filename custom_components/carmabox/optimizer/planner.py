@@ -13,6 +13,7 @@ Philosophy:
   - Never drain batteries unnecessarily
   - Reserve for next day if solar forecast is low
 """
+
 from __future__ import annotations
 
 from .models import HourPlan
@@ -93,7 +94,7 @@ def generate_plan(
 
         net = load + ev - pv
         battery_kw = 0.0
-        action = 'i'
+        action = "i"
 
         if net < -0.5:
             # Solar surplus — charge battery
@@ -102,7 +103,7 @@ def generate_plan(
             if charge > 0.3:
                 battery_kw = charge
                 soc_kwh += charge * battery_efficiency
-                action = 'c'
+                action = "c"
 
         elif net * w > target_weighted_kw:
             # Load above target — discharge battery
@@ -112,7 +113,7 @@ def generate_plan(
                 discharge = min(need, available, 5.0)  # Max 5kW
                 battery_kw = -discharge
                 soc_kwh -= discharge / battery_efficiency
-                action = 'd'
+                action = "d"
 
         # EV SoC tracking
         ev_soc_kwh += ev * ev_efficiency
@@ -121,18 +122,20 @@ def generate_plan(
         grid = max(0, net + battery_kw)
         weighted = grid * w
 
-        plan.append(HourPlan(
-            hour=abs_h,
-            action=action,
-            battery_kw=round(battery_kw, 1),
-            grid_kw=round(grid, 1),
-            weighted_kw=round(weighted, 1),
-            pv_kw=round(pv, 1),
-            consumption_kw=round(load, 1),
-            ev_kw=round(ev, 1),
-            ev_soc=int(ev_soc_pct),
-            battery_soc=int(soc_kwh / battery_cap_kwh * 100),
-            price=round(price, 1),
-        ))
+        plan.append(
+            HourPlan(
+                hour=abs_h,
+                action=action,
+                battery_kw=round(battery_kw, 1),
+                grid_kw=round(grid, 1),
+                weighted_kw=round(weighted, 1),
+                pv_kw=round(pv, 1),
+                consumption_kw=round(load, 1),
+                ev_kw=round(ev, 1),
+                ev_soc=int(ev_soc_pct),
+                battery_soc=int(soc_kwh / battery_cap_kwh * 100),
+                price=round(price, 1),
+            )
+        )
 
     return plan

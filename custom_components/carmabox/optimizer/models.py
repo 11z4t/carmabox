@@ -2,6 +2,7 @@
 
 Pure Python. No HA imports. Fully testable.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -10,11 +11,12 @@ from dataclasses import dataclass, field
 @dataclass
 class HourPlan:
     """Plan for a single hour."""
+
     hour: int
-    action: str               # 'c' = charge, 'd' = discharge, 'i' = idle
-    battery_kw: float         # + charge, - discharge
-    grid_kw: float            # Expected grid import
-    weighted_kw: float        # Ellevio-weighted
+    action: str  # 'c' = charge, 'd' = discharge, 'i' = idle
+    battery_kw: float  # + charge, - discharge
+    grid_kw: float  # Expected grid import
+    weighted_kw: float  # Ellevio-weighted
     pv_kw: float
     consumption_kw: float
     ev_kw: float
@@ -26,6 +28,7 @@ class HourPlan:
 @dataclass
 class PlanSummary:
     """Summary of a plan."""
+
     max_weighted_kw: float
     total_charge_kwh: float
     total_discharge_kwh: float
@@ -39,6 +42,7 @@ class PlanSummary:
 @dataclass
 class CarmaboxState:
     """Current state of the entire system."""
+
     # Grid
     grid_power_w: float = 0.0
 

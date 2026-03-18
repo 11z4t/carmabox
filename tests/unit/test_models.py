@@ -1,4 +1,5 @@
 """Tests for CARMA Box data models."""
+
 from custom_components.carmabox.optimizer.models import CarmaboxState
 
 

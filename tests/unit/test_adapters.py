@@ -1,4 +1,5 @@
 """Tests for CARMA Box adapters — GoodWe, Easee, Nordpool."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
@@ -65,9 +66,7 @@ class TestGoodWeAdapter:
         assert adapter.fast_charging_on is False
 
     def test_read_temperature(self) -> None:
-        hass = _make_hass(
-            ("sensor.goodwe_battery_min_cell_temperature_kontor", "12.5")
-        )
+        hass = _make_hass(("sensor.goodwe_battery_min_cell_temperature_kontor", "12.5"))
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         assert adapter.temperature_c == 12.5
 
@@ -82,7 +81,8 @@ class TestGoodWeAdapter:
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         await adapter.set_ems_mode("battery_standby")
         hass.services.async_call.assert_called_once_with(
-            "select", "select_option",
+            "select",
+            "select_option",
             {"entity_id": "select.goodwe_kontor_ems_mode", "option": "battery_standby"},
         )
 
@@ -92,7 +92,8 @@ class TestGoodWeAdapter:
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         await adapter.set_discharge_limit(700)
         hass.services.async_call.assert_called_once_with(
-            "number", "set_value",
+            "number",
+            "set_value",
             {"entity_id": "number.goodwe_kontor_ems_power_limit", "value": 700},
         )
 
@@ -130,7 +131,8 @@ class TestEaseeAdapter:
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.set_current(10)
         hass.services.async_call.assert_called_once_with(
-            "number", "set_value",
+            "number",
+            "set_value",
             {"entity_id": "number.easee_home_12840_dynamic_charger_limit", "value": 10},
         )
 
@@ -148,7 +150,8 @@ class TestEaseeAdapter:
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.enable()
         hass.services.async_call.assert_called_once_with(
-            "switch", "turn_on",
+            "switch",
+            "turn_on",
             {"entity_id": "switch.easee_home_12840_is_enabled"},
         )
 
@@ -158,7 +161,8 @@ class TestEaseeAdapter:
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.disable()
         hass.services.async_call.assert_called_once_with(
-            "switch", "turn_off",
+            "switch",
+            "turn_off",
             {"entity_id": "switch.easee_home_12840_is_enabled"},
         )
 

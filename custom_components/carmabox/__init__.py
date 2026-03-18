@@ -4,6 +4,7 @@ Connected Automated Resource Management Advisor.
 Optimizes battery, EV charging, and grid import to minimize
 electricity costs and peak power charges.
 """
+
 from __future__ import annotations
 
 import logging

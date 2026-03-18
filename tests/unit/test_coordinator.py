@@ -1,4 +1,5 @@
 """Tests for CARMA Box coordinator — the brain."""
+
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -35,9 +36,7 @@ def _make_coordinator(
     coord.hass = hass
     coord.entry = entry
     coord.safety = MagicMock()
-    coord.safety.check_discharge = MagicMock(
-        return_value=MagicMock(ok=True, reason="")
-    )
+    coord.safety.check_discharge = MagicMock(return_value=MagicMock(ok=True, reason=""))
     coord.plan = []
     coord._plan_counter = 0
     coord._last_command = BatteryCommand.IDLE
@@ -51,7 +50,9 @@ def _make_coordinator(
 
 
 def _set_state(
-    coord: CarmaboxCoordinator, entity_id: str, value: str,
+    coord: CarmaboxCoordinator,
+    entity_id: str,
+    value: str,
 ) -> None:
     """Set a mock state on coordinator's hass."""
     state = MagicMock()
@@ -94,10 +95,12 @@ class TestCollectState:
 class TestExecute:
     @pytest.mark.asyncio
     async def test_export_triggers_charge_pv(self) -> None:
-        coord = _make_coordinator({
-            "battery_ems_1": "select.ems1",
-            "battery_soc_1": "sensor.soc1",
-        })
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_soc_1": "sensor.soc1",
+            }
+        )
         _set_state(coord, "sensor.soc1", "50")
         _set_state(coord, "select.ems1", "battery_standby")
 
@@ -110,24 +113,28 @@ class TestExecute:
         coord = _make_coordinator({"battery_ems_1": "select.ems1"})
 
         state = CarmaboxState(
-            grid_power_w=1000, battery_soc_1=100, battery_soc_2=-1,
+            grid_power_w=1000,
+            battery_soc_1=100,
+            battery_soc_2=-1,
         )
         await coord._execute(state)
         assert coord._last_command == BatteryCommand.STANDBY
 
     @pytest.mark.asyncio
     async def test_high_load_triggers_discharge(self) -> None:
-        coord = _make_coordinator({
-            "battery_ems_1": "select.ems1",
-            "battery_limit_1": "number.limit1",
-        })
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+            }
+        )
 
         state = CarmaboxState(
-            grid_power_w=5000, battery_soc_1=80, battery_soc_2=-1,
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=-1,
         )
-        with patch(
-            "custom_components.carmabox.coordinator.datetime"
-        ) as mock_dt:
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value.hour = 18  # Daytime weight=1.0
             await coord._execute(state)
 
@@ -136,16 +143,14 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_safety_block_prevents_discharge(self) -> None:
         coord = _make_coordinator({"battery_ems_1": "select.ems1"})
-        coord.safety.check_discharge = MagicMock(
-            return_value=MagicMock(ok=False, reason="min_soc")
-        )
+        coord.safety.check_discharge = MagicMock(return_value=MagicMock(ok=False, reason="min_soc"))
 
         state = CarmaboxState(
-            grid_power_w=5000, battery_soc_1=10, battery_soc_2=-1,
+            grid_power_w=5000,
+            battery_soc_1=10,
+            battery_soc_2=-1,
         )
-        with patch(
-            "custom_components.carmabox.coordinator.datetime"
-        ) as mock_dt:
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value.hour = 18
             await coord._execute(state)
 
@@ -155,11 +160,11 @@ class TestExecute:
     async def test_under_target_stays_idle(self) -> None:
         coord = _make_coordinator()
         state = CarmaboxState(
-            grid_power_w=1000, battery_soc_1=50, battery_soc_2=-1,
+            grid_power_w=1000,
+            battery_soc_1=50,
+            battery_soc_2=-1,
         )
-        with patch(
-            "custom_components.carmabox.coordinator.datetime"
-        ) as mock_dt:
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value.hour = 18
             await coord._execute(state)
 
@@ -168,14 +173,18 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_charge_pv_skips_full_battery(self) -> None:
         """Full battery should get standby, not charge_pv."""
-        coord = _make_coordinator({
-            "battery_ems_1": "select.ems1",
-            "battery_soc_1": "sensor.soc1",
-        })
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_soc_1": "sensor.soc1",
+            }
+        )
         _set_state(coord, "sensor.soc1", "100")
 
         state = CarmaboxState(
-            grid_power_w=-2000, battery_soc_1=100, battery_soc_2=-1,
+            grid_power_w=-2000,
+            battery_soc_1=100,
+            battery_soc_2=-1,
         )
         await coord._execute(state)
 
@@ -197,7 +206,6 @@ class TestBatteryCommand:
 
         # Calling standby again should be no-op
         import asyncio
-        asyncio.get_event_loop().run_until_complete(
-            coord._cmd_standby(CarmaboxState())
-        )
+
+        asyncio.get_event_loop().run_until_complete(coord._cmd_standby(CarmaboxState()))
         coord.hass.services.async_call.assert_not_called()

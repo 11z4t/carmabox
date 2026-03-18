@@ -8,6 +8,7 @@ This is the brain. ONE class replaces ALL automations:
 
 No YAML automations. No shell_commands. No cron.
 """
+
 from __future__ import annotations
 
 import logging
@@ -62,9 +63,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._plan_counter = 0
         self._last_command = BatteryCommand.IDLE
 
-        self.target_kw: float = entry.options.get(
-            "target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW
-        )
+        self.target_kw: float = entry.options.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
         self.min_soc: float = entry.options.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
 
     def _get_entity(self, key: str, default: str = "") -> str:
@@ -118,9 +117,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """Collect current state from all HA entities."""
         opts = self.entry.options
         return CarmaboxState(
-            grid_power_w=self._read_float(
-                opts.get("grid_entity", "sensor.house_grid_power")
-            ),
+            grid_power_w=self._read_float(opts.get("grid_entity", "sensor.house_grid_power")),
             battery_soc_1=self._read_float(opts.get("battery_soc_1", "")),
             battery_power_1=self._read_float(opts.get("battery_power_1", "")),
             battery_ems_1=self._read_str(opts.get("battery_ems_1", "")),
@@ -174,8 +171,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if weighted_grid > target_w:
             discharge_w = int((weighted_grid - target_w) / weight)
             result = self.safety.check_discharge(
-                state.battery_soc_1, state.battery_soc_2,
-                self.min_soc, state.grid_power_w,
+                state.battery_soc_1,
+                state.battery_soc_2,
+                self.min_soc,
+                state.grid_power_w,
             )
             if result.ok:
                 await self._cmd_discharge(state, discharge_w)
@@ -198,9 +197,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             soc_key = ems_key.replace("ems", "soc")
             soc = self._read_float(self._get_entity(soc_key))
             mode = "battery_standby" if soc >= 100 else "charge_pv"
-            await self.hass.services.async_call("select", "select_option", {
-                "entity_id": entity, "option": mode,
-            })
+            await self.hass.services.async_call(
+                "select",
+                "select_option",
+                {
+                    "entity_id": entity,
+                    "option": mode,
+                },
+            )
 
         self._last_command = BatteryCommand.CHARGE_PV
 
@@ -213,9 +217,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         for ems_key in ("battery_ems_1", "battery_ems_2"):
             entity = self._get_entity(ems_key)
             if entity:
-                await self.hass.services.async_call("select", "select_option", {
-                    "entity_id": entity, "option": "battery_standby",
-                })
+                await self.hass.services.async_call(
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": entity,
+                        "option": "battery_standby",
+                    },
+                )
 
         self._last_command = BatteryCommand.STANDBY
 
@@ -238,12 +247,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ems_entity = self._get_entity(ems_key)
             limit_entity = self._get_entity(limit_key)
             if ems_entity and w > 0:
-                await self.hass.services.async_call("select", "select_option", {
-                    "entity_id": ems_entity, "option": "discharge_battery",
-                })
+                await self.hass.services.async_call(
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": ems_entity,
+                        "option": "discharge_battery",
+                    },
+                )
                 if limit_entity:
-                    await self.hass.services.async_call("number", "set_value", {
-                        "entity_id": limit_entity, "value": w,
-                    })
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {
+                            "entity_id": limit_entity,
+                            "value": w,
+                        },
+                    )
 
         self._last_command = BatteryCommand.DISCHARGE

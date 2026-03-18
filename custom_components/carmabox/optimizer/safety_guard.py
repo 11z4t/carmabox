@@ -5,6 +5,7 @@ Cannot be disabled. Cannot be bypassed. Logs every check.
 
 Pure Python. No HA imports. Fully testable.
 """
+
 from __future__ import annotations
 
 import logging
@@ -16,6 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 @dataclass
 class SafetyResult:
     """Result of a safety check."""
+
     ok: bool
     reason: str = ""
 
@@ -86,8 +88,9 @@ class SafetyGuard:
                 _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
                 return SafetyResult(ok=False, reason=reason)
 
-        _LOGGER.debug("SafetyGuard PASS discharge: SoC %s/%s%%, grid %sW",
-                      soc_1, soc_2, grid_power_w)
+        _LOGGER.debug(
+            "SafetyGuard PASS discharge: SoC %s/%s%%, grid %sW", soc_1, soc_2, grid_power_w
+        )
         return SafetyResult(ok=True)
 
     def check_charge(
@@ -138,10 +141,7 @@ class SafetyGuard:
         )
 
         if opposite_signs and both_significant:
-            reason = (
-                f"crosscharge: battery_1={power_1_w:.0f}W, "
-                f"battery_2={power_2_w:.0f}W"
-            )
+            reason = f"crosscharge: battery_1={power_1_w:.0f}W, battery_2={power_2_w:.0f}W"
             _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
             return SafetyResult(ok=False, reason=reason)
 

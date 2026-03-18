@@ -1,4 +1,5 @@
 """Playwright E2E test configuration."""
+
 import pytest
 
 HA_URL = "http://192.168.9.10:8123"

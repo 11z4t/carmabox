@@ -2,6 +2,7 @@
 
 Reads charger state and controls charging via HA's easee integration.
 """
+
 from __future__ import annotations
 
 import logging
@@ -95,16 +96,24 @@ class EaseeAdapter:
     async def enable(self) -> None:
         """Enable the charger."""
         _LOGGER.info("Easee: enable charger")
-        await self.hass.services.async_call("switch", "turn_on", {
-            "entity_id": f"switch.{self.prefix}_is_enabled",
-        })
+        await self.hass.services.async_call(
+            "switch",
+            "turn_on",
+            {
+                "entity_id": f"switch.{self.prefix}_is_enabled",
+            },
+        )
 
     async def disable(self) -> None:
         """Disable the charger."""
         _LOGGER.info("Easee: disable charger")
-        await self.hass.services.async_call("switch", "turn_off", {
-            "entity_id": f"switch.{self.prefix}_is_enabled",
-        })
+        await self.hass.services.async_call(
+            "switch",
+            "turn_off",
+            {
+                "entity_id": f"switch.{self.prefix}_is_enabled",
+            },
+        )
 
     async def set_current(self, amps: int) -> None:
         """Set dynamic charger limit (A). Min 6, max 16 (1-phase).
@@ -114,7 +123,11 @@ class EaseeAdapter:
         """
         amps = max(0, min(32, amps))
         _LOGGER.info("Easee: set current → %dA", amps)
-        await self.hass.services.async_call("number", "set_value", {
-            "entity_id": f"number.{self.prefix}_dynamic_charger_limit",
-            "value": amps,
-        })
+        await self.hass.services.async_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": f"number.{self.prefix}_dynamic_charger_limit",
+                "value": amps,
+            },
+        )

@@ -4,6 +4,7 @@ GUI-based setup wizard for CARMA Box integration.
 Auto-detects inverters, EV chargers, price sources, and PV forecasts.
 No YAML editing required.
 """
+
 from __future__ import annotations
 
 import logging
@@ -75,12 +76,16 @@ GRID_OPERATORS = {
     "ellevio": {"name": "Ellevio", "cost_per_kw": 80, "top_n": 3, "night_weight": 0.5},
     "vattenfall": {
         "name": "Vattenfall Eldistribution",
-        "cost_per_kw": 75, "top_n": 3, "night_weight": 0.5,
+        "cost_per_kw": 75,
+        "top_n": 3,
+        "night_weight": 0.5,
     },
     "eon": {"name": "E.ON Energidistribution", "cost_per_kw": 70, "top_n": 1, "night_weight": 1.0},
     "goteborg_energi": {
         "name": "Göteborg Energi",
-        "cost_per_kw": 78, "top_n": 3, "night_weight": 0.5,
+        "cost_per_kw": 78,
+        "top_n": 3,
+        "night_weight": 0.5,
     },
     "annan": {"name": "Annan", "cost_per_kw": 80, "top_n": 3, "night_weight": 0.5},
 }
@@ -98,9 +103,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         self._detected: dict[str, Any] = {}
         self._user_input: dict[str, Any] = {}
 
-    async def async_step_user(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 1: Welcome + auto-detect."""
         # Prevent duplicate installations
         await self.async_set_unique_id(DOMAIN)
@@ -149,9 +152,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             },
         )
 
-    async def async_step_ev(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_ev(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 3: EV configuration."""
         if user_input is not None:
             self._user_input.update(user_input)
@@ -161,24 +162,22 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="ev",
-            data_schema=vol.Schema({
-                vol.Required("ev_enabled", default=has_ev): bool,
-                vol.Optional("ev_model", default="XPENG G9"): vol.In(
-                    list(EV_MODELS.keys())
-                ),
-                vol.Optional("ev_capacity_kwh", default=98): vol.Coerce(int),
-                vol.Optional("ev_night_target_soc", default=DEFAULT_EV_NIGHT_TARGET_SOC): vol.All(
-                    vol.Coerce(int), vol.Range(min=20, max=100)
-                ),
-                vol.Optional("ev_full_charge_days", default=DEFAULT_EV_FULL_CHARGE_DAYS): vol.All(
-                    vol.Coerce(int), vol.Range(min=3, max=14)
-                ),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("ev_enabled", default=has_ev): bool,
+                    vol.Optional("ev_model", default="XPENG G9"): vol.In(list(EV_MODELS.keys())),
+                    vol.Optional("ev_capacity_kwh", default=98): vol.Coerce(int),
+                    vol.Optional(
+                        "ev_night_target_soc", default=DEFAULT_EV_NIGHT_TARGET_SOC
+                    ): vol.All(vol.Coerce(int), vol.Range(min=20, max=100)),
+                    vol.Optional(
+                        "ev_full_charge_days", default=DEFAULT_EV_FULL_CHARGE_DAYS
+                    ): vol.All(vol.Coerce(int), vol.Range(min=3, max=14)),
+                }
+            ),
         )
 
-    async def async_step_grid(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_grid(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Step 4: Grid operator + price area."""
         if user_input is not None:
             self._user_input.update(user_input)
@@ -199,15 +198,17 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="grid",
-            data_schema=vol.Schema({
-                vol.Required("price_area", default=default_area): vol.In(PRICE_AREAS),
-                vol.Required("grid_operator", default="ellevio"): vol.In({
-                    k: v["name"] for k, v in GRID_OPERATORS.items()
-                }),
-                vol.Optional("peak_cost_per_kw", default=DEFAULT_PEAK_COST_PER_KW): vol.All(
-                    vol.Coerce(float), vol.Range(min=0, max=200)
-                ),
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("price_area", default=default_area): vol.In(PRICE_AREAS),
+                    vol.Required("grid_operator", default="ellevio"): vol.In(
+                        {k: v["name"] for k, v in GRID_OPERATORS.items()}
+                    ),
+                    vol.Optional("peak_cost_per_kw", default=DEFAULT_PEAK_COST_PER_KW): vol.All(
+                        vol.Coerce(float), vol.Range(min=0, max=200)
+                    ),
+                }
+            ),
         )
 
     async def async_step_household(
@@ -220,12 +221,14 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="household",
-            data_schema=vol.Schema({
-                vol.Required("household_size", default=4): vol.All(
-                    vol.Coerce(int), vol.Range(min=1, max=10)
-                ),
-                vol.Optional("has_pool_pump", default=False): bool,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("household_size", default=4): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=10)
+                    ),
+                    vol.Optional("has_pool_pump", default=False): bool,
+                }
+            ),
         )
 
     def _create_entry(self) -> ConfigFlowResult:
@@ -326,20 +329,24 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             domain = entry.domain
 
             if domain in INVERTER_DOMAINS:
-                detected["inverters"].append({
-                    "domain": domain,
-                    "name": INVERTER_DOMAINS[domain],
-                    "entry_id": entry.entry_id,
-                    "prefix": entry.title.lower().replace(" ", "_") if entry.title else domain,
-                })
+                detected["inverters"].append(
+                    {
+                        "domain": domain,
+                        "name": INVERTER_DOMAINS[domain],
+                        "entry_id": entry.entry_id,
+                        "prefix": entry.title.lower().replace(" ", "_") if entry.title else domain,
+                    }
+                )
 
             elif domain in EV_DOMAINS:
-                detected["ev_chargers"].append({
-                    "domain": domain,
-                    "name": EV_DOMAINS[domain],
-                    "entry_id": entry.entry_id,
-                    "prefix": f"{domain}_{entry.title}" if entry.title else domain,
-                })
+                detected["ev_chargers"].append(
+                    {
+                        "domain": domain,
+                        "name": EV_DOMAINS[domain],
+                        "entry_id": entry.entry_id,
+                        "prefix": f"{domain}_{entry.title}" if entry.title else domain,
+                    }
+                )
 
             elif domain in PRICE_DOMAINS:
                 # Find the main sensor entity
@@ -348,17 +355,21 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     if domain in state.entity_id and "kwh" in state.entity_id:
                         entity_id = state.entity_id
                         break
-                detected["price_sources"].append({
-                    "domain": domain,
-                    "name": PRICE_DOMAINS[domain],
-                    "entity_id": entity_id,
-                })
+                detected["price_sources"].append(
+                    {
+                        "domain": domain,
+                        "name": PRICE_DOMAINS[domain],
+                        "entity_id": entity_id,
+                    }
+                )
 
             elif domain in PV_DOMAINS:
-                detected["pv_forecasts"].append({
-                    "domain": domain,
-                    "name": PV_DOMAINS[domain],
-                })
+                detected["pv_forecasts"].append(
+                    {
+                        "domain": domain,
+                        "name": PV_DOMAINS[domain],
+                    }
+                )
 
         _LOGGER.info(
             "CARMA Box auto-detect: %d inverters, %d EV, %d price, %d PV",
@@ -387,9 +398,7 @@ class CarmaboxOptionsFlow(OptionsFlow):
         """Initialize options flow."""
         self.entry = entry
 
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> ConfigFlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Main options page."""
         if user_input is not None:
             return self.async_create_entry(data=user_input)
@@ -398,34 +407,36 @@ class CarmaboxOptionsFlow(OptionsFlow):
 
         return self.async_show_form(
             step_id="init",
-            data_schema=vol.Schema({
-                vol.Required(
-                    "target_weighted_kw",
-                    default=opts.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=10.0)),
-                vol.Required(
-                    "min_soc",
-                    default=opts.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
-                ): vol.All(vol.Coerce(float), vol.Range(min=5, max=50)),
-                vol.Required(
-                    "ev_night_target_soc",
-                    default=opts.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC),
-                ): vol.All(vol.Coerce(int), vol.Range(min=20, max=100)),
-                vol.Required(
-                    "ev_full_charge_days",
-                    default=opts.get("ev_full_charge_days", DEFAULT_EV_FULL_CHARGE_DAYS),
-                ): vol.All(vol.Coerce(int), vol.Range(min=3, max=14)),
-                vol.Required(
-                    "peak_cost_per_kw",
-                    default=opts.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW),
-                ): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
-                vol.Required(
-                    "household_size",
-                    default=opts.get("household_size", 4),
-                ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
-                vol.Optional(
-                    "has_pool_pump",
-                    default=opts.get("has_pool_pump", False),
-                ): bool,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        "target_weighted_kw",
+                        default=opts.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=10.0)),
+                    vol.Required(
+                        "min_soc",
+                        default=opts.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=5, max=50)),
+                    vol.Required(
+                        "ev_night_target_soc",
+                        default=opts.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=20, max=100)),
+                    vol.Required(
+                        "ev_full_charge_days",
+                        default=opts.get("ev_full_charge_days", DEFAULT_EV_FULL_CHARGE_DAYS),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=3, max=14)),
+                    vol.Required(
+                        "peak_cost_per_kw",
+                        default=opts.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=200)),
+                    vol.Required(
+                        "household_size",
+                        default=opts.get("household_size", 4),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=1, max=10)),
+                    vol.Optional(
+                        "has_pool_pump",
+                        default=opts.get("has_pool_pump", False),
+                    ): bool,
+                }
+            ),
         )

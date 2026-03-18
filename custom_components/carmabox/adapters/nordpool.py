@@ -2,6 +2,7 @@
 
 Reads electricity prices via HA's nordpool integration.
 """
+
 from __future__ import annotations
 
 import logging
@@ -50,7 +51,7 @@ class NordpoolAdapter:
         step = len(raw) // 24
         hourly = []
         for h in range(24):
-            chunk = raw[h * step:(h + 1) * step]
+            chunk = raw[h * step : (h + 1) * step]
             avg = sum(chunk) / len(chunk) if chunk else 0
             hourly.append(round(avg, 2))
         return hourly
