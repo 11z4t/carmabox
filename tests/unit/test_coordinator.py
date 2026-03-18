@@ -38,7 +38,12 @@ def _make_coordinator(
     coord.hass = hass
     coord.entry = entry
     coord.safety = MagicMock()
+    # All safety checks default to PASS so existing tests work unchanged
+    coord.safety.check_heartbeat = MagicMock(return_value=MagicMock(ok=True, reason=""))
+    coord.safety.check_rate_limit = MagicMock(return_value=MagicMock(ok=True, reason=""))
+    coord.safety.check_charge = MagicMock(return_value=MagicMock(ok=True, reason=""))
     coord.safety.check_discharge = MagicMock(return_value=MagicMock(ok=True, reason=""))
+    coord.safety.check_crosscharge = MagicMock(return_value=MagicMock(ok=True, reason=""))
     coord.plan = []
     coord._plan_counter = 0
     coord._last_command = BatteryCommand.IDLE
@@ -52,6 +57,8 @@ def _make_coordinator(
     coord._daily_discharge_kwh = 0.0
     coord._daily_safety_blocks = 0
     coord._daily_plans = 0
+    coord._current_date = "2026-03-18"
+    coord._daily_avg_price = float((options or {}).get("fallback_price_ore", 80.0))
 
     return coord
 
@@ -435,3 +442,199 @@ class TestTrackSavings:
         )
         coord._track_savings(state)
         assert coord.savings.discharge_savings_kr == 0.0
+
+
+class TestSafetyGuardBypass:
+    """PLAT-877: ALL commands must go through SafetyGuard."""
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_blocked_by_check_charge(self) -> None:
+        """check_charge returns block → charge_pv must NOT execute."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.safety.check_charge = MagicMock(
+            return_value=MagicMock(ok=False, reason="all batteries full")
+        )
+
+        state = CarmaboxState(battery_soc_1=100, battery_soc_2=100)
+        await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+        assert coord._daily_safety_blocks > 0
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_blocked_by_rate_limit(self) -> None:
+        """Rate limit reached → charge_pv must NOT execute."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="rate limit exceeded")
+        )
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_blocked_by_heartbeat(self) -> None:
+        """Heartbeat stale → charge_pv must NOT execute."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.safety.check_heartbeat = MagicMock(
+            return_value=MagicMock(ok=False, reason="stale 300s")
+        )
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_standby_blocked_by_rate_limit(self) -> None:
+        """Rate limit reached → standby must NOT execute."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="rate limit exceeded")
+        )
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_standby_blocked_by_heartbeat(self) -> None:
+        """Heartbeat stale → standby must NOT execute."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_heartbeat = MagicMock(
+            return_value=MagicMock(ok=False, reason="stale 300s")
+        )
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_forced_standby_bypasses_rate_limit(self) -> None:
+        """force=True standby (safety action) should still work."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="rate limit exceeded")
+        )
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state, force=True)
+
+        assert coord._last_command == BatteryCommand.STANDBY
+        coord.hass.services.async_call.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_discharge_blocked_by_rate_limit(self) -> None:
+        """Rate limit reached → discharge must NOT execute."""
+        coord = _make_coordinator(
+            {"battery_ems_1": "select.ems1", "battery_limit_1": "number.limit1"}
+        )
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="rate limit exceeded")
+        )
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_discharge_blocked_by_heartbeat(self) -> None:
+        """Heartbeat stale → discharge must NOT execute."""
+        coord = _make_coordinator(
+            {"battery_ems_1": "select.ems1", "battery_limit_1": "number.limit1"}
+        )
+        coord.safety.check_heartbeat = MagicMock(
+            return_value=MagicMock(ok=False, reason="stale 300s")
+        )
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_discharge_blocked_by_check_discharge(self) -> None:
+        """check_discharge returns block → discharge must NOT execute."""
+        coord = _make_coordinator(
+            {"battery_ems_1": "select.ems1", "battery_limit_1": "number.limit1"}
+        )
+        coord.safety.check_discharge = MagicMock(
+            return_value=MagicMock(ok=False, reason="SoC too low")
+        )
+
+        state = CarmaboxState(battery_soc_1=10, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        assert coord._last_command == BatteryCommand.IDLE
+        coord.hass.services.async_call.assert_not_called()
+        assert coord._daily_safety_blocks > 0
+
+    @pytest.mark.asyncio
+    async def test_crosscharge_triggers_forced_standby(self) -> None:
+        """Crosscharge detected in _execute → both batteries set to standby."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_crosscharge = MagicMock(
+            return_value=MagicMock(ok=False, reason="crosscharge detected")
+        )
+
+        state = CarmaboxState(
+            battery_power_1=1000,
+            battery_power_2=-1000,
+            battery_soc_1=50,
+        )
+        await coord._execute(state)
+
+        # Should have called standby (forced)
+        assert coord._last_command == BatteryCommand.STANDBY
+        coord.hass.services.async_call.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_record_mode_change_called_on_charge_pv(self) -> None:
+        """record_mode_change must be called after successful charge_pv."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        coord.safety.record_mode_change.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_record_mode_change_called_on_standby(self) -> None:
+        """record_mode_change must be called after successful standby."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state)
+
+        coord.safety.record_mode_change.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_record_mode_change_called_on_discharge(self) -> None:
+        """record_mode_change must be called after successful discharge."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+            }
+        )
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        coord.safety.record_mode_change.assert_called_once()

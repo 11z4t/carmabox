@@ -136,12 +136,16 @@ def generate_plan(
             if available > 0.3:
                 discharge = min(need, available, max_discharge_kw)
                 battery_kw = -discharge
-                soc_kwh -= discharge / battery_efficiency
+                soc_kwh -= discharge
                 action = "d"
+
+        # Clamp SoC to valid range
+        soc_kwh = max(0.0, min(soc_kwh, battery_cap_kwh))
 
         # EV SoC tracking
         if ev_soc >= 0:
             ev_soc_kwh += ev * ev_efficiency
+            ev_soc_kwh = max(0.0, min(ev_soc_kwh, ev_cap_kwh))
         ev_soc_pct = min(100, ev_soc_kwh / ev_cap_kwh * 100) if ev_cap_kwh > 0 else 0
 
         grid = max(0, net + battery_kw)

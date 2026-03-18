@@ -89,6 +89,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_discharge_kwh = 0.0
         self._daily_safety_blocks = 0
         self._daily_plans = 0
+        self._current_date = datetime.now().strftime("%Y-%m-%d")
+        self._daily_avg_price: float = float(
+            entry.options.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
+        )
 
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
@@ -126,6 +130,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             now = datetime.now()
             self.savings = reset_if_new_month(self.savings, now)
             self.report_collector = reset_report_month(self.report_collector, now)
+            self._reset_daily_counters_if_new_day(now)
             self.safety.update_heartbeat()
             state = self._collect_state()
 
@@ -275,16 +280,49 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _execute(self, state: CarmaboxState) -> None:
         """Execute current action based on state.
 
+        ALL commands go through SafetyGuard. No exceptions.
+
         Core rules (in priority order):
         1. Never discharge during export
         2. SoC 100% → standby
         3. Load > target → discharge to fill gap
         4. Load < target → idle (grid handles it)
         """
+        # ── GLOBAL SAFETY GATES (every cycle) ──────────────
+        heartbeat = self.safety.check_heartbeat()
+        if not heartbeat.ok:
+            _LOGGER.warning("SafetyGuard heartbeat stale: %s", heartbeat.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        rate = self.safety.check_rate_limit()
+        if not rate.ok:
+            _LOGGER.info("SafetyGuard rate limit: %s", rate.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        # Crosscharge check every cycle
+        crosscharge = self.safety.check_crosscharge(state.battery_power_1, state.battery_power_2)
+        if not crosscharge.ok:
+            _LOGGER.warning("SafetyGuard crosscharge: %s", crosscharge.reason)
+            self._daily_safety_blocks += 1
+            await self._cmd_standby(state, force=True)
+            return
+
+        # Read temperature for safety checks
+        temp_c = self._read_battery_temp()
+
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
             if not state.all_batteries_full:
-                await self._cmd_charge_pv(state)
+                charge_result = self.safety.check_charge(
+                    state.battery_soc_1, state.battery_soc_2, temp_c
+                )
+                if charge_result.ok:
+                    await self._cmd_charge_pv(state)
+                else:
+                    _LOGGER.info("SafetyGuard blocked charge: %s", charge_result.reason)
+                    self._daily_safety_blocks += 1
             else:
                 await self._cmd_standby(state)
             return
@@ -304,27 +342,51 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if weighted_net > target_w:
             discharge_w = int((weighted_net - target_w) / weight)
-            # Check all safety gates
-            rate_result = self.safety.check_rate_limit()
-            if not rate_result.ok:
-                _LOGGER.info("SafetyGuard blocked: %s", rate_result.reason)
-                self._daily_safety_blocks += 1
-                return
             result = self.safety.check_discharge(
                 state.battery_soc_1,
                 state.battery_soc_2,
                 self.min_soc,
                 state.grid_power_w,
+                temp_c,
             )
             if result.ok:
                 await self._cmd_discharge(state, discharge_w)
-                self.safety.record_mode_change()
             else:
                 _LOGGER.info("SafetyGuard blocked: %s", result.reason)
                 self._daily_safety_blocks += 1
             return
 
         # ── RULE 4: Under target → idle ──────────────────────
+
+    def _read_battery_temp(self) -> float | None:
+        """Read battery temperature from configured entity."""
+        temp_entity = self._get_entity("battery_temp_entity", "")
+        if not temp_entity:
+            return None
+        val = self._read_float(temp_entity, -999)
+        return val if val > -999 else None
+
+    def _reset_daily_counters_if_new_day(self, now: datetime) -> None:
+        """Reset daily counters at midnight."""
+        today = now.strftime("%Y-%m-%d")
+        if today != self._current_date:
+            _LOGGER.info("CARMA: new day %s — resetting daily counters", today)
+            self._daily_discharge_kwh = 0.0
+            self._daily_safety_blocks = 0
+            self._daily_plans = 0
+            self._current_date = today
+            self._update_daily_avg_price()
+
+    def _update_daily_avg_price(self) -> None:
+        """Calculate daily average price from Nordpool today_prices."""
+        price_entity = self._get_entity("price_entity", "")
+        if not price_entity:
+            return
+        fallback = float(self.entry.options.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+        adapter = NordpoolAdapter(self.hass, price_entity, fallback)
+        prices = adapter.today_prices
+        if prices and not all(p == fallback for p in prices):
+            self._daily_avg_price = sum(prices) / len(prices)
 
     def _track_savings(self, state: CarmaboxState) -> None:
         """Track savings data from current state."""
@@ -348,14 +410,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Record discharge savings (30s interval → /120 for kWh)
         interval_hours = SCAN_INTERVAL_SECONDS / 3600
         if battery_discharge_kw > 0 and state.current_price > 0:
-            avg_price = float(
-                self.entry.options.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
-            )
             record_discharge(
                 self.savings,
                 battery_discharge_kw * interval_hours,
                 state.current_price,
-                avg_price,
+                self._daily_avg_price,
             )
             self._daily_discharge_kwh += battery_discharge_kw * interval_hours
 
@@ -371,12 +430,48 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         record_daily_sample(self.report_collector, sample)
 
+    async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
+        """Call HA service with error handling. Returns True on success."""
+        try:
+            await self.hass.services.async_call(domain, service, data)
+            return True
+        except Exception:
+            _LOGGER.exception(
+                "Service call failed: %s.%s → %s", domain, service, data.get("entity_id", "?")
+            )
+            self._daily_safety_blocks += 1
+            return False
+
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:
-        """Set batteries to charge from solar."""
+        """Set batteries to charge from solar.
+
+        SafetyGuard: heartbeat + rate limit + charge check.
+        """
         if self._last_command == BatteryCommand.CHARGE_PV:
             return
 
+        # ── SafetyGuard gates (defense-in-depth) ─────────────
+        heartbeat = self.safety.check_heartbeat()
+        if not heartbeat.ok:
+            _LOGGER.warning("SafetyGuard blocked charge_pv: %s", heartbeat.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        rate = self.safety.check_rate_limit()
+        if not rate.ok:
+            _LOGGER.info("SafetyGuard blocked charge_pv: %s", rate.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        temp_c = self._read_battery_temp()
+        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
+        if not charge_check.ok:
+            _LOGGER.info("SafetyGuard blocked charge_pv: %s", charge_check.reason)
+            self._daily_safety_blocks += 1
+            return
+
         _LOGGER.info("CARMA: charge_pv (solar surplus)")
+        success = False
         for ems_key in ("battery_ems_1", "battery_ems_2"):
             entity = self._get_entity(ems_key)
             if not entity:
@@ -384,39 +479,82 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             soc_key = ems_key.replace("ems", "soc")
             soc = self._read_float(self._get_entity(soc_key))
             mode = "battery_standby" if soc >= 100 else "charge_pv"
-            await self.hass.services.async_call(
-                "select",
-                "select_option",
-                {
-                    "entity_id": entity,
-                    "option": mode,
-                },
-            )
+            if await self._safe_service_call(
+                "select", "select_option", {"entity_id": entity, "option": mode}
+            ):
+                success = True
 
-        self._last_command = BatteryCommand.CHARGE_PV
+        if success:
+            self._last_command = BatteryCommand.CHARGE_PV
+            self.safety.record_mode_change()
 
-    async def _cmd_standby(self, state: CarmaboxState) -> None:
-        """Set all batteries to standby."""
-        if self._last_command == BatteryCommand.STANDBY:
+    async def _cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:
+        """Set all batteries to standby.
+
+        SafetyGuard: heartbeat + rate limit (skipped when force=True
+        since forced standby is itself a safety action).
+        """
+        if not force and self._last_command == BatteryCommand.STANDBY:
             return
 
-        _LOGGER.info("CARMA: standby")
+        if not force:
+            # ── SafetyGuard gates (defense-in-depth) ─────────────
+            heartbeat = self.safety.check_heartbeat()
+            if not heartbeat.ok:
+                _LOGGER.warning("SafetyGuard blocked standby: %s", heartbeat.reason)
+                self._daily_safety_blocks += 1
+                return
+
+            rate = self.safety.check_rate_limit()
+            if not rate.ok:
+                _LOGGER.info("SafetyGuard blocked standby: %s", rate.reason)
+                self._daily_safety_blocks += 1
+                return
+
+        _LOGGER.info("CARMA: standby%s", " (forced)" if force else "")
+        success = False
         for ems_key in ("battery_ems_1", "battery_ems_2"):
             entity = self._get_entity(ems_key)
-            if entity:
-                await self.hass.services.async_call(
-                    "select",
-                    "select_option",
-                    {
-                        "entity_id": entity,
-                        "option": "battery_standby",
-                    },
-                )
+            if entity and await self._safe_service_call(
+                "select", "select_option", {"entity_id": entity, "option": "battery_standby"}
+            ):
+                success = True
 
-        self._last_command = BatteryCommand.STANDBY
+        if success:
+            self._last_command = BatteryCommand.STANDBY
+            self.safety.record_mode_change()
 
     async def _cmd_discharge(self, state: CarmaboxState, watts: int) -> None:
-        """Set batteries to discharge at specified wattage."""
+        """Set batteries to discharge at specified wattage.
+
+        SafetyGuard: heartbeat + rate limit + discharge check.
+        """
+        # ── SafetyGuard gates (defense-in-depth) ─────────────
+        heartbeat = self.safety.check_heartbeat()
+        if not heartbeat.ok:
+            _LOGGER.warning("SafetyGuard blocked discharge: %s", heartbeat.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        rate = self.safety.check_rate_limit()
+        if not rate.ok:
+            _LOGGER.info("SafetyGuard blocked discharge: %s", rate.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        temp_c = self._read_battery_temp()
+        discharge_check = self.safety.check_discharge(
+            state.battery_soc_1,
+            state.battery_soc_2,
+            self.min_soc,
+            state.grid_power_w,
+            temp_c,
+        )
+        if not discharge_check.ok:
+            _LOGGER.info("SafetyGuard blocked discharge: %s", discharge_check.reason)
+            self._daily_safety_blocks += 1
+            return
+
         _LOGGER.info("CARMA: discharge %dW (target %.1f kW)", watts, self.target_kw)
 
         total_soc = state.battery_soc_1 + max(0, state.battery_soc_2)
@@ -427,6 +565,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         w1 = int(watts * ratio_1)
         w2 = watts - w1
 
+        success = False
         for ems_key, limit_key, w in [
             ("battery_ems_1", "battery_limit_1", w1),
             ("battery_ems_2", "battery_limit_2", w2),
@@ -434,22 +573,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ems_entity = self._get_entity(ems_key)
             limit_entity = self._get_entity(limit_key)
             if ems_entity and w > 0:
-                await self.hass.services.async_call(
+                ems_ok = await self._safe_service_call(
                     "select",
                     "select_option",
-                    {
-                        "entity_id": ems_entity,
-                        "option": "discharge_battery",
-                    },
+                    {"entity_id": ems_entity, "option": "discharge_battery"},
                 )
-                if limit_entity:
-                    await self.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {
-                            "entity_id": limit_entity,
-                            "value": w,
-                        },
+                if ems_ok and limit_entity:
+                    await self._safe_service_call(
+                        "number", "set_value", {"entity_id": limit_entity, "value": w}
                     )
+                    success = True
 
-        self._last_command = BatteryCommand.DISCHARGE
+        if success:
+            self._last_command = BatteryCommand.DISCHARGE
+            self.safety.record_mode_change()
