@@ -22,6 +22,8 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
+from .adapters.nordpool import NordpoolAdapter
+from .adapters.solcast import SolcastAdapter
 from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_NIGHT_WEIGHT,
@@ -29,7 +31,9 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.models import CarmaboxState, HourPlan
+from .optimizer.planner import generate_plan
 from .optimizer.safety_guard import SafetyGuard
 
 _LOGGER = logging.getLogger(__name__)
@@ -135,10 +139,79 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
     def _generate_plan(self, state: CarmaboxState) -> None:
-        """Generate new energy plan."""
-        _LOGGER.debug("Generating plan (target=%.1f kW)", self.target_kw)
-        # TODO Sprint 2: integrate planner.generate_plan() with
-        # Nordpool prices + Solcast forecast + consumption profile
+        """Generate energy plan from Nordpool + Solcast + consumption."""
+        try:
+            now = datetime.now()
+            start_hour = now.hour
+
+            # Collect prices
+            nordpool = NordpoolAdapter(self.hass, self._get_entity("price_entity", ""))
+            today_prices = nordpool.today_prices
+            tomorrow_prices = nordpool.tomorrow_prices
+            prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
+
+            # Collect PV forecast
+            solcast = SolcastAdapter(self.hass)
+            pv_hourly = solcast.today_hourly_kw
+            pv_forecast = pv_hourly[start_hour:] + [0.0] * 24  # Pad tomorrow
+
+            # Consumption profile (static for now)
+            base = [0.8] * 6 + [2.0] * 3 + [1.5] * 8 + [2.5] * 5 + [1.0] * 2
+            consumption = base[start_hour:] + base
+
+            # EV demand (static 6A natt for now)
+            ev_kw = 1.38
+            ev = [0.0] * 24
+            for h in range(24):
+                abs_h = (start_hour + h) % 24
+                if abs_h >= 22 or abs_h < 6:
+                    ev[h] = ev_kw
+            ev_demand = ev[: len(prices)]
+
+            # Calculate target from PV forecast + reserve
+            battery_kwh = (state.battery_soc_1 / 100 * 15) + (
+                max(0, state.battery_soc_2) / 100 * 10
+            )
+            pv_daily = solcast.forecast_daily_3d
+            reserve = calculate_reserve(pv_daily, 15.0, 5.0)
+            target = calculate_target(
+                battery_kwh_available=battery_kwh - (self.min_soc / 100 * 25),
+                hourly_loads=consumption[: len(prices)],
+                hourly_weights=[ellevio_weight((start_hour + i) % 24) for i in range(len(prices))],
+                reserve_kwh=reserve,
+            )
+            self.target_kw = target
+
+            # Trim to same length
+            n = min(len(prices), len(pv_forecast), len(consumption))
+            prices = prices[:n]
+            pv_forecast = pv_forecast[:n]
+            consumption = consumption[:n]
+            ev_demand = ev_demand[:n]
+
+            # Generate plan
+            self.plan = generate_plan(
+                num_hours=n,
+                start_hour=start_hour,
+                target_weighted_kw=target,
+                hourly_loads=consumption,
+                hourly_pv=pv_forecast,
+                hourly_prices=prices,
+                hourly_ev=ev_demand,
+                battery_soc=state.battery_soc_1,
+                ev_soc=max(0, state.ev_soc),
+            )
+
+            _LOGGER.info(
+                "CARMA plan: %d hours, target=%.1f kW, %d charge, %d discharge",
+                len(self.plan),
+                target,
+                sum(1 for h in self.plan if h.action == "c"),
+                sum(1 for h in self.plan if h.action == "d"),
+            )
+
+        except Exception:
+            _LOGGER.exception("Plan generation failed — keeping old plan")
 
     async def _execute(self, state: CarmaboxState) -> None:
         """Execute current action based on state.
