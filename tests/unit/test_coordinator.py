@@ -199,15 +199,15 @@ class TestBatteryCommand:
         assert BatteryCommand.STANDBY.value == "standby"
         assert BatteryCommand.DISCHARGE.value == "discharge"
 
-    def test_no_duplicate_command(self) -> None:
+    @pytest.mark.asyncio
+    async def test_no_duplicate_command(self) -> None:
         """Same command should not re-send."""
         coord = _make_coordinator({"battery_ems_1": "select.ems1"})
         coord._last_command = BatteryCommand.STANDBY
 
         # Calling standby again should be no-op
-        import asyncio
 
-        asyncio.get_event_loop().run_until_complete(coord._cmd_standby(CarmaboxState()))
+        await coord._cmd_standby(CarmaboxState())
         coord.hass.services.async_call.assert_not_called()
 
 
