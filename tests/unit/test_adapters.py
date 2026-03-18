@@ -244,3 +244,86 @@ class TestNordpoolAdapter:
     def test_to_hourly_empty(self) -> None:
         result = NordpoolAdapter._to_hourly([])
         assert result == []
+
+
+# ── Additional coverage tests ────────────────────────────────────
+
+
+class TestGoodWeAdapterEdgeCases:
+    def test_read_float_invalid_string(self) -> None:
+        hass = _make_hass(("sensor.pv_battery_soc_kontor", "not_a_number"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.soc == 0.0
+
+    def test_read_str_unavailable(self) -> None:
+        hass = _make_hass(("select.goodwe_kontor_ems_mode", "unavailable"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.ems_mode == ""
+
+    @pytest.mark.asyncio
+    async def test_set_fast_charging_on(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_fast_charging(on=True, power_pct=80, soc_target=90)
+        calls = hass.services.async_call.call_args_list
+        assert len(calls) == 3  # switch + power + soc
+        assert calls[0][0][1] == "turn_on"
+        assert calls[1][0][2]["value"] == 80
+        assert calls[2][0][2]["value"] == 90
+
+    @pytest.mark.asyncio
+    async def test_set_fast_charging_off(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_fast_charging(on=False)
+        calls = hass.services.async_call.call_args_list
+        assert len(calls) == 1  # only switch
+        assert calls[0][0][1] == "turn_off"
+
+
+class TestEaseeAdapterEdgeCases:
+    def test_read_float_invalid(self) -> None:
+        hass = _make_hass(("sensor.easee_home_12840_current", "abc"))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        assert adapter.current_a == 0.0
+
+    def test_read_str_unavailable(self) -> None:
+        hass = _make_hass(("sensor.easee_home_12840_status", "unavailable"))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        assert adapter.status == ""
+
+    def test_dynamic_limit(self) -> None:
+        hass = _make_hass(("sensor.easee_home_12840_dynamic_charger_limit", "16"))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        assert adapter.dynamic_limit_a == 16.0
+
+
+class TestNordpoolAdapterEdgeCases:
+    def test_current_price_invalid(self) -> None:
+        hass = MagicMock()
+        state = MagicMock()
+        state.state = "not_a_number"
+        state.attributes = {}
+        hass.states.get = MagicMock(return_value=state)
+        adapter = NordpoolAdapter(hass, "sensor.np")
+        assert adapter.current_price == 50.0
+
+    def test_attrs_missing_entity(self) -> None:
+        hass = MagicMock()
+        hass.states.get = MagicMock(return_value=None)
+        adapter = NordpoolAdapter(hass, "sensor.np")
+        assert adapter.today_prices == [50.0] * 24
+
+    def test_tomorrow_prices_empty_list(self) -> None:
+        hass = MagicMock()
+        state = MagicMock()
+        state.state = "50"
+        state.attributes = {"today": list(range(24)), "tomorrow": [], "tomorrow_valid": True}
+        hass.states.get = MagicMock(return_value=state)
+        adapter = NordpoolAdapter(hass, "sensor.np")
+        assert adapter.tomorrow_prices is None
+
+    def test_read_float_empty_string(self) -> None:
+        hass = _make_hass(("sensor.easee_home_12840_current", ""))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        assert adapter.current_a == 0.0
