@@ -4,13 +4,12 @@ Exposes optimizer state as HA sensors for dashboard + automations.
 """
 from __future__ import annotations
 
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
 from .coordinator import CarmaboxCoordinator
 
 
@@ -76,7 +75,7 @@ class CarmaboxPlanStatusSensor(CarmaboxBaseSensor):
         return "idle"
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, object]:
         """Plan details as attributes."""
         if self.coordinator.data is None:
             return {}
@@ -103,7 +102,7 @@ class CarmaboxTargetSensor(CarmaboxBaseSensor):
 
     @property
     def native_value(self) -> float:
-        return self.coordinator.target_kw
+        return float(self.coordinator.target_kw)
 
 
 class CarmaboxSavingsSensor(CarmaboxBaseSensor):

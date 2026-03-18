@@ -1,5 +1,6 @@
 """Tests for SafetyGuard — CARMA Box safety layer."""
 import pytest
+
 from custom_components.carmabox.optimizer.safety_guard import SafetyGuard
 
 

@@ -68,7 +68,7 @@ class EaseeAdapter:
     @property
     def power_w(self) -> float:
         """Current charging power (W)."""
-        return self._state("power") * 1000  # Easee reports kW
+        return self._state("power")  # Easee reports kW
 
     @property
     def is_enabled(self) -> bool:

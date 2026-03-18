@@ -5,7 +5,6 @@ Reads battery state and sends commands via HA's goodwe integration entities.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from homeassistant.core import HomeAssistant
 
@@ -95,7 +94,9 @@ class GoodWeAdapter:
             "option": mode,
         })
 
-    async def set_fast_charging(self, on: bool, power_pct: int = 100, soc_target: int = 100) -> None:
+    async def set_fast_charging(
+        self, on: bool, power_pct: int = 100, soc_target: int = 100,
+    ) -> None:
         """Set fast charging switch + power + SoC target."""
         switch_entity = f"switch.goodwe_fast_charging_switch_{self.prefix}"
         service = "turn_on" if on else "turn_off"

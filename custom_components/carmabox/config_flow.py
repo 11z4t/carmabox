@@ -10,26 +10,16 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-
-from homeassistant.config_entries import ConfigFlow, OptionsFlow, ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 
 from .const import (
-    DOMAIN,
-    DEFAULT_TARGET_WEIGHTED_KW,
     DEFAULT_BATTERY_MIN_SOC,
-    DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_EV_FULL_CHARGE_DAYS,
-    DEFAULT_EV_MIN_AMPS,
-    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_PEAK_COST_PER_KW,
-    DEFAULT_NIGHT_WEIGHT,
-    CONF_BATTERIES,
-    CONF_EV,
-    CONF_GRID_OPERATOR,
-    CONF_PRICE_AREA,
-    CONF_HOUSEHOLD_SIZE,
+    DEFAULT_TARGET_WEIGHTED_KW,
+    DOMAIN,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,9 +73,15 @@ EV_MODELS = {
 # Grid operators
 GRID_OPERATORS = {
     "ellevio": {"name": "Ellevio", "cost_per_kw": 80, "top_n": 3, "night_weight": 0.5},
-    "vattenfall": {"name": "Vattenfall Eldistribution", "cost_per_kw": 75, "top_n": 3, "night_weight": 0.5},
+    "vattenfall": {
+        "name": "Vattenfall Eldistribution",
+        "cost_per_kw": 75, "top_n": 3, "night_weight": 0.5,
+    },
     "eon": {"name": "E.ON Energidistribution", "cost_per_kw": 70, "top_n": 1, "night_weight": 1.0},
-    "goteborg_energi": {"name": "Göteborg Energi", "cost_per_kw": 78, "top_n": 3, "night_weight": 0.5},
+    "goteborg_energi": {
+        "name": "Göteborg Energi",
+        "cost_per_kw": 78, "top_n": 3, "night_weight": 0.5,
+    },
     "annan": {"name": "Annan", "cost_per_kw": 80, "top_n": 3, "night_weight": 0.5},
 }
 
@@ -104,7 +100,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Step 1: Welcome + auto-detect."""
         # Prevent duplicate installations
         await self.async_set_unique_id(DOMAIN)
@@ -125,13 +121,13 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_no_inverter(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """No supported inverter found."""
         return self.async_abort(reason="no_inverter")
 
     async def async_step_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Step 2: Confirm detected equipment."""
         if user_input is not None:
             return await self.async_step_ev()
@@ -155,7 +151,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_ev(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Step 3: EV configuration."""
         if user_input is not None:
             self._user_input.update(user_input)
@@ -182,7 +178,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_grid(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Step 4: Grid operator + price area."""
         if user_input is not None:
             self._user_input.update(user_input)
@@ -216,7 +212,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_household(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Step 5: Household info."""
         if user_input is not None:
             self._user_input.update(user_input)
@@ -232,7 +228,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             }),
         )
 
-    def _create_entry(self) -> FlowResult:
+    def _create_entry(self) -> ConfigFlowResult:
         """Create the config entry with all collected data."""
         data = {
             "detected": self._detected,
@@ -245,8 +241,12 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "ev_enabled": self._user_input.get("ev_enabled", False),
             "ev_model": self._user_input.get("ev_model", ""),
             "ev_capacity_kwh": self._user_input.get("ev_capacity_kwh", 98),
-            "ev_night_target_soc": self._user_input.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC),
-            "ev_full_charge_days": self._user_input.get("ev_full_charge_days", DEFAULT_EV_FULL_CHARGE_DAYS),
+            "ev_night_target_soc": self._user_input.get(
+                "ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC
+            ),
+            "ev_full_charge_days": self._user_input.get(
+                "ev_full_charge_days", DEFAULT_EV_FULL_CHARGE_DAYS
+            ),
             # Grid
             "price_area": self._user_input.get("price_area", "SE3"),
             "grid_operator": self._user_input.get("grid_operator", "ellevio"),
@@ -277,7 +277,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             mappings["battery_soc_1"] = f"sensor.pv_battery_soc_{prefix}" if prefix else ""
             mappings["battery_power_1"] = f"sensor.goodwe_battery_power_{prefix}" if prefix else ""
             mappings["battery_ems_1"] = f"select.goodwe_{prefix}_ems_mode" if prefix else ""
-            mappings["battery_limit_1"] = f"number.goodwe_{prefix}_ems_power_limit" if prefix else ""
+            mappings["battery_limit_1"] = (
+                f"number.goodwe_{prefix}_ems_power_limit" if prefix else ""
+            )
 
         if len(inverters) > 1:
             inv2 = inverters[1]
@@ -296,9 +298,10 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         # EV
         ev_chargers = self._detected.get("ev_chargers", [])
         if ev_chargers:
-            mappings["ev_status_entity"] = f"sensor.{ev_chargers[0].get('prefix', 'easee')}_status"
-            mappings["ev_current_entity"] = f"sensor.{ev_chargers[0].get('prefix', 'easee')}_current"
-            mappings["ev_power_entity"] = f"sensor.{ev_chargers[0].get('prefix', 'easee')}_power"
+            ev_prefix = ev_chargers[0].get("prefix", "easee")
+            mappings["ev_status_entity"] = f"sensor.{ev_prefix}_status"
+            mappings["ev_current_entity"] = f"sensor.{ev_prefix}_current"
+            mappings["ev_power_entity"] = f"sensor.{ev_prefix}_power"
 
         # Price
         price_sources = self._detected.get("price_sources", [])
@@ -386,7 +389,7 @@ class CarmaboxOptionsFlow(OptionsFlow):
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Main options page."""
         if user_input is not None:
             return self.async_create_entry(data=user_input)

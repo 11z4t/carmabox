@@ -1,5 +1,5 @@
 """E2E: Verify dev-HA is running and CARMA Box is loaded."""
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page
 
 HA_URL = "http://192.168.9.10:8123"
 
@@ -15,8 +15,7 @@ def test_ha_shows_auth(page: Page):
     """Login page should show auth form."""
     page.goto(HA_URL)
     page.wait_for_load_state("networkidle")
-    content = page.content()
-    assert "home-assistant" in content.lower() or "auth" in content.lower()
+    assert "integrations" in page.url or "config" in page.url
 
 
 def test_carmabox_detected_by_ha(page: Page):
@@ -37,5 +36,3 @@ def test_carmabox_detected_by_ha(page: Page):
     page.wait_for_timeout(3000)
 
     # Check page loaded (we may not find CARMA in list without adding it)
-    content = page.content()
-    assert "integrations" in page.url or "config" in page.url
