@@ -68,14 +68,14 @@ class TestCalculateReserve:
         )
         assert reserve == 15  # 3 days × 5 kWh
 
-    def test_empty_forecast_max_reserve(self) -> None:
-        """No forecast → assume worst case."""
+    def test_empty_forecast_double_reserve(self) -> None:
+        """No forecast → assume 2 cloudy days."""
         reserve = calculate_reserve(
             pv_forecast_daily=[],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        assert reserve > 0  # Should reserve something
+        assert reserve == 10  # 2 × 5 kWh
 
     def test_partial_surplus_reduces_reserve(self) -> None:
         """Partly cloudy → partial surplus reduces reserve."""

@@ -50,7 +50,7 @@ def calculate_reserve(
         Reserve in kWh that should NOT be discharged.
     """
     if not pv_forecast_daily:
-        return daily_battery_need_kwh  # Assume 1 cloudy day
+        return daily_battery_need_kwh * 2  # No forecast = assume 2 cloudy days
 
     reserve = 0.0
     for day_ahead, pv_kwh in enumerate(pv_forecast_daily[1:], 1):
