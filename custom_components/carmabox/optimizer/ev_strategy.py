@@ -2,17 +2,33 @@
 
 Pure Python. No HA imports. Fully testable.
 
-Calculates per-hour EV charge schedule based on:
-- Current EV SoC and battery capacity
-- Electricity prices (cheapest hours first)
-- Nightly target (e.g. 75% by 06:00)
-- Full charge requirement (100% within N rolling days)
-- Grid target constraint (EV charge must not push weighted import over target)
+Core principle: SPREAD charging across the night at MINIMUM amps needed.
+Never burst at 16A. Use price tiers to decide intensity:
+  - Cheap hours: higher amps (up to max)
+  - Normal hours: low amps (smyg-ladda)
+  - Expensive hours: skip (battery drives house)
+
+Always stay under Ellevio weighted target. Battery supports house
+so grid budget goes to EV.
 """
 
 from __future__ import annotations
 
-from ..const import DEFAULT_VOLTAGE
+from ..const import (
+    DEFAULT_BATTERY_EFFICIENCY,
+    DEFAULT_EV_EFFICIENCY,
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_MIN_AMPS,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
+    DEFAULT_NIGHT_WEIGHT,
+    DEFAULT_VOLTAGE,
+)
+
+# Price tiers (öre/kWh)
+PRICE_CHEAP = 30  # Below: charge at max amps
+PRICE_NORMAL = 80  # Below: charge at min amps
+# Above PRICE_NORMAL: skip (too expensive)
 
 
 def calculate_ev_schedule(
@@ -24,136 +40,171 @@ def calculate_ev_schedule(
     hourly_loads: list[float],
     target_weighted_kw: float,
     morning_target_soc: float = 75.0,
-    night_weight: float = 0.5,
+    night_weight: float = DEFAULT_NIGHT_WEIGHT,
     days_since_full_charge: int = 0,
     full_charge_interval_days: int = 7,
-    min_amps: int = 6,
-    max_amps: int = 16,
+    min_amps: int = DEFAULT_EV_MIN_AMPS,
+    max_amps: int = DEFAULT_EV_MAX_AMPS,
     voltage: float = DEFAULT_VOLTAGE,
     battery_kwh_available: float = 0.0,
+    battery_efficiency: float = DEFAULT_BATTERY_EFFICIENCY,
     pv_tomorrow_kwh: float = 0.0,
     daily_consumption_kwh: float = 15.0,
+    night_start: int = DEFAULT_NIGHT_START,
+    night_end: int = DEFAULT_NIGHT_END,
 ) -> list[float]:
     """Calculate per-hour EV charge power (kW).
 
-    Strategy:
-    1. Calculate energy needed to reach morning_target_soc by 06:00
-    2. If days_since_full >= interval - 1, target 100% instead
-    3. Calculate battery support budget (available - reserve for tomorrow)
-    4. Sort available night hours by price (cheapest first)
-    5. Fill hours with highest amperage that fits under grid target + battery support
-    6. If not enough cheap hours, increase amperage on remaining
-
-    Args:
-        start_hour: Current hour (0-23).
-        num_hours: Planning horizon.
-        ev_soc_pct: Current EV SoC (0-100). Negative = no EV.
-        ev_capacity_kwh: EV battery capacity.
-        hourly_prices: Price per hour (öre/kWh).
-        hourly_loads: Expected house load per hour (kW).
-        target_weighted_kw: Grid import target (weighted kW).
-        morning_target_soc: Target SoC by 06:00 (default 75%).
-        night_weight: Ellevio night weight (default 0.5).
-        days_since_full_charge: Days since last 100% charge.
-        full_charge_interval_days: Max days between 100% charges.
-        min_amps: Minimum charge current (default 6A).
-        max_amps: Maximum charge current (default 16A).
-        voltage: Grid voltage (default 230V).
+    Strategy (PLAT-928):
+    1. Find night hours (22-06) in planning window
+    2. Sort by price — cheapest first
+    3. Calculate battery support budget (can battery drive house?)
+    4. For each hour, pick amps based on price tier:
+       - Cheap (<30 öre): max amps that fit under Ellevio target
+       - Normal (30-80 öre): min amps (smyg)
+       - Expensive (>80 öre): 0 amps (skip)
+    5. Always maximize SoC — don't stop at morning_target if cheap hours remain
+    6. If minimum target can't be reached with cheap+normal: use expensive hours too
 
     Returns:
         List of EV charge power per hour (kW). Same length as num_hours.
     """
     schedule = [0.0] * num_hours
 
-    # No EV or already at target
     if ev_soc_pct < 0 or ev_capacity_kwh <= 0:
         return schedule
 
-    # Determine target — force 100% if overdue
-    effective_target = morning_target_soc
+    # Determine target — force 100% if overdue for full charge
+    effective_min_target = morning_target_soc
     if days_since_full_charge >= full_charge_interval_days - 1:
-        effective_target = 100.0
+        effective_min_target = 100.0
 
-    # Energy needed
-    energy_needed_kwh = max(0, (effective_target - ev_soc_pct) / 100 * ev_capacity_kwh)
-    if energy_needed_kwh < 0.5:
+    # Energy needed for minimum target
+    energy_min_kwh = max(0, (effective_min_target - ev_soc_pct) / 100 * ev_capacity_kwh)
+    # Energy needed for 100% (we always try to maximize)
+    energy_max_kwh = max(0, (100.0 - ev_soc_pct) / 100 * ev_capacity_kwh)
+
+    if energy_min_kwh < 0.5 and energy_max_kwh < 0.5:
         return schedule
 
     # Available charge rates
     min_kw = min_amps * voltage / 1000
     max_kw = max_amps * voltage / 1000
 
-    # Find night hours (22-06) in planning window
-    night_slots: list[tuple[int, float, float]] = []  # (index, price, house_load)
+    # ── Find night hours ──────────────────────────────────
+    night_slots: list[dict[str, int | float]] = []
     for i in range(num_hours):
         abs_h = (start_hour + i) % 24
-        if abs_h >= 22 or abs_h < 6:
+        if _is_night_hour(abs_h, night_start, night_end):
             price = hourly_prices[i] if i < len(hourly_prices) else 100.0
-            load = hourly_loads[i] if i < len(hourly_loads) else 1.5
-            night_slots.append((i, price, load))
+            load = hourly_loads[i] if i < len(hourly_loads) else 2.0
+            night_slots.append(
+                {
+                    "idx": i,
+                    "hour": abs_h,
+                    "price": price,
+                    "load": load,
+                }
+            )
 
     if not night_slots:
         return schedule
 
-    # Sort by price (cheapest first)
-    night_slots.sort(key=lambda x: x[1])
-
-    # Calculate battery support budget
-    # If sun tomorrow → batteries refill → use all available for EV tonight
-    # If cloudy tomorrow → reserve battery for house → less EV support
-    pv_surplus_tomorrow = max(0, pv_tomorrow_kwh - daily_consumption_kwh)
-    if pv_surplus_tomorrow > 10:
-        # Sunny tomorrow — batteries will refill, use all for EV
+    # ── Battery support budget ────────────────────────────
+    # Battery drives the house → grid headroom goes to EV
+    pv_surplus = max(0, pv_tomorrow_kwh - daily_consumption_kwh)
+    if pv_surplus > 10:
+        # Sunny tomorrow — batteries refill, use all for house support tonight
         battery_budget_kwh = battery_kwh_available
-    elif pv_surplus_tomorrow > 0:
-        # Partly cloudy — use surplus portion
-        battery_budget_kwh = min(battery_kwh_available, pv_surplus_tomorrow)
+    elif pv_surplus > 0:
+        battery_budget_kwh = min(battery_kwh_available, pv_surplus)
     else:
-        # Cloudy/winter — save battery for house, minimal EV support
-        battery_budget_kwh = 0.0
+        # Cloudy — save battery for tomorrow, minimal support
+        battery_budget_kwh = battery_kwh_available * 0.3
 
-    # Distribute battery support evenly across night hours
-    num_night_hours = len(night_slots)
-    battery_support_per_hour = battery_budget_kwh / num_night_hours if num_night_hours > 0 else 0.0
+    battery_support_per_hour = battery_budget_kwh / len(night_slots) if night_slots else 0.0
 
-    # Fill cheapest hours first
-    remaining_kwh = energy_needed_kwh
+    # ── Sort by price (cheapest first) ────────────────────
+    sorted_slots = sorted(night_slots, key=lambda s: s["price"])
+
+    # ── Phase 1: Assign amps based on price tier ──────────
+    # Goal: maximize SoC while staying under Ellevio target
+    remaining_kwh = energy_max_kwh  # Try to fill as much as possible
     remaining_battery_kwh = battery_budget_kwh
-    for idx, _price, house_load in night_slots:
-        if remaining_kwh <= 0:
+    ev_efficiency = DEFAULT_EV_EFFICIENCY
+
+    for slot in sorted_slots:
+        if remaining_kwh <= 0.1:
             break
 
-        abs_h = (start_hour + idx) % 24
-        w = night_weight if (abs_h >= 22 or abs_h < 6) else 1.0
+        price = slot["price"]
+        load = slot["load"]
+        abs_h = int(slot["hour"])
+        w = night_weight if _is_night_hour(abs_h, night_start, night_end) else 1.0
 
-        # Max EV power that keeps weighted grid under target
-        # Grid headroom: target / weight - house_load
-        grid_headroom_kw = target_weighted_kw / w - house_load if w > 0 else max_kw
+        # Battery supports house load → more grid headroom for EV
+        batt_kw = min(battery_support_per_hour, remaining_battery_kwh, load)
+        effective_load = max(0, load - batt_kw)
+
+        # Grid headroom: target/weight - effective_house_load
+        grid_headroom_kw = (target_weighted_kw / w - effective_load) if w > 0 else max_kw
         grid_headroom_kw = max(0, grid_headroom_kw)
 
-        # Battery can add support on top of grid headroom
-        batt_support_kw = min(battery_support_per_hour, remaining_battery_kwh)
-        total_headroom_kw = grid_headroom_kw + batt_support_kw
+        # Pick amps based on price tier
+        if price < PRICE_CHEAP:
+            # Cheap — charge at max that fits under target
+            desired_kw = min(max_kw, grid_headroom_kw)
+        elif price < PRICE_NORMAL:
+            # Normal — smyg-ladda at min amps
+            desired_kw = min(min_kw, grid_headroom_kw) if grid_headroom_kw >= min_kw else 0.0
+        else:
+            # Expensive — skip unless we MUST charge to reach minimum target
+            desired_kw = 0.0
 
-        # Pick amperage based on total headroom (grid + battery)
-        if total_headroom_kw >= max_kw:
-            charge_kw = max_kw
-        elif total_headroom_kw >= min_kw:
-            amps = int(total_headroom_kw * 1000 / voltage)
+        if desired_kw < min_kw:
+            desired_kw = 0.0  # Below min amps = don't charge
+
+        # Snap to whole amps
+        if desired_kw > 0:
+            amps = int(desired_kw * 1000 / voltage)
             amps = max(min_amps, min(amps, max_amps))
             charge_kw = amps * voltage / 1000
         else:
-            # Even min amps exceeds headroom — charge at min anyway
-            # (75% SoC target is safety requirement)
-            charge_kw = min_kw
+            charge_kw = 0.0
 
         # Track battery usage
-        batt_used = max(0, charge_kw - grid_headroom_kw)
-        remaining_battery_kwh -= batt_used
+        if batt_kw > 0:
+            remaining_battery_kwh -= batt_kw
 
-        actual_kwh = min(charge_kw, remaining_kwh)
-        schedule[idx] = round(actual_kwh, 2)
-        remaining_kwh -= actual_kwh
+        actual_kwh = min(charge_kw, remaining_kwh / ev_efficiency)
+        schedule[int(slot["idx"])] = round(actual_kwh, 2)
+        remaining_kwh -= actual_kwh * ev_efficiency
+
+    # ── Phase 2: If minimum target not reached, use expensive hours ──
+    achieved_kwh = sum(schedule) * ev_efficiency
+    if achieved_kwh < energy_min_kwh:
+        shortfall = energy_min_kwh - achieved_kwh
+        # Find unused expensive night hours
+        for slot in sorted_slots:
+            if shortfall <= 0.1:
+                break
+            if schedule[int(slot["idx"])] > 0:
+                continue  # Already scheduled
+
+            abs_h = int(slot["hour"])
+            w = night_weight if _is_night_hour(abs_h, night_start, night_end) else 1.0
+            load = slot["load"]
+            grid_headroom_kw = (target_weighted_kw / w - load) if w > 0 else max_kw
+            grid_headroom_kw = max(0, grid_headroom_kw)
+
+            # Use min amps even in expensive hours to reach target
+            charge_kw = min(min_kw, grid_headroom_kw) if grid_headroom_kw >= min_kw else min_kw
+            amps = max(min_amps, min(int(charge_kw * 1000 / voltage), max_amps))
+            charge_kw = amps * voltage / 1000
+
+            actual_kwh = min(charge_kw, shortfall / ev_efficiency)
+            schedule[int(slot["idx"])] = round(actual_kwh, 2)
+            shortfall -= actual_kwh * ev_efficiency
 
     return schedule
 
@@ -212,3 +263,12 @@ def ev_needs_charge(ev_soc_pct: float, morning_target_soc: float = 75.0) -> bool
 def ev_needs_full_charge(days_since_full: int, full_charge_interval: int = 7) -> bool:
     """Check if EV is due for a 100% charge."""
     return days_since_full >= full_charge_interval - 1
+
+
+def _is_night_hour(
+    hour: int, night_start: int = DEFAULT_NIGHT_START, night_end: int = DEFAULT_NIGHT_END
+) -> bool:
+    """Check if hour is within night window."""
+    if night_start > night_end:
+        return hour >= night_start or hour < night_end
+    return night_start <= hour < night_end

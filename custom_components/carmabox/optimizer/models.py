@@ -76,6 +76,8 @@ class Decision:
     battery_support_kwh: float = 0.0
     safety_blocked: bool = False
     safety_reason: str = ""
+    reasoning: list[str] = field(default_factory=list)
+    reasoning_chain: list[dict[str, str]] = field(default_factory=list)
 
 
 @dataclass

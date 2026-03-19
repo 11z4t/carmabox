@@ -118,6 +118,8 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     attrs: dict[str, Any] = {
         "action": d.action,
         "reason_text": d.reason,
+        "reasoning": d.reasoning,
+        "reasoning_chain": d.reasoning_chain,
         "target_kw": d.target_kw,
         "grid_kw": d.grid_kw,
         "weighted_kw": d.weighted_kw,

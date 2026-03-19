@@ -558,48 +558,161 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         weighted_net = net_w * weight
         target_w = self.target_kw * 1000
         pv_kw = state.pv_power_w / 1000
+        is_night = hour >= 22 or hour < 6
+
+        # ── Build reasoning chain ─────────────────────────────
+        reasoning: list[str] = []
+        chain: list[dict[str, str]] = []
+        period = "natt" if is_night else "dag"
+        allowed_import = self.target_kw / weight if weight > 0 else self.target_kw
+
+        # Step 1: Tidpunkt + Ellevio-vikt → tillåten import
+        step1 = (
+            f"Kl {hour:02d}, {period}, Ellevio-vikt {weight:.1f} "
+            f"→ tillåten import {allowed_import:.1f} kW"
+        )
+        reasoning.append(step1)
+        chain.append(
+            {
+                "step": "tidpunkt",
+                "label": "Tidpunkt & Ellevio-vikt",
+                "detail": step1,
+            }
+        )
+
+        # Step 2: Husförbrukning + batteri-stöd = effektiv grid headroom
+        house_kw = max(0, state.grid_power_w) / 1000 + pv_kw
+        bat_support_kw = 0.0
+        if state.battery_power_1 < 0:
+            bat_support_kw += abs(state.battery_power_1) / 1000
+        if state.battery_power_2 < 0:
+            bat_support_kw += abs(state.battery_power_2) / 1000
+        headroom_kw = allowed_import - (weighted_net / 1000)
+        step2 = (
+            f"Hus {house_kw:.1f} kW, batteri-stöd {bat_support_kw:.1f} kW "
+            f"→ headroom {headroom_kw:.1f} kW"
+        )
+        reasoning.append(step2)
+        chain.append(
+            {
+                "step": "headroom",
+                "label": "Förbrukning & headroom",
+                "detail": step2,
+            }
+        )
+
+        # Step 3: Pris-tier = vald intensitet
+        if state.current_price < 30:
+            tier = "billigt"
+            intensity = "passiv — spara batteri"
+        elif state.current_price < 80:
+            tier = "normalt"
+            intensity = "balanserad peak shaving"
+        else:
+            tier = "dyrt"
+            intensity = "aggressiv urladdning"
+        step3 = f"Elpris {state.current_price:.0f} öre/kWh — {tier} → {intensity}"
+        reasoning.append(step3)
+        chain.append(
+            {
+                "step": "pris",
+                "label": "Pris & intensitet",
+                "detail": step3,
+            }
+        )
+
+        # Step 4: SoC-status = behov vs tillgång
+        soc_parts = [f"Batteri {state.total_battery_soc:.0f}%"]
+        if state.has_battery_2:
+            soc_parts.append(
+                f"(kontor {state.battery_soc_1:.0f}%, förråd {state.battery_soc_2:.0f}%)"
+            )
+        if state.has_ev and state.ev_soc >= 0:
+            soc_parts.append(f", EV {state.ev_soc:.0f}%")
+        step4 = " ".join(soc_parts)
+        reasoning.append(step4)
+        chain.append(
+            {
+                "step": "soc",
+                "label": "Energistatus",
+                "detail": step4,
+            }
+        )
 
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
+            reasoning.append(f"Exporterar {abs(state.grid_power_w):.0f}W → sol driver allt")
             if not state.all_batteries_full:
                 charge_result = self.safety.check_charge(
                     state.battery_soc_1, state.battery_soc_2, temp_c
                 )
                 if charge_result.ok:
+                    step5 = "Solladdar — Ellevio-påverkan: 0 kW (exporterar)"
+                    reasoning.append("Batteri ej fullt → solladda")
+                    reasoning.append(step5)
+                    chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                     await self._cmd_charge_pv(state)
                     self._record_decision(
                         state,
                         "charge_pv",
                         f"Solladdar — export {abs(state.grid_power_w):.0f}W, "
                         f"PV {pv_kw:.1f} kW, batteri {state.battery_soc_1:.0f}%",
+                        reasoning=reasoning,
+                        reasoning_chain=chain,
                     )
                 else:
+                    step5 = f"Blockerad: {charge_result.reason}"
+                    reasoning.append(f"Laddning blockerad: {charge_result.reason}")
+                    reasoning.append(step5)
+                    chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                     self._record_decision(
                         state,
                         "blocked",
                         f"Laddning blockerad — {charge_result.reason}",
                         safety_blocked=True,
                         safety_reason=charge_result.reason,
+                        reasoning=reasoning,
+                        reasoning_chain=chain,
                     )
                     self._daily_safety_blocks += 1
             else:
+                step5 = "Standby — batterier 100%, exporterar överskott, Ellevio-påverkan: 0 kW"
+                reasoning.append("Batterier 100% → standby, exporterar överskott")
+                reasoning.append(step5)
+                chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_standby(state)
                 self._record_decision(
                     state,
                     "standby",
                     f"Standby — batterier fulla ({state.battery_soc_1:.0f}%), exporterar",
+                    reasoning=reasoning,
+                    reasoning_chain=chain,
                 )
             return
 
         # ── RULE 2: SoC 100% → standby ──────────────────────
         if state.all_batteries_full:
+            step5 = f"Standby — alla batterier fulla, Ellevio ser {weighted_net / 1000:.1f} kW"
+            reasoning.append("Alla batterier 100% → standby, spara för kväll/natt")
+            reasoning.append(step5)
+            chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
             await self._cmd_standby(state)
-            self._record_decision(state, "standby", "Standby — alla batterier 100%")
+            self._record_decision(
+                state,
+                "standby",
+                "Standby — alla batterier 100%",
+                reasoning=reasoning,
+                reasoning_chain=chain,
+            )
             return
 
         # ── RULE 3: Load > target → discharge ────────────────
         if weighted_net > target_w:
             discharge_w = int((weighted_net - target_w) / weight)
+            reasoning.append(
+                f"Grid {weighted_net / 1000:.1f} kW viktat > target {self.target_kw:.1f} kW "
+                f"→ batteri kompenserar {discharge_w}W"
+            )
             result = self.safety.check_discharge(
                 state.battery_soc_1,
                 state.battery_soc_2,
@@ -608,6 +721,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 temp_c,
             )
             if result.ok:
+                ellevio_saving = (weighted_net / 1000 - self.target_kw) * 80
+                step5 = (
+                    f"Urladdning {discharge_w}W → Ellevio ser {self.target_kw:.1f} kW "
+                    f"istf {weighted_net / 1000:.1f} kW, sparar ~{ellevio_saving:.0f} kr/mån"
+                )
+                reasoning.append(step5)
+                chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_discharge(state, discharge_w)
                 self._record_decision(
                     state,
@@ -617,25 +737,45 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     f"({state.current_price:.0f} öre/kWh, "
                     f"batteri {state.battery_soc_1:.0f}%)",
                     discharge_w=discharge_w,
+                    reasoning=reasoning,
+                    reasoning_chain=chain,
                 )
             else:
+                step5 = f"Urladdning blockerad: {result.reason}"
+                reasoning.append(step5)
+                chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 self._record_decision(
                     state,
                     "blocked",
                     f"Urladdning blockerad — {result.reason}",
                     safety_blocked=True,
                     safety_reason=result.reason,
+                    reasoning=reasoning,
+                    reasoning_chain=chain,
                 )
                 self._daily_safety_blocks += 1
             return
 
         # ── RULE 4: Under target → idle ──────────────────────
+        headroom_val = (target_w - weighted_net) / 1000
+        step5 = (
+            f"Vila — {headroom_val:.1f} kW headroom, "
+            f"Ellevio ser {weighted_net / 1000:.1f} kW (mål {self.target_kw:.1f} kW)"
+        )
+        reasoning.append(
+            f"Grid {weighted_net / 1000:.2f} kW viktat < target {self.target_kw:.1f} kW "
+            f"→ {headroom_val:.1f} kW headroom, batteriet vilar"
+        )
+        reasoning.append(step5)
+        chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
         self._record_decision(
             state,
             "idle",
             f"Vila — grid {weighted_net / 1000:.2f} kW viktat "
             f"< target {self.target_kw:.1f} kW "
             f"({state.current_price:.0f} öre/kWh)",
+            reasoning=reasoning,
+            reasoning_chain=chain,
         )
 
     def _record_decision(
@@ -646,6 +786,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         discharge_w: int = 0,
         safety_blocked: bool = False,
         safety_reason: str = "",
+        reasoning: list[str] | None = None,
+        reasoning_chain: list[dict[str, str]] | None = None,
     ) -> None:
         """Record a decision for transparency + logging."""
         hour = datetime.now().hour
@@ -664,6 +806,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             discharge_w=discharge_w,
             safety_blocked=safety_blocked,
             safety_reason=safety_reason,
+            reasoning=reasoning or [],
+            reasoning_chain=reasoning_chain or [],
         )
         self.last_decision = decision
 
