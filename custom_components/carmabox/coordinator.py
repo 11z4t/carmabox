@@ -34,7 +34,6 @@ from .const import (
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_BATTERY_MIN_SOC,
-    DEFAULT_CONSUMPTION_PROFILE,
     DEFAULT_DAILY_BATTERY_NEED_KWH,
     DEFAULT_DAILY_CONSUMPTION_KWH,
     DEFAULT_FALLBACK_PRICE_ORE,
@@ -47,6 +46,7 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.models import CarmaboxState, Decision, HourPlan
@@ -130,6 +130,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_plans = 0
         self.last_decision = Decision()
         self.decision_log: list[Decision] = []
+
+        # Consumption learning
+        stored = opts.get("consumption_profile", {})
+        self.consumption_profile = (
+            ConsumptionProfile.from_dict(stored)
+            if isinstance(stored, dict) and stored
+            else ConsumptionProfile()
+        )
         self._current_date = datetime.now().strftime("%Y-%m-%d")
         self._daily_avg_price: float = float(
             opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
@@ -268,7 +276,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             pv_forecast = pv_hourly[start_hour:] + [0.0] * 24  # Pad tomorrow
 
             # Consumption profile from const.py (configurable via options)
-            base = list(DEFAULT_CONSUMPTION_PROFILE)
+            # Use learned profile if available, else static default
+            base = self.consumption_profile.get_profile_for_date(now)
             consumption = base[start_hour:] + base
 
             # EV demand — dynamic schedule based on prices + SoC
@@ -667,6 +676,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             plans_generated=self._daily_plans,
         )
         record_daily_sample(self.report_collector, sample)
+
+        # Update consumption learning
+        now = datetime.now()
+        house_kw = calculate_house_consumption(
+            state.grid_power_w,
+            state.battery_power_1,
+            state.battery_power_2,
+            state.pv_power_w,
+            state.ev_power_w,
+        )
+        self.consumption_profile.update(
+            hour=now.hour,
+            consumption_kw=house_kw,
+            is_weekend=now.weekday() >= 5,
+        )
 
     async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         """Call HA service with error handling and retry. Returns True on success.

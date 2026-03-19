@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
+from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
 from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourPlan
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
@@ -54,6 +55,7 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord.ev_adapter = None
     coord.last_decision = Decision()
     coord.decision_log = []
+    coord.consumption_profile = ConsumptionProfile()
     return coord
 
 
