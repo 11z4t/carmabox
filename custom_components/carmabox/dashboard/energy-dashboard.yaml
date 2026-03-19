@@ -1,0 +1,311 @@
+## ═══════════════════════════════════════════════════════════════
+## CARMA Box — Energy Dashboard
+## "Your energy, orchestrated"
+##
+## Install: Copy to HA dashboards via UI or include in configuration.yaml
+## Requires: CARMA Box integration + carmabox-card.js registered
+## ═══════════════════════════════════════════════════════════════
+
+views:
+  # ══════════════════════════════════════════════════════════════
+  # TAB 1: ÖVERSIKT — Vad händer just nu och varför
+  # ══════════════════════════════════════════════════════════════
+  - title: Översikt
+    path: oversikt
+    icon: mdi:lightning-bolt
+    badges: []
+    cards:
+      # ── Status + Beslut ──────────────────────────────────
+      - type: vertical-stack
+        cards:
+          - type: markdown
+            content: >
+              # ⚡ CARMA Box
+
+              {% set decision = states('sensor.carma_box_decision') %}
+              {% set status = states('sensor.carma_box_plan_status') %}
+              {% set mode = "Analyserar" if state_attr('sensor.carma_box_decision', 'analyze_only') else "Styr" %}
+
+              **{{ mode }}** · {{ decision }}
+
+          # ── Power Flow ──────────────────────────────────────
+          - type: grid
+            columns: 4
+            square: false
+            cards:
+              - type: entity
+                entity: sensor.pv_solar_total
+                name: Sol
+                icon: mdi:solar-power
+                unit: W
+              - type: entity
+                entity: sensor.carma_box_battery_soc
+                name: Batteri
+                icon: mdi:battery
+              - type: entity
+                entity: sensor.house_grid_power
+                name: Nät
+                icon: mdi:transmission-tower
+                unit: W
+              - type: entity
+                entity: sensor.carma_box_ev_soc
+                name: Bil
+                icon: mdi:car-electric
+
+          # ── Gauges ──────────────────────────────────────────
+          - type: horizontal-stack
+            cards:
+              - type: gauge
+                entity: sensor.carma_box_battery_soc
+                name: Batteri
+                min: 0
+                max: 100
+                severity:
+                  green: 50
+                  yellow: 20
+                  red: 0
+              - type: gauge
+                entity: sensor.carma_box_ev_soc
+                name: EV
+                min: 0
+                max: 100
+                severity:
+                  green: 50
+                  yellow: 20
+                  red: 0
+
+          # ── Per-batteri SoC ─────────────────────────────────
+          - type: entities
+            title: Batterier
+            entities:
+              - entity: sensor.pv_battery_soc_kontor
+                name: Kontor (15 kWh)
+                icon: mdi:battery
+              - entity: sensor.pv_battery_soc_forrad
+                name: Förråd (5 kWh)
+                icon: mdi:battery
+              - entity: sensor.goodwe_battery_power_kontor
+                name: Kontor effekt
+                icon: mdi:flash
+                unit_of_measurement: W
+              - entity: sensor.goodwe_battery_power_forrad
+                name: Förråd effekt
+                icon: mdi:flash
+                unit_of_measurement: W
+
+      # ── Högerkolumn ─────────────────────────────────────
+      - type: vertical-stack
+        cards:
+          # ── CARMA Box Plan Card ─────────────────────────────
+          - type: custom:carmabox-card
+            entity_prefix: sensor.carma_box
+            show_ev: true
+            show_savings: true
+            show_plan: true
+
+          # ── Target + Savings ─────────────────────────────────
+          - type: entities
+            title: Styrning
+            show_header_toggle: false
+            entities:
+              - entity: sensor.carma_box_target_power
+                name: Effektmål
+                icon: mdi:target
+              - entity: sensor.carma_box_monthly_savings
+                name: Besparing denna månad
+                icon: mdi:piggy-bank
+              - entity: sensor.carma_box_plan_accuracy
+                name: Planträffsäkerhet
+                icon: mdi:bullseye-arrow
+
+          # ── EV Laddning ──────────────────────────────────────
+          - type: entities
+            title: EV Laddning
+            show_header_toggle: false
+            entities:
+              - entity: sensor.easee_home_12840_status
+                name: Laddstatus
+              - entity: sensor.easee_home_12840_power
+                name: Laddeffekt
+                unit_of_measurement: kW
+              - entity: sensor.easee_home_12840_current
+                name: Ström
+                unit_of_measurement: A
+              - entity: sensor.xpeng_g9_xpeng_g9_battery_soc
+                name: Bil SoC
+
+          # ── Nordpool ─────────────────────────────────────────
+          - type: entities
+            title: Elpris
+            show_header_toggle: false
+            entities:
+              - entity: sensor.nordpool_kwh_se3_sek_3_10_025
+                name: Aktuellt pris
+                unit_of_measurement: öre/kWh
+
+  # ══════════════════════════════════════════════════════════════
+  # TAB 2: DETALJER — Plan, historik, precision
+  # ══════════════════════════════════════════════════════════════
+  - title: Detaljer
+    path: detaljer
+    icon: mdi:chart-line
+    cards:
+      # ── Beslut nu ────────────────────────────────────────
+      - type: markdown
+        content: >
+          ## Aktuellt beslut
+
+          {% set d = state_attr('sensor.carma_box_decision', 'action') %}
+          {% set r = state_attr('sensor.carma_box_decision', 'reason_text') %}
+          {% set t = state_attr('sensor.carma_box_decision', 'target_kw') %}
+          {% set g = state_attr('sensor.carma_box_decision', 'grid_kw') %}
+          {% set w = state_attr('sensor.carma_box_decision', 'weighted_kw') %}
+          {% set p = state_attr('sensor.carma_box_decision', 'price_ore') %}
+          {% set b = state_attr('sensor.carma_box_decision', 'battery_soc') %}
+          {% set pv = state_attr('sensor.carma_box_decision', 'pv_kw') %}
+
+          | | Värde |
+          |---|---|
+          | **Åtgärd** | {{ d }} |
+          | **Orsak** | {{ r }} |
+          | **Mål** | {{ t }} kW |
+          | **Grid** | {{ g }} kW (viktat {{ w }} kW) |
+          | **Pris** | {{ p }} öre/kWh |
+          | **Batteri** | {{ b }}% |
+          | **Sol** | {{ pv }} kW |
+
+      # ── 24h Plan ─────────────────────────────────────────
+      - type: markdown
+        content: >
+          ## 24h Plan
+
+          {% set plan = state_attr('sensor.carma_box_plan_status', 'plan') or [] %}
+          {% set actions = {'c': '🟢 Ladda', 'd': '🔵 Urladdning', 'g': '🟠 Nätladdning', 'i': '⚪ Vila'} %}
+
+          | Timme | Åtgärd | Pris | SoC | EV |
+          |-------|--------|------|-----|-----|
+          {% for h in plan[:24] -%}
+          | {{ '%02d' | format(h.h) }}:00 | {{ actions.get(h.a, h.a) }} | {{ h.p }} öre | {{ h.soc }}% | {{ h.ev_soc }}% |
+          {% endfor %}
+
+      # ── Plan vs Utfall ───────────────────────────────────
+      - type: markdown
+        content: >
+          ## Plan vs Utfall
+
+          {% set acc = states('sensor.carma_box_plan_accuracy') %}
+          {% set history = state_attr('sensor.carma_box_plan_accuracy', 'history') or [] %}
+
+          **Träffsäkerhet: {{ acc }}%**
+
+          | Timme | Plan | Utfall | Planerat kW | Faktiskt kW |
+          |-------|------|--------|-------------|-------------|
+          {% for h in history[-12:] -%}
+          | {{ '%02d' | format(h.h) }}:00 | {{ h.plan_action }} | {{ h.actual_action }} | {{ h.plan_kw }} | {{ h.actual_kw }} |
+          {% endfor %}
+
+      # ── Beslutshistorik 24h ──────────────────────────────
+      - type: markdown
+        content: >
+          ## Beslut senaste 24h
+
+          {% set decisions = state_attr('sensor.carma_box_decision', 'decisions_24h') or [] %}
+
+          | Tid | Åtgärd | Grid | Viktat | Pris | SoC |
+          |-----|--------|------|--------|------|-----|
+          {% for d in decisions[-12:] -%}
+          | {{ d.timestamp[11:16] }} | {{ d.action }} | {{ d.grid_kw }} kW | {{ d.weighted_kw }} kW | {{ d.price_ore }} öre | {{ d.battery_soc }}% |
+          {% endfor %}
+
+      # ── Savings Breakdown ────────────────────────────────
+      - type: entities
+        title: Besparing — Uppdelning
+        show_header_toggle: false
+        entities:
+          - entity: sensor.carma_box_monthly_savings
+            name: Total besparing
+            icon: mdi:piggy-bank
+          - type: attribute
+            entity: sensor.carma_box_monthly_savings
+            attribute: peak_reduction_kr
+            name: Effekttoppsreduktion
+            icon: mdi:chart-bell-curve-cumulative
+            suffix: kr
+          - type: attribute
+            entity: sensor.carma_box_monthly_savings
+            attribute: discharge_savings_kr
+            name: Urladdningsbesparing
+            icon: mdi:battery-arrow-down
+            suffix: kr
+          - type: attribute
+            entity: sensor.carma_box_monthly_savings
+            attribute: grid_charge_savings_kr
+            name: Nätladdningsbesparing
+            icon: mdi:transmission-tower-import
+            suffix: kr
+
+  # ══════════════════════════════════════════════════════════════
+  # TAB 3: INSTÄLLNINGAR — Justera CARMA Box
+  # ══════════════════════════════════════════════════════════════
+  - title: Inställningar
+    path: installningar
+    icon: mdi:cog
+    cards:
+      - type: markdown
+        content: >
+          ## CARMA Box Inställningar
+
+          Ändra inställningar via **Inställningar → Enheter → CARMA Box → Konfigurera**.
+
+          Ändringar tillämpas direkt utan omstart.
+
+      - type: entities
+        title: Aktuell konfiguration
+        show_header_toggle: false
+        entities:
+          - entity: sensor.carma_box_target_power
+            name: Effektmål (kW)
+            icon: mdi:target
+          - entity: sensor.carma_box_battery_soc
+            name: Batteri SoC
+            icon: mdi:battery
+          - entity: sensor.carma_box_ev_soc
+            name: EV SoC
+            icon: mdi:car-electric
+          - entity: sensor.carma_box_plan_accuracy
+            name: Planträffsäkerhet
+            icon: mdi:bullseye-arrow
+
+      - type: markdown
+        content: >
+          ## Driftläge
+
+          {% if state_attr('sensor.carma_box_decision', 'analyze_only') %}
+          🔍 **Analyzer mode** — CARMA Box planerar och analyserar men skickar
+          inga kommandon till batterier eller EV-laddare.
+
+          Aktivera styrning via Konfigurera → Aktivera styrning.
+          {% else %}
+          ⚡ **Executor mode** — CARMA Box styr aktivt batterier och EV-laddning
+          baserat på planen.
+          {% endif %}
+
+      - type: markdown
+        content: >
+          ## Entity-mappningar
+
+          | Funktion | Entity |
+          |----------|--------|
+          | Batteri 1 SoC | `sensor.pv_battery_soc_kontor` |
+          | Batteri 2 SoC | `sensor.pv_battery_soc_forrad` |
+          | Grid | `sensor.house_grid_power` |
+          | Nordpool | `sensor.nordpool_kwh_se3_sek_3_10_025` |
+          | EV SoC | `sensor.xpeng_g9_xpeng_g9_battery_soc` |
+          | Solcast | Via Solcast-integration |
+
+      - type: entities
+        title: System
+        show_header_toggle: false
+        entities:
+          - entity: update.carma_box_update
+            name: Uppdatering tillgänglig

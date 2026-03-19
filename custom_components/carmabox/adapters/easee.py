@@ -163,19 +163,19 @@ class EaseeAdapter(EVAdapter):
         )
 
     async def set_current(self, amps: int) -> bool:
-        """Set dynamic charger limit (A).
+        """Set charger max limit (A).
 
-        Uses easee.set_charger_dynamic_limit service (requires charger_id).
-        Falls back to number.set_value if charger_id not available.
+        Uses easee.set_charger_max_limit (the only service that actually
+        limits charging current — set_charger_dynamic_limit does NOT work).
+        Default/minimum is 6A to avoid runaway 16A charging.
         """
-        amps = max(0, min(32, amps))
-        _LOGGER.info("Easee: set current → %dA", amps)
+        amps = max(6, min(32, amps))
+        _LOGGER.info("Easee: set max limit → %dA", amps)
 
-        # Primary: Easee native service (always works)
         if self.charger_id:
             return await self._safe_call(
                 "easee",
-                "set_charger_dynamic_limit",
+                "set_charger_max_limit",
                 {
                     "charger_id": self.charger_id,
                     "current": amps,
@@ -191,3 +191,7 @@ class EaseeAdapter(EVAdapter):
                 "value": amps,
             },
         )
+
+    async def reset_to_default(self) -> bool:
+        """Reset charger to safe default (6A)."""
+        return await self.set_current(6)
