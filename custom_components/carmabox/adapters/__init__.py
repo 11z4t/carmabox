@@ -34,12 +34,12 @@ class InverterAdapter(ABC):
         """Battery temperature (°C) or None."""
 
     @abstractmethod
-    async def set_ems_mode(self, mode: str) -> None:
-        """Set EMS mode."""
+    async def set_ems_mode(self, mode: str) -> bool:
+        """Set EMS mode. Returns True on success."""
 
     @abstractmethod
-    async def set_discharge_limit(self, watts: int) -> None:
-        """Set discharge power limit."""
+    async def set_discharge_limit(self, watts: int) -> bool:
+        """Set discharge power limit. Returns True on success."""
 
 
 class EVAdapter(ABC):
@@ -66,16 +66,16 @@ class EVAdapter(ABC):
         """True if actively charging."""
 
     @abstractmethod
-    async def enable(self) -> None:
-        """Enable charger."""
+    async def enable(self) -> bool:
+        """Enable charger. Returns True on success."""
 
     @abstractmethod
-    async def disable(self) -> None:
-        """Disable charger."""
+    async def disable(self) -> bool:
+        """Disable charger. Returns True on success."""
 
     @abstractmethod
-    async def set_current(self, amps: int) -> None:
-        """Set charge current (A)."""
+    async def set_current(self, amps: int) -> bool:
+        """Set charge current (A). Returns True on success."""
 
 
 class PriceAdapter(ABC):

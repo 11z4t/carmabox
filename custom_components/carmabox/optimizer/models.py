@@ -65,6 +65,9 @@ class CarmaboxState:
     ev_current_a: float = 0.0
     ev_status: str = ""
 
+    # Temperature
+    battery_temp_c: float | None = None
+
     # Price
     current_price: float = 0.0
 

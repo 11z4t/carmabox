@@ -207,7 +207,7 @@ class TestDeviceInfo:
         coord, entry = _make_sensor_deps()
         sensor = _get_sensor("plan_status", coord, entry)
         info = sensor.device_info
-        assert info["manufacturer"] == "4recon AB"
+        assert info["manufacturer"] == "CARMA Box"
         assert info["model"] == "Energy Optimizer"
 
 

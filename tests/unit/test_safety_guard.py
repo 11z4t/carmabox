@@ -48,6 +48,13 @@ class TestDischarge:
         result = guard.check_discharge(soc_1=15, soc_2=15, min_soc=15, grid_power_w=2000)
         assert result.ok
 
+    def test_pass_temp_none_fail_open(self, guard: SafetyGuard) -> None:
+        """temp_c=None (unavailable) should allow discharge (fail-open)."""
+        result = guard.check_discharge(
+            soc_1=50, soc_2=50, min_soc=15, grid_power_w=2000, temp_c=None
+        )
+        assert result.ok
+
     def test_block_at_zero_export(self, guard: SafetyGuard) -> None:
         """grid_power = 0 is not export, should pass."""
         result = guard.check_discharge(soc_1=50, soc_2=50, min_soc=15, grid_power_w=0)
@@ -80,6 +87,11 @@ class TestCharge:
         result = guard.check_charge(soc_1=50, soc_2=50, temp_c=-2)
         assert not result.ok
         assert "temperature" in result.reason
+
+    def test_pass_charge_temp_none_fail_open(self, guard: SafetyGuard) -> None:
+        """temp_c=None (unavailable) should allow charge (fail-open)."""
+        result = guard.check_charge(soc_1=50, soc_2=50, temp_c=None)
+        assert result.ok
 
 
 class TestCrosscharge:
@@ -168,3 +180,47 @@ class TestWriteVerify:
     def test_pass_no_expected(self, guard: SafetyGuard) -> None:
         result = guard.check_write_verify("", "discharge_battery")
         assert result.ok
+
+
+class TestSafetyLog:
+    def test_log_populated_on_checks(self, guard: SafetyGuard) -> None:
+        guard.check_discharge(soc_1=50, soc_2=50, min_soc=15, grid_power_w=2000)
+        guard.check_charge(soc_1=50, soc_2=50)
+        log = guard.get_safety_log()
+        assert len(log) == 2
+        assert log[0]["check"] == "discharge"
+        assert log[0]["ok"] is True
+        assert log[1]["check"] == "charge"
+
+    def test_log_records_blocks(self, guard: SafetyGuard) -> None:
+        guard.check_discharge(soc_1=10, soc_2=50, min_soc=15, grid_power_w=2000)
+        log = guard.get_safety_log()
+        assert len(log) == 1
+        assert log[0]["ok"] is False
+        assert "battery_1" in log[0]["reason"]
+
+    def test_recent_block_count(self, guard: SafetyGuard) -> None:
+        # Generate some blocks
+        for _ in range(5):
+            guard.check_discharge(soc_1=10, soc_2=50, min_soc=15, grid_power_w=2000)
+        # And some passes
+        guard.check_discharge(soc_1=50, soc_2=50, min_soc=15, grid_power_w=2000)
+        assert guard.recent_block_count(3600) == 5
+
+    def test_log_max_size(self) -> None:
+        from custom_components.carmabox.optimizer.safety_guard import MAX_SAFETY_LOG_ENTRIES
+
+        guard = SafetyGuard()
+        for _ in range(MAX_SAFETY_LOG_ENTRIES + 10):
+            guard.check_charge(soc_1=50, soc_2=50)
+        assert len(guard.get_safety_log()) == MAX_SAFETY_LOG_ENTRIES
+
+    def test_log_entries_are_dicts(self, guard: SafetyGuard) -> None:
+        guard.check_crosscharge(1000, -1000)
+        log = guard.get_safety_log()
+        entry = log[0]
+        assert isinstance(entry, dict)
+        assert "timestamp" in entry
+        assert "check" in entry
+        assert "ok" in entry
+        assert "reason" in entry

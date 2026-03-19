@@ -17,43 +17,19 @@ Philosophy:
 
 from __future__ import annotations
 
+from ..const import (
+    DEFAULT_BATTERY_CAP_KWH,
+    DEFAULT_BATTERY_EFFICIENCY,
+    DEFAULT_BATTERY_MIN_SOC,
+    DEFAULT_EV_EFFICIENCY,
+    DEFAULT_GRID_CHARGE_MAX_SOC,
+    DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
+    DEFAULT_MAX_DISCHARGE_KW,
+    DEFAULT_MAX_GRID_CHARGE_KW,
+    DEFAULT_NIGHT_WEIGHT,
+)
+from .grid_logic import ellevio_weight
 from .models import HourPlan
-
-
-def ellevio_weight(hour: int, night_weight: float = 0.5) -> float:
-    """Ellevio hourly weight: night ×0.5, day ×1.0."""
-    return night_weight if (hour >= 22 or hour < 6) else 1.0
-
-
-def calculate_target(
-    battery_kwh_available: float,
-    hours: int,
-    hourly_loads: list[float],
-    hourly_weights: list[float],
-    pv_forecast_3d: list[float],
-) -> float:
-    """Calculate optimal flat target that uses battery optimally.
-
-    Binary search for the target_weighted_kw that depletes the
-    battery exactly when the next sunny day arrives.
-    """
-    lo, hi = 0.5, 5.0
-
-    for _ in range(50):
-        target = (lo + hi) / 2
-        total_batt = 0.0
-        for i in range(min(hours, len(hourly_loads))):
-            w = hourly_weights[i] if i < len(hourly_weights) else 1.0
-            load = hourly_loads[i]
-            max_grid = target / w if w > 0 else load
-            total_batt += max(0, load - max_grid)
-
-        if total_batt > battery_kwh_available:
-            lo = target  # Need higher target (less battery use)
-        else:
-            hi = target  # Can afford lower target
-
-    return round(target, 2)
 
 
 def generate_plan(
@@ -66,16 +42,16 @@ def generate_plan(
     hourly_ev: list[float],
     battery_soc: float,
     ev_soc: float,
-    battery_cap_kwh: float = 25.0,
-    battery_min_soc: float = 15.0,
-    battery_efficiency: float = 0.90,
-    ev_cap_kwh: float = 98.0,
-    ev_efficiency: float = 0.92,
-    night_weight: float = 0.5,
-    grid_charge_price_threshold: float = 15.0,
-    grid_charge_max_soc: float = 90.0,
-    max_discharge_kw: float = 5.0,
-    max_grid_charge_kw: float = 3.0,
+    battery_cap_kwh: float = DEFAULT_BATTERY_CAP_KWH,
+    battery_min_soc: float = DEFAULT_BATTERY_MIN_SOC,
+    battery_efficiency: float = DEFAULT_BATTERY_EFFICIENCY,
+    ev_cap_kwh: float = 0.0,
+    ev_efficiency: float = DEFAULT_EV_EFFICIENCY,
+    night_weight: float = DEFAULT_NIGHT_WEIGHT,
+    grid_charge_price_threshold: float = DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
+    grid_charge_max_soc: float = DEFAULT_GRID_CHARGE_MAX_SOC,
+    max_discharge_kw: float = DEFAULT_MAX_DISCHARGE_KW,
+    max_grid_charge_kw: float = DEFAULT_MAX_GRID_CHARGE_KW,
 ) -> list[HourPlan]:
     """Generate per-hour plan.
 
@@ -146,10 +122,12 @@ def generate_plan(
         if ev_soc >= 0:
             ev_soc_kwh += ev * ev_efficiency
             ev_soc_kwh = max(0.0, min(ev_soc_kwh, ev_cap_kwh))
-        ev_soc_pct = min(100, ev_soc_kwh / ev_cap_kwh * 100) if ev_cap_kwh > 0 else 0
+        ev_soc_pct = max(0, min(100, ev_soc_kwh / ev_cap_kwh * 100)) if ev_cap_kwh > 0 else 0
 
         grid = max(0, net + battery_kw)
         weighted = grid * w
+
+        batt_soc_pct = max(0, min(100, int(soc_kwh / battery_cap_kwh * 100)))
 
         plan.append(
             HourPlan(
@@ -162,7 +140,7 @@ def generate_plan(
                 consumption_kw=round(load, 1),
                 ev_kw=round(ev, 1),
                 ev_soc=int(ev_soc_pct),
-                battery_soc=int(soc_kwh / battery_cap_kwh * 100),
+                battery_soc=batt_soc_pct,
                 price=round(price, 1),
             )
         )

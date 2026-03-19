@@ -56,5 +56,14 @@ class TestCarmaboxState:
         state = CarmaboxState()
         assert state.grid_power_w == 0
         assert state.battery_soc_1 == 0
+        assert state.battery_temp_c is None
         assert state.target_weighted_kw == 2.0
         assert state.plan == []
+
+    def test_battery_temp_set(self) -> None:
+        state = CarmaboxState(battery_temp_c=25.0)
+        assert state.battery_temp_c == 25.0
+
+    def test_battery_temp_none(self) -> None:
+        state = CarmaboxState(battery_temp_c=None)
+        assert state.battery_temp_c is None

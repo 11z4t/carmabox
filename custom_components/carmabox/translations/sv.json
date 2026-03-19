@@ -48,14 +48,57 @@
       "no_inverter": "Ingen stödd inverter hittades."
     }
   },
+  "entity": {
+    "sensor": {
+      "plan_status": {
+        "name": "Planstatus"
+      },
+      "target_kw": {
+        "name": "Effektmål"
+      },
+      "savings_month": {
+        "name": "Månadsbesparing"
+      },
+      "battery_soc": {
+        "name": "Batteri-SoC"
+      },
+      "grid_import": {
+        "name": "Nätimport"
+      },
+      "ev_soc": {
+        "name": "Elbil-SoC"
+      }
+    }
+  },
+  "issues": {
+    "safety_guard_frequent_blocks": {
+      "title": "SafetyGuard blockerar ofta",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "SafetyGuard blockerade {blocks_per_hour} kommandon senaste timmen",
+            "description": "Det beror oftast på att min SoC är satt för lågt eller att batteritemperatursensorn rapporterar extrema värden.\n\nNuvarande min SoC: {current_min_soc}%\n\nVälj åtgärd:"
+          }
+        }
+      }
+    },
+    "hub_offline": {
+      "title": "CARMA Hub har varit offline i {hours_offline}h",
+      "description": "CARMA Hub har inte fått data på mer än 24 timmar. Kontrollera internetanslutningen och att hub.carmabox.se kan nås."
+    }
+  },
   "options": {
     "step": {
       "init": {
         "title": "CARMA Box Inställningar",
         "description": "Ändra inställningar. Uppdateras direkt utan omstart.",
         "data": {
+          "battery_1_kwh": "Batteri 1 kapacitet (kWh)",
+          "battery_2_kwh": "Batteri 2 kapacitet (kWh)",
           "target_weighted_kw": "Effektmål (kW viktat timmedel)",
           "min_soc": "Minsta batteri-SoC (%)",
+          "daily_consumption_kwh": "Daglig hushållsförbrukning (kWh)",
+          "daily_battery_need_kwh": "Dagligt batteriurladdbehov (kWh)",
           "ev_night_target_soc": "EV minsta SoC varje morgon (%)",
           "ev_full_charge_days": "Max dagar mellan EV 100%",
           "peak_cost_per_kw": "Effektavgift (kr/kW)",

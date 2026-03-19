@@ -48,14 +48,57 @@
       "no_inverter": "No supported inverter found."
     }
   },
+  "entity": {
+    "sensor": {
+      "plan_status": {
+        "name": "Plan status"
+      },
+      "target_kw": {
+        "name": "Target power"
+      },
+      "savings_month": {
+        "name": "Monthly savings"
+      },
+      "battery_soc": {
+        "name": "Battery SoC"
+      },
+      "grid_import": {
+        "name": "Grid import"
+      },
+      "ev_soc": {
+        "name": "EV SoC"
+      }
+    }
+  },
+  "issues": {
+    "safety_guard_frequent_blocks": {
+      "title": "SafetyGuard is blocking frequently",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "SafetyGuard blocked {blocks_per_hour} commands in the last hour",
+            "description": "This usually means min SoC is set too low or the battery temperature sensor is reporting extreme values.\n\nCurrent min SoC: {current_min_soc}%\n\nChoose an action:"
+          }
+        }
+      }
+    },
+    "hub_offline": {
+      "title": "CARMA Hub has been offline for {hours_offline}h",
+      "description": "The CARMA Hub has not received data for more than 24 hours. Check your internet connection and that hub.carmabox.se is reachable."
+    }
+  },
   "options": {
     "step": {
       "init": {
         "title": "CARMA Box Settings",
         "description": "Change settings. Updates immediately without restart.",
         "data": {
+          "battery_1_kwh": "Battery 1 capacity (kWh)",
+          "battery_2_kwh": "Battery 2 capacity (kWh)",
           "target_weighted_kw": "Power target (kW weighted hourly average)",
           "min_soc": "Minimum battery SoC (%)",
+          "daily_consumption_kwh": "Daily household consumption (kWh)",
+          "daily_battery_need_kwh": "Daily battery discharge need (kWh)",
           "ev_night_target_soc": "EV minimum morning SoC (%)",
           "ev_full_charge_days": "Max days between EV 100%",
           "peak_cost_per_kw": "Peak power charge (kr/kW)",

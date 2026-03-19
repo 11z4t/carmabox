@@ -5,13 +5,17 @@ Reads battery state and sends commands via HA's goodwe integration entities.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from . import InverterAdapter
 
 _LOGGER = logging.getLogger(__name__)
+
+_RETRY_DELAY_S = 5
 
 
 class GoodWeAdapter(InverterAdapter):
@@ -55,6 +59,46 @@ class GoodWeAdapter(InverterAdapter):
             return ""
         return state.state
 
+    async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
+        """Call HA service with error handling and 1 retry. Returns True on success."""
+        entity_id = data.get("entity_id", "?")
+        for attempt in range(2):
+            try:
+                await self.hass.services.async_call(domain, service, data)
+                return True
+            except ServiceNotFound:
+                _LOGGER.error(
+                    "GoodWe %s: service not found %s.%s → %s",
+                    self.prefix,
+                    domain,
+                    service,
+                    entity_id,
+                )
+                return False
+            except HomeAssistantError as err:
+                _LOGGER.error(
+                    "GoodWe %s: HA error %s.%s → %s: %s (attempt %d/2)",
+                    self.prefix,
+                    domain,
+                    service,
+                    entity_id,
+                    err,
+                    attempt + 1,
+                )
+            except Exception as err:
+                _LOGGER.exception(
+                    "GoodWe %s: unexpected error %s.%s → %s: %s (attempt %d/2)",
+                    self.prefix,
+                    domain,
+                    service,
+                    entity_id,
+                    err,
+                    attempt + 1,
+                )
+            if attempt == 0:
+                await asyncio.sleep(_RETRY_DELAY_S)
+        return False
+
     # ── Read ──────────────────────────────────────────────────
 
     @property
@@ -85,10 +129,10 @@ class GoodWeAdapter(InverterAdapter):
 
     # ── Write ─────────────────────────────────────────────────
 
-    async def set_ems_mode(self, mode: str) -> None:
+    async def set_ems_mode(self, mode: str) -> bool:
         """Set EMS mode (charge_pv, charge_battery, discharge_battery, battery_standby)."""
         _LOGGER.info("GoodWe %s: set EMS → %s", self.prefix, mode)
-        await self.hass.services.async_call(
+        return await self._safe_call(
             "select",
             "select_option",
             {
@@ -102,19 +146,19 @@ class GoodWeAdapter(InverterAdapter):
         on: bool,
         power_pct: int = 100,
         soc_target: int = 100,
-    ) -> None:
-        """Set fast charging switch + power + SoC target."""
+    ) -> bool:
+        """Set fast charging switch + power + SoC target. Returns True if all succeeded."""
         switch_entity = f"switch.goodwe_fast_charging_switch_{self.prefix}"
         service = "turn_on" if on else "turn_off"
-        await self.hass.services.async_call(
+        ok = await self._safe_call(
             "switch",
             service,
-            {
-                "entity_id": switch_entity,
-            },
+            {"entity_id": switch_entity},
         )
+        if not ok:
+            return False
         if on:
-            await self.hass.services.async_call(
+            ok = await self._safe_call(
                 "number",
                 "set_value",
                 {
@@ -122,7 +166,9 @@ class GoodWeAdapter(InverterAdapter):
                     "value": power_pct,
                 },
             )
-            await self.hass.services.async_call(
+            if not ok:
+                return False
+            ok = await self._safe_call(
                 "number",
                 "set_value",
                 {
@@ -130,11 +176,14 @@ class GoodWeAdapter(InverterAdapter):
                     "value": soc_target,
                 },
             )
+            if not ok:
+                return False
+        return True
 
-    async def set_discharge_limit(self, watts: int) -> None:
+    async def set_discharge_limit(self, watts: int) -> bool:
         """Set peak shaving power limit (discharge rate)."""
         _LOGGER.info("GoodWe %s: discharge limit → %dW", self.prefix, watts)
-        await self.hass.services.async_call(
+        return await self._safe_call(
             "number",
             "set_value",
             {

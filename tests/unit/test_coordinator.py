@@ -59,6 +59,9 @@ def _make_coordinator(
     coord._daily_plans = 0
     coord._current_date = "2026-03-18"
     coord._daily_avg_price = float((options or {}).get("fallback_price_ore", 80.0))
+    coord._avg_price_initialized = True
+    coord.inverter_adapters = []
+    coord.ev_adapter = None
 
     return coord
 
@@ -104,6 +107,23 @@ class TestCollectState:
         _set_state(coord, "sensor.grid", "999999")
         state = coord._collect_state()
         assert state.grid_power_w == 0.0  # >100kW rejected
+
+    def test_reads_battery_temp(self) -> None:
+        coord = _make_coordinator({"battery_temp_entity": "sensor.batt_temp"})
+        _set_state(coord, "sensor.batt_temp", "32.5")
+        state = coord._collect_state()
+        assert state.battery_temp_c == 32.5
+
+    def test_battery_temp_none_when_unavailable(self) -> None:
+        coord = _make_coordinator({"battery_temp_entity": "sensor.batt_temp"})
+        _set_state(coord, "sensor.batt_temp", "unavailable")
+        state = coord._collect_state()
+        assert state.battery_temp_c is None
+
+    def test_battery_temp_none_when_not_configured(self) -> None:
+        coord = _make_coordinator({})
+        state = coord._collect_state()
+        assert state.battery_temp_c is None
 
 
 class TestExecute:
@@ -638,3 +658,391 @@ class TestSafetyGuardBypass:
         await coord._cmd_discharge(state, 1000)
 
         coord.safety.record_mode_change.assert_called_once()
+
+
+class TestServiceCallErrorHandling:
+    """PLAT-879: Error handling on all HA service calls."""
+
+    @pytest.mark.asyncio
+    async def test_service_call_raises_last_command_unchanged(self) -> None:
+        """Service call raises → _last_command must stay IDLE."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
+
+        state = CarmaboxState(battery_soc_1=50)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+
+    @pytest.mark.asyncio
+    async def test_service_call_raises_error_counted(self) -> None:
+        """Service call raises → _daily_safety_blocks incremented."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
+        initial_blocks = coord._daily_safety_blocks
+
+        state = CarmaboxState(battery_soc_1=50)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_charge_pv(state)
+
+        assert coord._daily_safety_blocks > initial_blocks
+
+    @pytest.mark.asyncio
+    async def test_service_call_retries_once(self) -> None:
+        """Failed service call should retry once (2 total attempts)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
+
+        state = CarmaboxState(battery_soc_1=50)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_charge_pv(state)
+
+        # Should have been called twice (1 attempt + 1 retry)
+        assert coord.hass.services.async_call.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_service_call_retry_succeeds(self) -> None:
+        """First attempt fails, retry succeeds → command applied."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        # Fail first, succeed on retry
+        coord.hass.services.async_call = AsyncMock(side_effect=[Exception("timeout"), None])
+
+        state = CarmaboxState(battery_soc_1=50)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    @pytest.mark.asyncio
+    async def test_service_not_found_no_retry(self) -> None:
+        """ServiceNotFound should NOT retry — the service doesn't exist."""
+        from homeassistant.exceptions import ServiceNotFound
+
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        coord.hass.services.async_call = AsyncMock(
+            side_effect=ServiceNotFound("select", "select_option")
+        )
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        # Only 1 attempt — no retry for ServiceNotFound
+        assert coord.hass.services.async_call.call_count == 1
+        assert coord._last_command == BatteryCommand.IDLE
+
+    @pytest.mark.asyncio
+    async def test_discharge_ems_fail_no_limit_set(self) -> None:
+        """_cmd_discharge: EMS fails → discharge limit must NOT be set (fail-safe)."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+            }
+        )
+        coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_discharge(state, 1000)
+
+        # Verify no number.set_value call was attempted (all calls are EMS attempts)
+        for c in coord.hass.services.async_call.call_args_list:
+            assert c[0][0] != "number", "Discharge limit must NOT be set when EMS fails"
+
+        assert coord._last_command == BatteryCommand.IDLE
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_one_battery_fails_other_continues(self) -> None:
+        """_cmd_charge_pv: battery 1 fails → battery 2 should still be attempted."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+                "battery_soc_1": "sensor.soc1",
+                "battery_soc_2": "sensor.soc2",
+            }
+        )
+        _set_state(coord, "sensor.soc1", "50")
+        _set_state(coord, "sensor.soc2", "50")
+
+        # Battery 1 fails, battery 2 succeeds
+        async def side_effect(domain: str, service: str, data: dict) -> None:
+            entity = data.get("entity_id", "")
+            if entity == "select.ems1":
+                raise Exception("Modbus timeout")
+
+        coord.hass.services.async_call = AsyncMock(side_effect=side_effect)
+
+        state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_charge_pv(state)
+
+        # Battery 2 succeeded → command should still be set
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    @pytest.mark.asyncio
+    async def test_standby_service_fail_last_command_unchanged(self) -> None:
+        """Standby service call fails → _last_command stays IDLE."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
+
+        state = CarmaboxState()
+        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+            await coord._cmd_standby(state)
+
+        assert coord._last_command == BatteryCommand.IDLE
+
+
+class TestWriteVerify:
+    """PLAT-879: Write-verify after EMS mode changes."""
+
+    @pytest.mark.asyncio
+    async def test_write_verify_pass(self) -> None:
+        """After successful service call, write-verify reads back mode."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        # After service call, entity state reflects new mode
+        _set_state(coord, "select.ems1", "charge_pv")
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    @pytest.mark.asyncio
+    async def test_write_verify_fail_increments_counter(self) -> None:
+        """Write-verify detects mismatch → error counter incremented."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
+        _set_state(coord, "sensor.soc1", "50")
+        # Entity still shows old mode after service call
+        _set_state(coord, "select.ems1", "discharge_battery")
+
+        initial_blocks = coord._daily_safety_blocks
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        # Write-verify should detect mismatch and increment counter
+        assert coord._daily_safety_blocks > initial_blocks
+
+    def test_check_write_verify_match(self) -> None:
+        """_check_write_verify returns True when modes match."""
+        coord = _make_coordinator()
+        _set_state(coord, "select.ems1", "battery_standby")
+        assert coord._check_write_verify("select.ems1", "battery_standby") is True
+
+    def test_check_write_verify_mismatch(self) -> None:
+        """_check_write_verify returns False and increments counter on mismatch."""
+        coord = _make_coordinator()
+        _set_state(coord, "select.ems1", "charge_pv")
+        initial = coord._daily_safety_blocks
+        assert coord._check_write_verify("select.ems1", "battery_standby") is False
+        assert coord._daily_safety_blocks == initial + 1
+
+
+def _make_mock_adapter(
+    soc: float = 50.0, power_w: float = 0.0, ems_mode: str = "", temp: float | None = 25.0
+) -> MagicMock:
+    """Create a mock InverterAdapter."""
+    adapter = MagicMock()
+    adapter.soc = soc
+    adapter.power_w = power_w
+    adapter.ems_mode = ems_mode
+    adapter.temperature_c = temp
+    adapter.set_ems_mode = AsyncMock(return_value=True)
+    adapter.set_discharge_limit = AsyncMock(return_value=True)
+    return adapter
+
+
+def _make_mock_ev_adapter(
+    status: str = "", power_w: float = 0.0, current_a: float = 0.0
+) -> MagicMock:
+    """Create a mock EVAdapter."""
+    adapter = MagicMock()
+    adapter.status = status
+    adapter.power_w = power_w
+    adapter.current_a = current_a
+    adapter.is_charging = status == "charging"
+    adapter.enable = AsyncMock(return_value=True)
+    adapter.disable = AsyncMock(return_value=True)
+    adapter.set_current = AsyncMock(return_value=True)
+    return adapter
+
+
+class TestAdapterIntegration:
+    """PLAT-885: Coordinator must use adapters instead of raw service calls."""
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_uses_adapter_set_ems_mode(self) -> None:
+        """_cmd_charge_pv must call adapter.set_ems_mode('charge_pv')."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=50, ems_mode="charge_pv")
+        coord.inverter_adapters = [a1]
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        a1.set_ems_mode.assert_called_once_with("charge_pv")
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_full_battery_gets_standby(self) -> None:
+        """Full battery (SoC>=100) should get standby mode via adapter."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=100, ems_mode="battery_standby")
+        coord.inverter_adapters = [a1]
+
+        state = CarmaboxState(battery_soc_1=100)
+        await coord._cmd_charge_pv(state)
+
+        a1.set_ems_mode.assert_called_once_with("battery_standby")
+
+    @pytest.mark.asyncio
+    async def test_standby_uses_adapter_set_ems_mode(self) -> None:
+        """_cmd_standby must call adapter.set_ems_mode('battery_standby')."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(ems_mode="battery_standby")
+        a2 = _make_mock_adapter(ems_mode="battery_standby")
+        coord.inverter_adapters = [a1, a2]
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state)
+
+        a1.set_ems_mode.assert_called_once_with("battery_standby")
+        a2.set_ems_mode.assert_called_once_with("battery_standby")
+        assert coord._last_command == BatteryCommand.STANDBY
+
+    @pytest.mark.asyncio
+    async def test_discharge_uses_adapter_set_ems_mode_and_limit(self) -> None:
+        """_cmd_discharge must call adapter.set_ems_mode + adapter.set_discharge_limit."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=80, ems_mode="discharge_battery")
+        a2 = _make_mock_adapter(soc=20, ems_mode="discharge_battery")
+        coord.inverter_adapters = [a1, a2]
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=20)
+        await coord._cmd_discharge(state, 1000)
+
+        a1.set_ems_mode.assert_called_once_with("discharge_battery")
+        a2.set_ems_mode.assert_called_once_with("discharge_battery")
+        # Battery 1 gets 80% of 1000 = 800W
+        a1.set_discharge_limit.assert_called_once_with(800)
+        # Battery 2 gets remainder = 200W
+        a2.set_discharge_limit.assert_called_once_with(200)
+        assert coord._last_command == BatteryCommand.DISCHARGE
+
+    @pytest.mark.asyncio
+    async def test_discharge_ems_fail_no_limit_set_adapter(self) -> None:
+        """Adapter EMS fails → discharge limit must NOT be set (fail-safe)."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=80)
+        a1.set_ems_mode = AsyncMock(return_value=False)
+        coord.inverter_adapters = [a1]
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        a1.set_ems_mode.assert_called_once_with("discharge_battery")
+        a1.set_discharge_limit.assert_not_called()
+        assert coord._last_command == BatteryCommand.IDLE
+
+    @pytest.mark.asyncio
+    async def test_discharge_zero_soc_returns_adapter(self) -> None:
+        """All adapters at 0 SoC → no commands sent."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=0)
+        coord.inverter_adapters = [a1]
+
+        state = CarmaboxState(battery_soc_1=0, battery_soc_2=-1)
+        await coord._cmd_discharge(state, 1000)
+
+        a1.set_ems_mode.assert_not_called()
+
+    def test_collect_state_uses_adapter_soc(self) -> None:
+        """_collect_state reads battery SoC from adapter."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=85, power_w=-500, ems_mode="charge_pv", temp=30.0)
+        coord.inverter_adapters = [a1]
+
+        state = coord._collect_state()
+        assert state.battery_soc_1 == 85.0
+        assert state.battery_power_1 == -500.0
+        assert state.battery_ems_1 == "charge_pv"
+
+    def test_collect_state_uses_two_adapters(self) -> None:
+        """_collect_state reads both batteries from adapters."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=80, power_w=-200, ems_mode="charge_pv")
+        a2 = _make_mock_adapter(soc=60, power_w=100, ems_mode="discharge_battery")
+        coord.inverter_adapters = [a1, a2]
+
+        state = coord._collect_state()
+        assert state.battery_soc_1 == 80.0
+        assert state.battery_soc_2 == 60.0
+        assert state.battery_power_2 == 100.0
+        assert state.battery_ems_2 == "discharge_battery"
+
+    def test_collect_state_ev_adapter(self) -> None:
+        """_collect_state reads EV data from adapter when configured."""
+        coord = _make_coordinator()
+        ev = _make_mock_ev_adapter(status="charging", power_w=7400, current_a=32)
+        coord.ev_adapter = ev
+
+        state = coord._collect_state()
+        assert state.ev_power_w == 7400.0
+        assert state.ev_current_a == 32.0
+        assert state.ev_status == "charging"
+
+    def test_battery_temp_from_adapter(self) -> None:
+        """_read_battery_temp uses adapter.temperature_c."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(temp=35.0)
+        a2 = _make_mock_adapter(temp=32.0)
+        coord.inverter_adapters = [a1, a2]
+
+        temp = coord._read_battery_temp()
+        assert temp == 32.0  # min of both adapters
+
+    def test_battery_temp_none_when_adapter_returns_none(self) -> None:
+        """_read_battery_temp returns None when all adapters return None."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(temp=None)
+        coord.inverter_adapters = [a1]
+
+        temp = coord._read_battery_temp()
+        assert temp is None
+
+    @pytest.mark.asyncio
+    async def test_no_raw_service_calls_with_adapters(self) -> None:
+        """With adapters configured, hass.services.async_call must NOT be used."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=50, ems_mode="charge_pv")
+        coord.inverter_adapters = [a1]
+
+        state = CarmaboxState(battery_soc_1=50)
+        await coord._cmd_charge_pv(state)
+
+        # Coordinator should NOT make raw service calls — adapters handle that
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_forced_standby_works_with_adapters(self) -> None:
+        """force=True standby should bypass rate limit and use adapters."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(ems_mode="battery_standby")
+        coord.inverter_adapters = [a1]
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="rate limit exceeded")
+        )
+
+        state = CarmaboxState()
+        await coord._cmd_standby(state, force=True)
+
+        a1.set_ems_mode.assert_called_once_with("battery_standby")
+        assert coord._last_command == BatteryCommand.STANDBY

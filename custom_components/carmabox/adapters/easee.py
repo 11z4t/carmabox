@@ -5,13 +5,17 @@ Reads charger state and controls charging via HA's easee integration.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from . import EVAdapter
 
 _LOGGER = logging.getLogger(__name__)
+
+_RETRY_DELAY_S = 5
 
 
 class EaseeAdapter(EVAdapter):
@@ -56,6 +60,43 @@ class EaseeAdapter(EVAdapter):
             return ""
         return state.state
 
+    async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
+        """Call HA service with error handling and 1 retry. Returns True on success."""
+        entity_id = data.get("entity_id", "?")
+        for attempt in range(2):
+            try:
+                await self.hass.services.async_call(domain, service, data)
+                return True
+            except ServiceNotFound:
+                _LOGGER.error(
+                    "Easee: service not found %s.%s → %s",
+                    domain,
+                    service,
+                    entity_id,
+                )
+                return False
+            except HomeAssistantError as err:
+                _LOGGER.error(
+                    "Easee: HA error %s.%s → %s: %s (attempt %d/2)",
+                    domain,
+                    service,
+                    entity_id,
+                    err,
+                    attempt + 1,
+                )
+            except Exception as err:
+                _LOGGER.exception(
+                    "Easee: unexpected error %s.%s → %s: %s (attempt %d/2)",
+                    domain,
+                    service,
+                    entity_id,
+                    err,
+                    attempt + 1,
+                )
+            if attempt == 0:
+                await asyncio.sleep(_RETRY_DELAY_S)
+        return False
+
     # ── Read ──────────────────────────────────────────────────
 
     @property
@@ -95,29 +136,25 @@ class EaseeAdapter(EVAdapter):
 
     # ── Write ─────────────────────────────────────────────────
 
-    async def enable(self) -> None:
+    async def enable(self) -> bool:
         """Enable the charger."""
         _LOGGER.info("Easee: enable charger")
-        await self.hass.services.async_call(
+        return await self._safe_call(
             "switch",
             "turn_on",
-            {
-                "entity_id": f"switch.{self.prefix}_is_enabled",
-            },
+            {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
 
-    async def disable(self) -> None:
+    async def disable(self) -> bool:
         """Disable the charger."""
         _LOGGER.info("Easee: disable charger")
-        await self.hass.services.async_call(
+        return await self._safe_call(
             "switch",
             "turn_off",
-            {
-                "entity_id": f"switch.{self.prefix}_is_enabled",
-            },
+            {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
 
-    async def set_current(self, amps: int) -> None:
+    async def set_current(self, amps: int) -> bool:
         """Set dynamic charger limit (A). Min 6, max 16 (1-phase).
 
         Uses number.set_value (reliable) instead of easee.set_charger_dynamic_limit
@@ -125,7 +162,7 @@ class EaseeAdapter(EVAdapter):
         """
         amps = max(0, min(32, amps))
         _LOGGER.info("Easee: set current → %dA", amps)
-        await self.hass.services.async_call(
+        return await self._safe_call(
             "number",
             "set_value",
             {

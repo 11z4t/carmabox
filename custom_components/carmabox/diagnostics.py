@@ -88,5 +88,7 @@ async def async_get_config_entry_diagnostics(
             "heartbeat_ok": coordinator.safety.check_heartbeat().ok,
             "rate_limit_ok": coordinator.safety.check_rate_limit().ok,
             "mode_changes_last_hour": len(coordinator.safety._mode_change_timestamps),
+            "blocks_last_hour": coordinator.safety.recent_block_count(3600),
+            "log": coordinator.safety.get_safety_log(),
         },
     }

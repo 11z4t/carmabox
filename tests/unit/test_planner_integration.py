@@ -50,6 +50,8 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._daily_discharge_kwh = 0.0
     coord._daily_safety_blocks = 0
     coord._daily_plans = 0
+    coord.inverter_adapters = []
+    coord.ev_adapter = None
     return coord
 
 

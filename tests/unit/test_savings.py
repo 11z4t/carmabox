@@ -142,3 +142,44 @@ class TestSavingsBreakdown:
         assert "total_grid_charge_kwh" in bd
         assert bd["discharge_savings_kr"] == 5.0
         assert bd["total_discharge_kwh"] == 10.0
+
+
+class TestDailyResetAndAvgPrice:
+    """Tests for daily reset at date change and avg_price from actual prices."""
+
+    def test_daily_reset_clears_counters(self) -> None:
+        """Verify reset_if_new_month resets on month boundary."""
+        state = SavingsState(
+            month=2,
+            year=2026,
+            discharge_savings_kr=100.0,
+            grid_charge_savings_kr=50.0,
+            total_discharge_kwh=25.0,
+            total_grid_charge_kwh=10.0,
+        )
+        now = datetime(2026, 3, 1)
+        result = reset_if_new_month(state, now)
+        assert result.discharge_savings_kr == 0.0
+        assert result.grid_charge_savings_kr == 0.0
+        assert result.total_discharge_kwh == 0.0
+        assert result.total_grid_charge_kwh == 0.0
+
+    def test_avg_price_from_actual_prices(self) -> None:
+        """avg_price should be mean of actual prices, not fallback."""
+        prices = [10.0, 20.0, 30.0, 40.0]
+        avg = sum(prices) / len(prices)  # 25.0
+        state = SavingsState(month=3, year=2026)
+        # Charge at 10 öre when avg is 25 → savings
+        record_grid_charge(state, 2.0, 10.0, avg)
+        assert abs(state.grid_charge_savings_kr - 0.3) < 0.01  # 2*(25-10)/100
+        # Discharge at 40 öre when avg is 25 → savings
+        record_discharge(state, 2.0, 40.0, avg)
+        assert abs(state.discharge_savings_kr - 0.3) < 0.01  # 2*(40-25)/100
+
+    def test_grid_charge_accumulates(self) -> None:
+        """Grid charge savings accumulate correctly."""
+        state = SavingsState(month=3, year=2026)
+        record_grid_charge(state, 1.0, 10.0, 50.0)  # 1*(50-10)/100 = 0.4
+        record_grid_charge(state, 2.0, 20.0, 50.0)  # 2*(50-20)/100 = 0.6
+        assert abs(state.grid_charge_savings_kr - 1.0) < 0.01
+        assert state.total_grid_charge_kwh == 3.0

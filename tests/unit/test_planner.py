@@ -1,10 +1,7 @@
 """Tests for CARMA Box planner — core optimizer logic."""
 
-from custom_components.carmabox.optimizer.planner import (
-    calculate_target,
-    ellevio_weight,
-    generate_plan,
-)
+from custom_components.carmabox.optimizer.grid_logic import calculate_target, ellevio_weight
+from custom_components.carmabox.optimizer.planner import generate_plan
 
 
 class TestEllevioWeight:
@@ -23,24 +20,22 @@ class TestEllevioWeight:
 
 class TestCalculateTarget:
     def test_sunny_day_low_target(self) -> None:
-        """Lots of battery + sunny forecast → low target (discharge more)."""
+        """Lots of battery + low reserve → low target (discharge more)."""
         target = calculate_target(
             battery_kwh_available=20.0,
-            hours=14,
             hourly_loads=[2.5] * 14,
             hourly_weights=[1.0] * 14,
-            pv_forecast_3d=[30, 28, 25],
+            reserve_kwh=0.0,
         )
         assert target < 2.5  # Should discharge aggressively
 
     def test_cloudy_day_high_target(self) -> None:
-        """Low battery + cloudy forecast → high target (conserve)."""
+        """Low battery + high reserve → high target (conserve)."""
         target = calculate_target(
             battery_kwh_available=5.0,
-            hours=14,
             hourly_loads=[2.5] * 14,
             hourly_weights=[1.0] * 14,
-            pv_forecast_3d=[3, 4, 5],
+            reserve_kwh=3.0,
         )
         assert target > 2.0  # Should conserve
 
@@ -48,10 +43,9 @@ class TestCalculateTarget:
         """No battery available → target equals max load."""
         target = calculate_target(
             battery_kwh_available=0.0,
-            hours=14,
             hourly_loads=[2.5] * 14,
             hourly_weights=[1.0] * 14,
-            pv_forecast_3d=[10, 10, 10],
+            reserve_kwh=0.0,
         )
         assert target >= 2.4  # Can't discharge at all
 
@@ -133,6 +127,7 @@ class TestGeneratePlan:
             hourly_ev=[1.38] * 8,  # 6A charging
             battery_soc=50,
             ev_soc=30,
+            ev_cap_kwh=98.0,
         )
         assert plan[-1].ev_soc > 30, "EV SoC should increase"
 
@@ -238,6 +233,58 @@ class TestGridCharge:
             grid_charge_price_threshold=15.0,
         )
         assert plan[-1].battery_soc > 30
+
+    def test_aggressive_discharge_soc_never_below_zero(self) -> None:
+        """AC: 24h plan with aggressive discharge → SoC never <0."""
+        plan = generate_plan(
+            num_hours=24,
+            start_hour=17,
+            target_weighted_kw=0.5,  # Very low target forces max discharge
+            hourly_loads=[6.0] * 24,  # Heavy load
+            hourly_pv=[0.0] * 24,
+            hourly_prices=[100.0] * 24,
+            hourly_ev=[0.0] * 24,
+            battery_soc=100,
+            ev_soc=-1,
+            battery_min_soc=15.0,
+            max_discharge_kw=10.0,
+        )
+        for h in plan:
+            assert h.battery_soc >= 0, f"Hour {h.hour}: SoC {h.battery_soc}% below 0"
+
+    def test_heavy_solar_soc_never_above_100(self) -> None:
+        """AC: 24h plan with lots of solar → SoC never >100."""
+        plan = generate_plan(
+            num_hours=24,
+            start_hour=6,
+            target_weighted_kw=2.0,
+            hourly_loads=[0.5] * 24,  # Minimal load
+            hourly_pv=[10.0] * 24,  # Massive PV surplus every hour
+            hourly_prices=[50.0] * 24,
+            hourly_ev=[0.0] * 24,
+            battery_soc=95,  # Start near full
+            ev_soc=-1,
+            battery_cap_kwh=25.0,
+        )
+        for h in plan:
+            assert h.battery_soc <= 100, f"Hour {h.hour}: SoC {h.battery_soc}% above 100"
+
+    def test_ev_soc_clamped(self) -> None:
+        """EV SoC should stay within [0, 100]."""
+        plan = generate_plan(
+            num_hours=24,
+            start_hour=0,
+            target_weighted_kw=3.0,
+            hourly_loads=[1.0] * 24,
+            hourly_pv=[0.0] * 24,
+            hourly_prices=[50.0] * 24,
+            hourly_ev=[5.0] * 24,  # Heavy EV charging
+            battery_soc=50,
+            ev_soc=90,  # Start near full
+            ev_cap_kwh=98.0,
+        )
+        for h in plan:
+            assert 0 <= h.ev_soc <= 100, f"Hour {h.hour}: EV SoC {h.ev_soc}% out of bounds"
 
     def test_solar_charge_takes_priority_over_grid(self) -> None:
         """Solar surplus should charge (action 'c') even if price is cheap."""

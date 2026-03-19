@@ -15,10 +15,16 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.core import callback
 
 from .const import (
+    DEFAULT_BATTERY_1_KWH,
+    DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_MIN_SOC,
+    DEFAULT_DAILY_BATTERY_NEED_KWH,
+    DEFAULT_DAILY_CONSUMPTION_KWH,
     DEFAULT_EV_FULL_CHARGE_DAYS,
     DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_FALLBACK_PRICE_ORE,
+    DEFAULT_GRID_CHARGE_MAX_SOC,
+    DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
     DOMAIN,
@@ -241,9 +247,18 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "detected": self._detected,
         }
         options = {
-            # Battery (from auto-detect)
+            # Battery
+            "battery_1_kwh": self._user_input.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH),
+            "battery_2_kwh": self._user_input.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH),
             "min_soc": DEFAULT_BATTERY_MIN_SOC,
             "target_weighted_kw": DEFAULT_TARGET_WEIGHTED_KW,
+            # Consumption
+            "daily_consumption_kwh": self._user_input.get(
+                "daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH
+            ),
+            "daily_battery_need_kwh": self._user_input.get(
+                "daily_battery_need_kwh", DEFAULT_DAILY_BATTERY_NEED_KWH
+            ),
             # EV
             "ev_enabled": self._user_input.get("ev_enabled", False),
             "ev_model": self._user_input.get("ev_model", ""),
@@ -263,9 +278,11 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
             # Grid charge
             "grid_charge_price_threshold": self._user_input.get(
-                "grid_charge_price_threshold", 15.0
+                "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
             ),
-            "grid_charge_max_soc": self._user_input.get("grid_charge_max_soc", 90.0),
+            "grid_charge_max_soc": self._user_input.get(
+                "grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC
+            ),
             # Household
             "household_size": self._user_input.get("household_size", 4),
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
@@ -424,6 +441,14 @@ class CarmaboxOptionsFlow(OptionsFlow):
             data_schema=vol.Schema(
                 {
                     vol.Required(
+                        "battery_1_kwh",
+                        default=opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+                    vol.Required(
+                        "battery_2_kwh",
+                        default=opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
+                    vol.Required(
                         "target_weighted_kw",
                         default=opts.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=10.0)),
@@ -431,6 +456,14 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "min_soc",
                         default=opts.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
                     ): vol.All(vol.Coerce(float), vol.Range(min=5, max=50)),
+                    vol.Required(
+                        "daily_consumption_kwh",
+                        default=opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=1, max=100)),
+                    vol.Required(
+                        "daily_battery_need_kwh",
+                        default=opts.get("daily_battery_need_kwh", DEFAULT_DAILY_BATTERY_NEED_KWH),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=50)),
                     vol.Required(
                         "ev_night_target_soc",
                         default=opts.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC),
@@ -449,11 +482,13 @@ class CarmaboxOptionsFlow(OptionsFlow):
                     ): vol.All(vol.Coerce(float), vol.Range(min=10, max=500)),
                     vol.Required(
                         "grid_charge_price_threshold",
-                        default=opts.get("grid_charge_price_threshold", 15.0),
+                        default=opts.get(
+                            "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
+                        ),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
                     vol.Required(
                         "grid_charge_max_soc",
-                        default=opts.get("grid_charge_max_soc", 90.0),
+                        default=opts.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC),
                     ): vol.All(vol.Coerce(float), vol.Range(min=50, max=100)),
                     vol.Required(
                         "household_size",

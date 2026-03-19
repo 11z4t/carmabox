@@ -54,10 +54,24 @@ def _plan_status_value(coord: CarmaboxCoordinator) -> str:
 
 
 def _plan_status_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
-    """Plan status extra attributes."""
+    """Plan status extra attributes including full plan data for dashboard card."""
     if coord.data is None:
         return {}
     state = coord.data
+    # Serialize plan for the Lovelace card
+    plan_data = []
+    for hp in state.plan:
+        plan_data.append(
+            {
+                "h": hp.hour,
+                "a": hp.action,
+                "p": round(hp.price, 1),
+                "soc": hp.battery_soc,
+                "grid": round(hp.grid_kw, 2),
+                "bat": round(hp.battery_kw, 2),
+                "ev_soc": hp.ev_soc,
+            }
+        )
     return {
         "target_weighted_kw": state.target_weighted_kw,
         "grid_power_w": state.grid_power_w,
@@ -66,6 +80,7 @@ def _plan_status_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "ev_soc": state.ev_soc if state.has_ev else None,
         "is_exporting": state.is_exporting,
         "plan_hours": len(state.plan),
+        "plan": plan_data,
     }
 
 
@@ -104,7 +119,7 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         translation_key="savings_month",
         icon="mdi:piggy-bank",
         native_unit_of_measurement="kr",
-        state_class=SensorStateClass.TOTAL,
+        state_class=SensorStateClass.TOTAL_INCREASING,
         suggested_display_precision=0,
         value_fn=_savings_value,
         extra_attrs_fn=_savings_attrs,
@@ -126,7 +141,7 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         native_unit_of_measurement=UnitOfPower.KILO_WATT,
         device_class=SensorDeviceClass.POWER,
         state_class=SensorStateClass.MEASUREMENT,
-        suggested_display_precision=2,
+        suggested_display_precision=1,
         value_fn=lambda coord: (
             round(max(0, coord.data.grid_power_w) / 1000, 2) if coord.data else 0
         ),
@@ -179,7 +194,7 @@ class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):
         return DeviceInfo(
             identifiers={(DOMAIN, self._entry.entry_id)},
             name="CARMA Box",
-            manufacturer="4recon AB",
+            manufacturer="CARMA Box",
             model="Energy Optimizer",
             sw_version="1.0.0",
         )
