@@ -276,6 +276,28 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_morning_target = float(opts.get("ev_night_target_soc", 75))
             ev_full_days = int(opts.get("ev_full_charge_days", 7))
 
+            # Battery sizes
+            bat1_kwh = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
+            bat2_kwh = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
+            total_bat_kwh = bat1_kwh + bat2_kwh
+
+            # Battery available for EV support
+            battery_kwh_available = max(
+                0,
+                (
+                    (state.battery_soc_1 / 100 * bat1_kwh)
+                    + (max(0, state.battery_soc_2) / 100 * bat2_kwh)
+                    - (self.min_soc / 100 * total_bat_kwh)
+                ),
+            )
+
+            # PV forecast for tomorrow (used by EV strategy)
+            pv_tomorrow = solcast.tomorrow_kwh
+
+            daily_consumption = float(
+                opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH)
+            )
+
             if ev_enabled and state.ev_soc >= 0:
                 ev_demand = calculate_ev_schedule(
                     start_hour=start_hour,
@@ -287,17 +309,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     target_weighted_kw=self.target_kw,
                     morning_target_soc=ev_morning_target,
                     full_charge_interval_days=ev_full_days,
+                    battery_kwh_available=battery_kwh_available,
+                    pv_tomorrow_kwh=pv_tomorrow,
+                    daily_consumption_kwh=daily_consumption,
                 )
             else:
                 ev_demand = [0.0] * len(prices)
 
             # Calculate target from PV forecast + reserve
-            bat1_kwh = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
-            bat2_kwh = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
-            total_bat_kwh = bat1_kwh + bat2_kwh
-            daily_consumption = float(
-                opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH)
-            )
             daily_battery_need = float(
                 opts.get("daily_battery_need_kwh", DEFAULT_DAILY_BATTERY_NEED_KWH)
             )

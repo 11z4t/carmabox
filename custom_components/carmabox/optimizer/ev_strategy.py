@@ -28,15 +28,19 @@ def calculate_ev_schedule(
     min_amps: int = 6,
     max_amps: int = 16,
     voltage: float = 230.0,
+    battery_kwh_available: float = 0.0,
+    pv_tomorrow_kwh: float = 0.0,
+    daily_consumption_kwh: float = 15.0,
 ) -> list[float]:
     """Calculate per-hour EV charge power (kW).
 
     Strategy:
     1. Calculate energy needed to reach morning_target_soc by 06:00
     2. If days_since_full >= interval - 1, target 100% instead
-    3. Sort available night hours by price (cheapest first)
-    4. Fill hours with highest amperage that fits under grid target
-    5. If not enough cheap hours, increase amperage on remaining
+    3. Calculate battery support budget (available - reserve for tomorrow)
+    4. Sort available night hours by price (cheapest first)
+    5. Fill hours with highest amperage that fits under grid target + battery support
+    6. If not enough cheap hours, increase amperage on remaining
 
     Args:
         start_hour: Current hour (0-23).
@@ -92,8 +96,27 @@ def calculate_ev_schedule(
     # Sort by price (cheapest first)
     night_slots.sort(key=lambda x: x[1])
 
+    # Calculate battery support budget
+    # If sun tomorrow → batteries refill → use all available for EV tonight
+    # If cloudy tomorrow → reserve battery for house → less EV support
+    pv_surplus_tomorrow = max(0, pv_tomorrow_kwh - daily_consumption_kwh)
+    if pv_surplus_tomorrow > 10:
+        # Sunny tomorrow — batteries will refill, use all for EV
+        battery_budget_kwh = battery_kwh_available
+    elif pv_surplus_tomorrow > 0:
+        # Partly cloudy — use surplus portion
+        battery_budget_kwh = min(battery_kwh_available, pv_surplus_tomorrow)
+    else:
+        # Cloudy/winter — save battery for house, minimal EV support
+        battery_budget_kwh = 0.0
+
+    # Distribute battery support evenly across night hours
+    num_night_hours = len(night_slots)
+    battery_support_per_hour = battery_budget_kwh / num_night_hours if num_night_hours > 0 else 0.0
+
     # Fill cheapest hours first
     remaining_kwh = energy_needed_kwh
+    remaining_battery_kwh = battery_budget_kwh
     for idx, _price, house_load in night_slots:
         if remaining_kwh <= 0:
             break
@@ -102,23 +125,29 @@ def calculate_ev_schedule(
         w = night_weight if (abs_h >= 22 or abs_h < 6) else 1.0
 
         # Max EV power that keeps weighted grid under target
-        # weighted = (house_load + ev_kw) * w <= target_weighted_kw
-        # ev_kw <= target_weighted_kw / w - house_load
-        headroom_kw = target_weighted_kw / w - house_load if w > 0 else max_kw
-        headroom_kw = max(0, headroom_kw)
+        # Grid headroom: target / weight - house_load
+        grid_headroom_kw = target_weighted_kw / w - house_load if w > 0 else max_kw
+        grid_headroom_kw = max(0, grid_headroom_kw)
 
-        # Pick amperage: try max first, fall back to min
-        if headroom_kw >= max_kw:
+        # Battery can add support on top of grid headroom
+        batt_support_kw = min(battery_support_per_hour, remaining_battery_kwh)
+        total_headroom_kw = grid_headroom_kw + batt_support_kw
+
+        # Pick amperage based on total headroom (grid + battery)
+        if total_headroom_kw >= max_kw:
             charge_kw = max_kw
-        elif headroom_kw >= min_kw:
-            # Quantize to nearest valid amperage
-            amps = int(headroom_kw * 1000 / voltage)
+        elif total_headroom_kw >= min_kw:
+            amps = int(total_headroom_kw * 1000 / voltage)
             amps = max(min_amps, min(amps, max_amps))
             charge_kw = amps * voltage / 1000
         else:
-            # Even min amps exceeds target — charge anyway at min
-            # (EV must reach target, safety is more important than peak)
+            # Even min amps exceeds headroom — charge at min anyway
+            # (75% SoC target is safety requirement)
             charge_kw = min_kw
+
+        # Track battery usage
+        batt_used = max(0, charge_kw - grid_headroom_kw)
+        remaining_battery_kwh -= batt_used
 
         actual_kwh = min(charge_kw, remaining_kwh)
         schedule[idx] = round(actual_kwh, 2)
