@@ -18,6 +18,8 @@ from custom_components.carmabox.optimizer.savings import (
     reset_if_new_month,
     savings_breakdown,
     savings_whatif,
+    state_from_dict,
+    state_to_dict,
     total_savings,
 )
 
@@ -281,3 +283,108 @@ class TestDailyTrend:
         assert len(result) == 2
         assert result[0]["date"] == "2026-03-14"
         assert result[1]["total_kr"] == 25.0
+
+
+class TestStateSerialization:
+    def test_roundtrip(self) -> None:
+        """Serialize and deserialize preserves all data."""
+        state = SavingsState(
+            month=3,
+            year=2026,
+            peak_samples=[4.0, 3.5, 2.5],
+            baseline_peak_samples=[5.0, 4.5, 3.5],
+            discharge_savings_kr=12.5,
+            grid_charge_savings_kr=8.3,
+            total_discharge_kwh=20.0,
+            total_grid_charge_kwh=15.0,
+            daily_savings=[
+                DailySavings(
+                    date="2026-03-14",
+                    peak_kr=5.0,
+                    discharge_kr=3.0,
+                    grid_charge_kr=2.0,
+                    total_kr=10.0,
+                ),
+                DailySavings(
+                    date="2026-03-15",
+                    peak_kr=8.0,
+                    discharge_kr=4.0,
+                    grid_charge_kr=3.0,
+                    total_kr=15.0,
+                ),
+            ],
+            baseline_cost_kr=4000.0,
+            actual_cost_kr=3500.0,
+        )
+        data = state_to_dict(state)
+        restored = state_from_dict(data)
+        assert restored.month == 3
+        assert restored.year == 2026
+        assert restored.peak_samples == [4.0, 3.5, 2.5]
+        assert restored.baseline_peak_samples == [5.0, 4.5, 3.5]
+        assert restored.discharge_savings_kr == 12.5
+        assert restored.grid_charge_savings_kr == 8.3
+        assert restored.total_discharge_kwh == 20.0
+        assert restored.total_grid_charge_kwh == 15.0
+        assert len(restored.daily_savings) == 2
+        assert restored.daily_savings[0].date == "2026-03-14"
+        assert restored.daily_savings[0].peak_kr == 5.0
+        assert restored.daily_savings[1].total_kr == 15.0
+        assert restored.baseline_cost_kr == 4000.0
+        assert restored.actual_cost_kr == 3500.0
+
+    def test_from_dict_empty(self) -> None:
+        """Empty dict returns fresh state."""
+        result = state_from_dict({})
+        assert result.month == 0
+        assert result.discharge_savings_kr == 0.0
+        assert result.daily_savings == []
+
+    def test_from_dict_none(self) -> None:
+        """None returns fresh state."""
+        result = state_from_dict(None)
+        assert result.month == 0
+
+    def test_from_dict_invalid(self) -> None:
+        """Invalid data returns fresh state."""
+        result = state_from_dict({"month": "not_a_number"})
+        assert result.month == 0
+
+    def test_to_dict_keys(self) -> None:
+        """state_to_dict includes all expected keys."""
+        state = SavingsState(month=3, year=2026)
+        data = state_to_dict(state)
+        expected_keys = {
+            "month",
+            "year",
+            "peak_samples",
+            "baseline_peak_samples",
+            "discharge_savings_kr",
+            "grid_charge_savings_kr",
+            "total_discharge_kwh",
+            "total_grid_charge_kwh",
+            "daily_savings",
+            "baseline_cost_kr",
+            "actual_cost_kr",
+        }
+        assert set(data.keys()) == expected_keys
+
+    def test_roundtrip_after_operations(self) -> None:
+        """Roundtrip works after recording operations."""
+        state = SavingsState(month=3, year=2026)
+        record_peak(state, 2.0, 3.5)
+        record_discharge(state, 1.5, 120.0, 80.0)
+        record_grid_charge(state, 2.0, 10.0, 80.0)
+        record_cost_estimate(state, 3.0, 100.0, 1.5)
+        record_daily_snapshot(state, "2026-03-19")
+
+        data = state_to_dict(state)
+        restored = state_from_dict(data)
+
+        assert restored.peak_samples == state.peak_samples
+        assert restored.discharge_savings_kr == state.discharge_savings_kr
+        assert restored.grid_charge_savings_kr == state.grid_charge_savings_kr
+        assert restored.baseline_cost_kr == state.baseline_cost_kr
+        assert restored.actual_cost_kr == state.actual_cost_kr
+        assert len(restored.daily_savings) == len(state.daily_savings)
+        assert restored.daily_savings[0].date == "2026-03-19"

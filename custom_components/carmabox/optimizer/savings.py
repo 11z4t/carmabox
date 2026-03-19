@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 
 @dataclass
@@ -316,3 +317,65 @@ def daily_trend(state: SavingsState) -> list[dict[str, object]]:
         }
         for ds in state.daily_savings
     ]
+
+
+def state_to_dict(state: SavingsState) -> dict[str, object]:
+    """Serialize SavingsState to dict for persistent storage."""
+    return {
+        "month": state.month,
+        "year": state.year,
+        "peak_samples": list(state.peak_samples),
+        "baseline_peak_samples": list(state.baseline_peak_samples),
+        "discharge_savings_kr": state.discharge_savings_kr,
+        "grid_charge_savings_kr": state.grid_charge_savings_kr,
+        "total_discharge_kwh": state.total_discharge_kwh,
+        "total_grid_charge_kwh": state.total_grid_charge_kwh,
+        "daily_savings": [
+            {
+                "date": ds.date,
+                "peak_kr": ds.peak_kr,
+                "discharge_kr": ds.discharge_kr,
+                "grid_charge_kr": ds.grid_charge_kr,
+                "total_kr": ds.total_kr,
+            }
+            for ds in state.daily_savings
+        ],
+        "baseline_cost_kr": state.baseline_cost_kr,
+        "actual_cost_kr": state.actual_cost_kr,
+    }
+
+
+def state_from_dict(data: dict[str, Any]) -> SavingsState:
+    """Deserialize SavingsState from dict.
+
+    Returns a fresh SavingsState if data is invalid or empty.
+    """
+    if not data or not isinstance(data, dict):
+        return SavingsState()
+    try:
+        daily = [
+            DailySavings(
+                date=str(d["date"]),
+                peak_kr=float(d.get("peak_kr", 0)),
+                discharge_kr=float(d.get("discharge_kr", 0)),
+                grid_charge_kr=float(d.get("grid_charge_kr", 0)),
+                total_kr=float(d.get("total_kr", 0)),
+            )
+            for d in data.get("daily_savings", [])
+            if isinstance(d, dict)
+        ]
+        return SavingsState(
+            month=int(data.get("month", 0)),
+            year=int(data.get("year", 0)),
+            peak_samples=[float(x) for x in data.get("peak_samples", [])],
+            baseline_peak_samples=[float(x) for x in data.get("baseline_peak_samples", [])],
+            discharge_savings_kr=float(data.get("discharge_savings_kr", 0)),
+            grid_charge_savings_kr=float(data.get("grid_charge_savings_kr", 0)),
+            total_discharge_kwh=float(data.get("total_discharge_kwh", 0)),
+            total_grid_charge_kwh=float(data.get("total_grid_charge_kwh", 0)),
+            daily_savings=daily,
+            baseline_cost_kr=float(data.get("baseline_cost_kr", 0)),
+            actual_cost_kr=float(data.get("actual_cost_kr", 0)),
+        )
+    except (KeyError, ValueError, TypeError):
+        return SavingsState()

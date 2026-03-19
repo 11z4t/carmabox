@@ -16,10 +16,12 @@ import contextlib
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
@@ -68,6 +70,8 @@ from .optimizer.savings import (
     record_grid_charge,
     record_peak,
     reset_if_new_month,
+    state_from_dict,
+    state_to_dict,
 )
 from .repairs import (
     SAFETY_BLOCK_THRESHOLD,
@@ -77,6 +81,10 @@ from .repairs import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+SAVINGS_STORE_VERSION = 1
+SAVINGS_STORE_KEY = "carmabox_savings"
+SAVINGS_SAVE_INTERVAL = 300  # Save at most every 5 minutes
 
 
 class BatteryCommand(Enum):
@@ -131,6 +139,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
         init_now = datetime.now()
         self.savings = SavingsState(month=init_now.month, year=init_now.year)
+        self._savings_store: Store[dict[str, Any]] = Store(
+            hass, SAVINGS_STORE_VERSION, SAVINGS_STORE_KEY
+        )
+        self._savings_loaded = False
+        self._savings_last_save: float = 0.0
         self.report_collector = ReportCollector(month=init_now.month, year=init_now.year)
         self._daily_discharge_kwh = 0.0
         self._daily_safety_blocks = 0
@@ -195,10 +208,47 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return default
         return state.state
 
+    async def _async_restore_savings(self) -> None:
+        """Restore savings state from persistent storage."""
+        try:
+            data = await self._savings_store.async_load()
+            if data and isinstance(data, dict):
+                restored = state_from_dict(data)
+                now = datetime.now()
+                restored = reset_if_new_month(restored, now)
+                self.savings = restored
+                _LOGGER.info(
+                    "Restored savings: month=%d, trend=%d days, total=%.1f kr",
+                    restored.month,
+                    len(restored.daily_savings),
+                    restored.discharge_savings_kr + restored.grid_charge_savings_kr,
+                )
+        except Exception:
+            _LOGGER.warning("Failed to restore savings, starting fresh", exc_info=True)
+
+    async def _async_save_savings(self) -> None:
+        """Persist savings state (rate-limited to every 5 minutes)."""
+        import time
+
+        now = time.monotonic()
+        if now - self._savings_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._savings_last_save = now
+        try:
+            await self._savings_store.async_save(state_to_dict(self.savings))
+        except Exception:
+            _LOGGER.debug("Failed to save savings", exc_info=True)
+
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
         try:
             now = datetime.now()
+
+            # Restore savings from disk on first run
+            if not self._savings_loaded:
+                self._savings_loaded = True
+                await self._async_restore_savings()
+
             self.savings = reset_if_new_month(self.savings, now)
             self.report_collector = reset_report_month(self.report_collector, now)
             self._reset_daily_counters_if_new_day(now)
@@ -216,6 +266,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             await self._execute(state)
             self._track_savings(state)
+            await self._async_save_savings()
             return state
 
         except Exception as err:

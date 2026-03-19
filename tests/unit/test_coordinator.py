@@ -71,6 +71,10 @@ def _make_coordinator(
     coord.hourly_actuals = []
     coord._last_tracked_hour = -1
     coord.executor_enabled = True  # Tests need executor active
+    coord._savings_loaded = True  # Skip restore in tests
+    coord._savings_last_save = 0.0
+    coord._savings_store = MagicMock()
+    coord._savings_store.async_save = AsyncMock()
 
     return coord
 

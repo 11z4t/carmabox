@@ -315,8 +315,18 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         # ── Inverter entities (scan real states, fallback to prefix) ──
         inverters = self._detected.get("inverters", [])
-        battery_soc_entities = self._find_entities("sensor", "pv_battery_soc_")
-        battery_power_entities = self._find_entities("sensor", "goodwe_battery_power_")
+        # Exclude computed/aggregate sensors (total, imbalance, etc.)
+        _exclude = ("total", "imbalance", "available", "trend", "charging", "discharging", "mode")
+        battery_soc_entities = [
+            e
+            for e in self._find_entities("sensor", "pv_battery_soc_")
+            if not any(x in e for x in _exclude)
+        ]
+        battery_power_entities = [
+            e
+            for e in self._find_entities("sensor", "goodwe_battery_power_")
+            if not any(x in e for x in _exclude)
+        ]
         battery_ems_entities = self._find_entities("select", "goodwe_", "_ems_mode")
         battery_limit_entities = self._find_entities("number", "goodwe_", "_peak_shaving_power")
 
@@ -372,10 +382,8 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             if charger_id:
                 mappings["ev_charger_id"] = charger_id
 
-        # EV SoC — scan for known patterns
-        ev_soc = self._find_first_entity("sensor", "battery_soc", exclude="pv_battery")
-        if not ev_soc:
-            ev_soc = self._find_first_entity("sensor", "ev_soc")
+        # EV SoC — find sensor with "battery_soc" that has a valid numeric state
+        ev_soc = self._find_ev_soc_entity()
         if ev_soc:
             mappings["ev_soc_entity"] = ev_soc
 
@@ -408,6 +416,22 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             if pattern in state.entity_id and (not exclude or exclude not in state.entity_id):
                 return state.entity_id
         return ""
+
+    def _find_ev_soc_entity(self) -> str:
+        """Find EV battery SoC entity — prefer one with valid numeric state."""
+        candidates: list[str] = []
+        for state in self.hass.states.async_all("sensor"):
+            eid = state.entity_id
+            if "pv_battery" in eid or "goodwe" in eid:
+                continue
+            if "battery_soc" in eid or "ev_soc" in eid:
+                # Prefer entities with actual numeric values
+                try:
+                    float(state.state)
+                    candidates.insert(0, eid)  # Numeric first
+                except (ValueError, TypeError):
+                    candidates.append(eid)
+        return candidates[0] if candidates else ""
 
     @staticmethod
     def _find_by_suffix(entities: list[str], suffix: str, fallback: str) -> str:
