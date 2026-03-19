@@ -49,7 +49,7 @@ from .const import (
 )
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
-from .optimizer.models import CarmaboxState, HourPlan
+from .optimizer.models import CarmaboxState, Decision, HourPlan
 from .optimizer.planner import generate_plan
 from .optimizer.report import (
     DailySample,
@@ -128,6 +128,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_discharge_kwh = 0.0
         self._daily_safety_blocks = 0
         self._daily_plans = 0
+        self.last_decision = Decision()
+        self.decision_log: list[Decision] = []
         self._current_date = datetime.now().strftime("%Y-%m-%d")
         self._daily_avg_price: float = float(
             opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
@@ -427,6 +429,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Read temperature for safety checks
         temp_c = self._read_battery_temp()
 
+        # ── Compute metrics for decision ──────────────────────
+        hour = datetime.now().hour
+        night_weight = float(self.entry.options.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        weight = ellevio_weight(hour, night_weight=night_weight)
+        net_w = max(0, state.grid_power_w + state.ev_power_w - state.pv_power_w)
+        weighted_net = net_w * weight
+        target_w = self.target_kw * 1000
+        pv_kw = state.pv_power_w / 1000
+
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
             if not state.all_batteries_full:
@@ -435,27 +446,37 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 if charge_result.ok:
                     await self._cmd_charge_pv(state)
+                    self._record_decision(
+                        state,
+                        "charge_pv",
+                        f"Solladdar — export {abs(state.grid_power_w):.0f}W, "
+                        f"PV {pv_kw:.1f} kW, batteri {state.battery_soc_1:.0f}%",
+                    )
                 else:
-                    _LOGGER.info("SafetyGuard blocked charge: %s", charge_result.reason)
+                    self._record_decision(
+                        state,
+                        "blocked",
+                        f"Laddning blockerad — {charge_result.reason}",
+                        safety_blocked=True,
+                        safety_reason=charge_result.reason,
+                    )
                     self._daily_safety_blocks += 1
             else:
                 await self._cmd_standby(state)
+                self._record_decision(
+                    state,
+                    "standby",
+                    f"Standby — batterier fulla ({state.battery_soc_1:.0f}%), exporterar",
+                )
             return
 
         # ── RULE 2: SoC 100% → standby ──────────────────────
         if state.all_batteries_full:
             await self._cmd_standby(state)
+            self._record_decision(state, "standby", "Standby — alla batterier 100%")
             return
 
         # ── RULE 3: Load > target → discharge ────────────────
-        hour = datetime.now().hour
-        night_weight = float(self.entry.options.get("night_weight", DEFAULT_NIGHT_WEIGHT))
-        weight = ellevio_weight(hour, night_weight=night_weight)
-        # Net load = grid import + EV charging - PV production
-        net_w = max(0, state.grid_power_w + state.ev_power_w - state.pv_power_w)
-        weighted_net = net_w * weight
-        target_w = self.target_kw * 1000
-
         if weighted_net > target_w:
             discharge_w = int((weighted_net - target_w) / weight)
             result = self.safety.check_discharge(
@@ -467,12 +488,70 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             if result.ok:
                 await self._cmd_discharge(state, discharge_w)
+                self._record_decision(
+                    state,
+                    "discharge",
+                    f"Urladdning {discharge_w}W — grid {weighted_net / 1000:.1f} kW viktat "
+                    f"> target {self.target_kw:.1f} kW "
+                    f"({state.current_price:.0f} öre/kWh, "
+                    f"batteri {state.battery_soc_1:.0f}%)",
+                    discharge_w=discharge_w,
+                )
             else:
-                _LOGGER.info("SafetyGuard blocked: %s", result.reason)
+                self._record_decision(
+                    state,
+                    "blocked",
+                    f"Urladdning blockerad — {result.reason}",
+                    safety_blocked=True,
+                    safety_reason=result.reason,
+                )
                 self._daily_safety_blocks += 1
             return
 
         # ── RULE 4: Under target → idle ──────────────────────
+        self._record_decision(
+            state,
+            "idle",
+            f"Vila — grid {weighted_net / 1000:.2f} kW viktat "
+            f"< target {self.target_kw:.1f} kW "
+            f"({state.current_price:.0f} öre/kWh)",
+        )
+
+    def _record_decision(
+        self,
+        state: CarmaboxState,
+        action: str,
+        reason: str,
+        discharge_w: int = 0,
+        safety_blocked: bool = False,
+        safety_reason: str = "",
+    ) -> None:
+        """Record a decision for transparency + logging."""
+        hour = datetime.now().hour
+        weight = ellevio_weight(hour)
+        decision = Decision(
+            timestamp=datetime.now().isoformat(),
+            action=action,
+            reason=reason,
+            target_kw=self.target_kw,
+            grid_kw=round(max(0, state.grid_power_w) / 1000, 2),
+            weighted_kw=round(max(0, state.grid_power_w) / 1000 * weight, 2),
+            price_ore=round(state.current_price, 1),
+            battery_soc=round(state.total_battery_soc, 0),
+            ev_soc=round(state.ev_soc, 0) if state.has_ev else -1,
+            pv_kw=round(state.pv_power_w / 1000, 2),
+            discharge_w=discharge_w,
+            safety_blocked=safety_blocked,
+            safety_reason=safety_reason,
+        )
+        self.last_decision = decision
+
+        # Keep last 48 decisions (24h at 30min intervals)
+        self.decision_log.append(decision)
+        if len(self.decision_log) > 48:
+            self.decision_log = self.decision_log[-48:]
+
+        _LOGGER.info("CARMA decision: %s — %s", action, reason)
 
     def _read_battery_temp(self) -> float | None:
         """Read battery temperature — uses adapters when available, else legacy entity."""

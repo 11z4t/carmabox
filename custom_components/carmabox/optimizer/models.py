@@ -40,6 +40,27 @@ class PlanSummary:
 
 
 @dataclass
+class Decision:
+    """A single optimizer decision with reasoning."""
+
+    timestamp: str = ""
+    action: str = "idle"  # charge_pv, discharge, standby, idle, grid_charge
+    reason: str = ""  # Human-readable Swedish
+    target_kw: float = 0.0
+    grid_kw: float = 0.0
+    weighted_kw: float = 0.0
+    price_ore: float = 0.0
+    battery_soc: float = 0.0
+    ev_soc: float = -1.0
+    pv_kw: float = 0.0
+    discharge_w: int = 0
+    ev_amps: int = 0
+    battery_support_kwh: float = 0.0
+    safety_blocked: bool = False
+    safety_reason: str = ""
+
+
+@dataclass
 class CarmaboxState:
     """Current state of the entire system."""
 

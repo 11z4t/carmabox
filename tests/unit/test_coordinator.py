@@ -10,7 +10,7 @@ from custom_components.carmabox.coordinator import (
     BatteryCommand,
     CarmaboxCoordinator,
 )
-from custom_components.carmabox.optimizer.models import CarmaboxState
+from custom_components.carmabox.optimizer.models import CarmaboxState, Decision
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
 
@@ -62,6 +62,8 @@ def _make_coordinator(
     coord._avg_price_initialized = True
     coord.inverter_adapters = []
     coord.ev_adapter = None
+    coord.last_decision = Decision()
+    coord.decision_log = []
 
     return coord
 

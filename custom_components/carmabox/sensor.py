@@ -96,7 +96,45 @@ def _savings_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return dict(savings_breakdown(coord.savings, cost))
 
 
+def _decision_value(coord: CarmaboxCoordinator) -> str:
+    """Current decision reason."""
+    d = coord.last_decision
+    return d.reason if d.reason else "Ingen data"
+
+
+def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Decision details + log."""
+    d = coord.last_decision
+    attrs: dict[str, Any] = {
+        "action": d.action,
+        "reason": d.reason,
+        "target_kw": d.target_kw,
+        "grid_kw": d.grid_kw,
+        "weighted_kw": d.weighted_kw,
+        "price_ore": d.price_ore,
+        "battery_soc": d.battery_soc,
+        "ev_soc": d.ev_soc,
+        "pv_kw": d.pv_kw,
+        "discharge_w": d.discharge_w,
+        "safety_blocked": d.safety_blocked,
+        "timestamp": d.timestamp,
+    }
+    # Last 24 decisions as compact list
+    attrs["log"] = [
+        {"t": e.timestamp[11:19], "a": e.action, "r": e.reason[:80]}
+        for e in coord.decision_log[-24:]
+    ]
+    return attrs
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
+    CarmaboxSensorDescription(
+        key="decision",
+        translation_key="decision",
+        icon="mdi:head-lightbulb",
+        value_fn=_decision_value,
+        extra_attrs_fn=_decision_attrs,
+    ),
     CarmaboxSensorDescription(
         key="plan_status",
         translation_key="plan_status",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
-from custom_components.carmabox.optimizer.models import CarmaboxState
+from custom_components.carmabox.optimizer.models import CarmaboxState, Decision
 from custom_components.carmabox.optimizer.savings import SavingsState
 from custom_components.carmabox.sensor import (
     SENSOR_DESCRIPTIONS,
@@ -24,6 +24,8 @@ def _make_sensor_deps(
     coord._last_command = last_command
     coord.target_kw = target_kw
     coord.savings = SavingsState(month=3, year=2026)
+    coord.last_decision = Decision()
+    coord.decision_log = []
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -43,8 +45,9 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 6
+        assert len(SENSOR_DESCRIPTIONS) == 7
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
+        assert "decision" in keys
         assert "plan_status" in keys
         assert "target_kw" in keys
         assert "savings_month" in keys
