@@ -131,7 +131,7 @@ class TestSolcastEdgeCases:
         hass.states.get = MagicMock(return_value=_state("0"))
         adapter = SolcastAdapter(hass)
         forecast = adapter.forecast_daily_3d
-        assert forecast == [0.0]
+        assert forecast == [0.0, 0.0]  # Always includes today + tomorrow
 
     def test_hourly_bad_period_start(self) -> None:
         """Invalid period_start should be skipped."""

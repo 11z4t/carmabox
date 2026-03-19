@@ -92,10 +92,13 @@ class CarmaboxState:
     battery_power_1: float = 0.0
     battery_ems_1: str = ""
 
+    battery_cap_1_kwh: float = 15.0
+
     # Battery 2 (optional, -1 = not present)
     battery_soc_2: float = -1.0
     battery_power_2: float = 0.0
     battery_ems_2: str = ""
+    battery_cap_2_kwh: float = 5.0
 
     # PV
     pv_power_w: float = 0.0
@@ -140,7 +143,13 @@ class CarmaboxState:
 
     @property
     def total_battery_soc(self) -> float:
-        """Average SoC across all batteries."""
+        """Capacity-weighted SoC across all batteries."""
         if self.has_battery_2:
+            total_cap = self.battery_cap_1_kwh + self.battery_cap_2_kwh
+            if total_cap > 0:
+                return (
+                    self.battery_soc_1 * self.battery_cap_1_kwh
+                    + self.battery_soc_2 * self.battery_cap_2_kwh
+                ) / total_cap
             return (self.battery_soc_1 + self.battery_soc_2) / 2
         return self.battery_soc_1

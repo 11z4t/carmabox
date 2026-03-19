@@ -197,7 +197,9 @@ def calculate_ev_schedule(
             grid_headroom_kw = (target_weighted_kw / w - load) if w > 0 else max_kw
             grid_headroom_kw = max(0, grid_headroom_kw)
 
-            # Use min amps even in expensive hours to reach target
+            # Only charge in expensive hours if there's reasonable headroom
+            if grid_headroom_kw < min_kw * 0.5:
+                continue  # Too tight — skip this hour
             charge_kw = min(min_kw, grid_headroom_kw) if grid_headroom_kw >= min_kw else min_kw
             amps = max(min_amps, min(int(charge_kw * 1000 / voltage), max_amps))
             charge_kw = amps * voltage / 1000

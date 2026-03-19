@@ -48,9 +48,12 @@ class TestCarmaboxState:
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
         assert state.total_battery_soc == 80
 
-    def test_total_soc_dual(self) -> None:
-        state = CarmaboxState(battery_soc_1=80, battery_soc_2=60)
-        assert state.total_battery_soc == 70
+    def test_total_soc_dual_weighted(self) -> None:
+        """Weighted SoC: 80%×15kWh + 60%×5kWh = 75%."""
+        state = CarmaboxState(
+            battery_soc_1=80, battery_soc_2=60, battery_cap_1_kwh=15, battery_cap_2_kwh=5
+        )
+        assert state.total_battery_soc == 75.0
 
     def test_defaults(self) -> None:
         state = CarmaboxState()

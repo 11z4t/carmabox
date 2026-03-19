@@ -158,11 +158,14 @@ class TestBatterySocSensor:
         sensor = _get_sensor("battery_soc", coord, entry)
         assert sensor.native_value == 85
 
-    def test_dual_battery_average(self) -> None:
-        state = CarmaboxState(battery_soc_1=80, battery_soc_2=60)
+    def test_dual_battery_weighted(self) -> None:
+        """Weighted SoC: 80%×15 + 60%×5 = 75%."""
+        state = CarmaboxState(
+            battery_soc_1=80, battery_soc_2=60, battery_cap_1_kwh=15, battery_cap_2_kwh=5
+        )
         coord, entry = _make_sensor_deps(state=state)
         sensor = _get_sensor("battery_soc", coord, entry)
-        assert sensor.native_value == 70
+        assert sensor.native_value == 75
 
     def test_no_data(self) -> None:
         coord, entry = _make_sensor_deps()

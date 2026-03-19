@@ -112,9 +112,9 @@ def record_discharge(
         price_ore: Current electricity price (öre/kWh).
         avg_price_ore: Average daily price (öre/kWh).
     """
-    if discharge_kwh > 0 and price_ore > avg_price_ore:
+    if discharge_kwh > 0:
         savings = discharge_kwh * (price_ore - avg_price_ore) / 100  # öre → kr
-        state.discharge_savings_kr += savings
+        state.discharge_savings_kr += savings  # Can be negative if discharged at cheap price
         state.total_discharge_kwh += discharge_kwh
 
 

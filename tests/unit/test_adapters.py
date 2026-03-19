@@ -112,9 +112,10 @@ class TestEaseeAdapter:
         assert adapter.current_a == pytest.approx(6.15)
 
     def test_read_power(self) -> None:
-        hass = _make_hass(("sensor.easee_home_12840_power", "1414"))
+        """Easee reports kW, adapter returns W."""
+        hass = _make_hass(("sensor.easee_home_12840_power", "1.414"))
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
-        assert adapter.power_w == 1414.0
+        assert adapter.power_w == pytest.approx(1414.0)
 
     def test_read_enabled(self) -> None:
         hass = _make_hass(("switch.easee_home_12840_is_enabled", "on"))

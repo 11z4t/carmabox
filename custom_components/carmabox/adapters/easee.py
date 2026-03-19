@@ -119,8 +119,8 @@ class EaseeAdapter(EVAdapter):
 
     @property
     def power_w(self) -> float:
-        """Current charging power (W)."""
-        return self._state("power")  # Easee reports kW
+        """Current charging power (W). Easee reports kW — convert to W."""
+        return self._state("power") * 1000
 
     @property
     def is_enabled(self) -> bool:

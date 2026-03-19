@@ -522,15 +522,16 @@ class TestTrackSavings:
         # Baseline should be higher (grid + battery discharge)
         assert coord.savings.baseline_peak_samples[0] > coord.savings.peak_samples[0]
 
-    def test_no_discharge_savings_when_price_low(self) -> None:
+    def test_negative_discharge_savings_when_price_low(self) -> None:
+        """Discharge at cheap price = negative savings."""
         coord = _make_coordinator({"fallback_price_ore": 100.0})
         state = CarmaboxState(
             grid_power_w=1000,
             battery_power_1=-1000,
-            current_price=50.0,  # Below avg price
+            current_price=50.0,  # Below avg (100)
         )
         coord._track_savings(state)
-        assert coord.savings.discharge_savings_kr == 0.0
+        assert coord.savings.discharge_savings_kr < 0
 
 
 class TestSafetyBlockingPaths:

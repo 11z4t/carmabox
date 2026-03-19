@@ -69,10 +69,12 @@ class TestRecordDischarge:
         assert abs(state.discharge_savings_kr - 0.8) < 0.01
         assert state.total_discharge_kwh == 2.0
 
-    def test_no_savings_when_price_below_avg(self) -> None:
+    def test_negative_savings_when_price_below_avg(self) -> None:
+        """Discharge at cheap price = negative savings (loss)."""
         state = SavingsState(month=3, year=2026)
-        record_discharge(state, 2.0, 50.0, 80.0)  # Price below avg → no savings
-        assert state.discharge_savings_kr == 0.0
+        record_discharge(state, 2.0, 50.0, 80.0)  # 2 kWh × (50-80)/100 = -0.6 kr
+        assert abs(state.discharge_savings_kr - (-0.6)) < 0.01
+        assert state.total_discharge_kwh == 2.0
 
     def test_no_savings_zero_discharge(self) -> None:
         state = SavingsState(month=3, year=2026)

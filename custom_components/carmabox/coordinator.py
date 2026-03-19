@@ -354,9 +354,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             battery_soc_1=battery_soc_1,
             battery_power_1=battery_power_1,
             battery_ems_1=battery_ems_1,
+            battery_cap_1_kwh=float(opts.get("battery_1_kwh", 15.0)),
             battery_soc_2=battery_soc_2,
             battery_power_2=battery_power_2,
             battery_ems_2=battery_ems_2,
+            battery_cap_2_kwh=float(opts.get("battery_2_kwh", 5.0)),
             pv_power_w=self._read_float(opts.get("pv_entity", "sensor.pv_solar_total")),
             ev_soc=self._read_float(opts.get("ev_soc_entity", ""), -1),
             ev_power_w=ev_power_w,
@@ -994,6 +996,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 total_wt = sum(w for _, w in self._ellevio_hour_samples)
                 if total_wt > 0:
                     self._ellevio_monthly_hourly_peaks.append(total_w / total_wt)
+                    if len(self._ellevio_monthly_hourly_peaks) > 800:
+                        self._ellevio_monthly_hourly_peaks = self._ellevio_monthly_hourly_peaks[
+                            -744:
+                        ]
             self._ellevio_hour_samples = []
             self._ellevio_current_hour = now_hour
         self._ellevio_hour_samples.append((grid_kw, weight))
