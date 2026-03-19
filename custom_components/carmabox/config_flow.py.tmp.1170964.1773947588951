@@ -458,8 +458,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 mappings[f"inverter_{i}_prefix"] = inv.get("prefix", "")
                 # Use first device registry ID, or fall back to entry_id
                 dev_ids = inv.get("device_ids", [])
-                dev_id = dev_ids[0] if dev_ids else inv.get("entry_id", "")
-                mappings[f"inverter_{i}_device_id"] = dev_id
+                mappings[f"inverter_{i}_device_id"] = dev_ids[0] if dev_ids else inv.get("entry_id", "")
 
         # Battery temperature
         temp_entity = self._find_first_entity("sensor", "pv_battery_min_temperature")
@@ -565,70 +564,14 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 return eid
         return fallback
 
-    def _resolve_inverter_device_id(
-        self, entity_suffix: str, inverters: list[dict[str, Any]]
-    ) -> str:
-        """Resolve device registry ID for an inverter by matching entity suffix.
-
-        Tries multiple strategies:
-        1. Find entity in entity registry → get its device_id directly
-        2. Match suffix against detected inverter prefixes → use device_ids
-        3. Fall back to first device_id from any detected inverter
-        """
-        # Strategy 1: Look up entity in entity registry for exact device_id
-        try:
-            from homeassistant.helpers import entity_registry as er
-
-            ent_reg = er.async_get(self.hass)
-            soc_entity = f"sensor.pv_battery_soc_{entity_suffix}"
-            entry = ent_reg.async_get(soc_entity)
-            if entry and entry.device_id:
-                return entry.device_id
-        except Exception:
-            pass
-
-        # Strategy 2: Match suffix against detected inverter device_ids
-        for inv in inverters:
-            det_prefix = inv.get("prefix", "")
-            match = (
-                det_prefix == entity_suffix
-                or entity_suffix in det_prefix
-                or det_prefix in entity_suffix
-            )
-            if match:
-                dev_ids = inv.get("device_ids", [])
-                if dev_ids:
-                    return str(dev_ids[0])
-
-        # Strategy 3: If only one inverter detected, use its first device
-        if len(inverters) == 1:
-            dev_ids = inverters[0].get("device_ids", [])
-            if dev_ids:
-                return str(dev_ids[0])
-
-        return ""
-
     def _detect_easee_charger_id(self, ev_prefix: str) -> str:
-        """Auto-detect Easee charger ID (serial) from entity attributes.
-
-        Tries multiple attribute names and extraction strategies.
-        """
+        """Auto-detect Easee charger ID from status entity attributes."""
         status_entity = f"sensor.{ev_prefix}_status"
         state = self.hass.states.get(status_entity)
         if state and state.attributes:
-            # Try common attribute names for charger serial
-            for attr_name in ("id", "charger_id", "serial_number", "serial"):
-                charger_id = state.attributes.get(attr_name, "")
-                if charger_id:
-                    return str(charger_id)
-
-        # Fallback: extract from entity prefix pattern (e.g., "easee_home_12840" → "EH12840")
-        # Only if prefix matches known Easee naming convention
-        if ev_prefix.startswith("easee_home_"):
-            serial_part = ev_prefix.replace("easee_home_", "")
-            if serial_part.isdigit():
-                return f"EH{serial_part}"
-
+            charger_id = state.attributes.get("id", "")
+            if charger_id:
+                return str(charger_id)
         return ""
 
     def _resolve_device_ids(self, entry_id: str) -> list[str]:

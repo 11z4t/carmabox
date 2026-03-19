@@ -12,7 +12,7 @@ set -euo pipefail
 HA_HOST="192.168.5.22"
 HA_SSH="hassio@${HA_HOST}"
 DOMAIN="carmabox"
-TIMEOUT=120  # seconds to wait for HA restart
+TIMEOUT=300  # seconds to wait for HA restart
 
 # Colors
 RED='\033[0;31m'

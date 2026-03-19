@@ -11,7 +11,7 @@ from custom_components.carmabox.coordinator import (
     CarmaboxCoordinator,
 )
 from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
-from custom_components.carmabox.optimizer.models import CarmaboxState, Decision
+from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, ShadowComparison
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
 
@@ -73,6 +73,9 @@ def _make_coordinator(
     coord._ellevio_hour_samples = []
     coord._ellevio_current_hour = -1
     coord._ellevio_monthly_hourly_peaks = []
+    coord.shadow = ShadowComparison()
+    coord.shadow_log = []
+    coord._shadow_savings_kr = 0.0
     coord.executor_enabled = True  # Tests need executor active
     coord._savings_loaded = True  # Skip restore in tests
     coord._savings_last_save = 0.0
@@ -434,13 +437,15 @@ class TestGeneratePlan:
 
 class TestDischargeProportional:
     @pytest.mark.asyncio
-    async def test_discharge_splits_by_soc(self) -> None:
+    async def test_discharge_splits_by_stored_energy(self) -> None:
         coord = _make_coordinator(
             {
                 "battery_ems_1": "select.ems1",
                 "battery_ems_2": "select.ems2",
                 "battery_limit_1": "number.limit1",
                 "battery_limit_2": "number.limit2",
+                "battery_1_kwh": 15.0,
+                "battery_2_kwh": 5.0,
             }
         )
 
@@ -454,12 +459,13 @@ class TestDischargeProportional:
         calls = coord.hass.services.async_call.call_args_list
         # Should have 4 calls: ems1, limit1, ems2, limit2
         assert len(calls) == 4
-        # Battery 1 gets 80% of 1000 = 800W
+        # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
+        # Battery 1 gets 1200/1300 of 1000 = 923W
         limit1_call = calls[1]
-        assert limit1_call[0][2]["value"] == 800
-        # Battery 2 gets 20% of 1000 = 200W
+        assert limit1_call[0][2]["value"] == 923
+        # Battery 2 gets remainder = 77W
         limit2_call = calls[3]
-        assert limit2_call[0][2]["value"] == 200
+        assert limit2_call[0][2]["value"] == 77
 
     @pytest.mark.asyncio
     async def test_discharge_zero_soc_returns(self) -> None:
@@ -1097,10 +1103,11 @@ class TestAdapterIntegration:
 
         a1.set_ems_mode.assert_called_once_with("discharge_battery")
         a2.set_ems_mode.assert_called_once_with("discharge_battery")
-        # Battery 1 gets 80% of 1000 = 800W
-        a1.set_discharge_limit.assert_called_once_with(800)
-        # Battery 2 gets remainder = 200W
-        a2.set_discharge_limit.assert_called_once_with(200)
+        # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
+        # Battery 1 gets 1200/1300 of 1000 = 923W
+        a1.set_discharge_limit.assert_called_once_with(923)
+        # Battery 2 gets remainder = 77W
+        a2.set_discharge_limit.assert_called_once_with(77)
         assert coord._last_command == BatteryCommand.DISCHARGE
 
     @pytest.mark.asyncio

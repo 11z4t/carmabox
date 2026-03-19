@@ -264,7 +264,7 @@ class TestGridCharge:
             hourly_ev=[0.0] * 24,
             battery_soc=95,  # Start near full
             ev_soc=-1,
-            battery_cap_kwh=25.0,
+            battery_cap_kwh=20.0,
         )
         for h in plan:
             assert h.battery_soc <= 100, f"Hour {h.hour}: SoC {h.battery_soc}% above 100"

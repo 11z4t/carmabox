@@ -81,6 +81,23 @@ class Decision:
 
 
 @dataclass
+class ShadowComparison:
+    """Shadow mode: what CARMA would do vs what v6 actually does."""
+
+    timestamp: str = ""
+    carma_action: str = "idle"
+    actual_action: str = "idle"  # Derived from battery power direction
+    carma_discharge_w: int = 0
+    actual_discharge_w: int = 0
+    carma_weighted_kw: float = 0.0
+    actual_weighted_kw: float = 0.0
+    price_ore: float = 0.0
+    agreement: bool = True  # True if CARMA and v6 agree
+    carma_better_kr: float = 0.0  # Positive = CARMA would save more
+    reason: str = ""
+
+
+@dataclass
 class CarmaboxState:
     """Current state of the entire system."""
 

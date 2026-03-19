@@ -334,6 +334,49 @@ def _ellevio_realtime_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+def _shadow_value(coord: CarmaboxCoordinator) -> str:
+    """Shadow comparison: agree or disagree."""
+    s = coord.shadow
+    if not s.timestamp:
+        return "Ingen data"
+    if s.agreement:
+        return f"Eniga: {s.carma_action}"
+    return s.reason if s.reason else f"CARMA: {s.carma_action}, v6: {s.actual_action}"
+
+
+def _shadow_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Shadow mode details."""
+    s = coord.shadow
+    log = coord.shadow_log
+    agree_count = sum(1 for x in log if x.agreement)
+    total = len(log)
+    agree_pct = round(agree_count / total * 100, 0) if total > 0 else 0
+
+    return {
+        "carma_action": s.carma_action,
+        "actual_action": s.actual_action,
+        "agreement": s.agreement,
+        "agreement_pct_24h": agree_pct,
+        "carma_weighted_kw": s.carma_weighted_kw,
+        "actual_weighted_kw": s.actual_weighted_kw,
+        "carma_better_kr": s.carma_better_kr,
+        "cumulative_savings_kr": round(coord._shadow_savings_kr, 2),
+        "price_ore": s.price_ore,
+        "reason": s.reason,
+        "disagreements_24h": [
+            {
+                "time": x.timestamp[11:16],
+                "carma": x.carma_action,
+                "v6": x.actual_action,
+                "reason": x.reason[:100],
+                "savings_kr": x.carma_better_kr,
+            }
+            for x in log
+            if not x.agreement
+        ][-12:],
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -452,6 +495,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         suggested_display_precision=2,
         value_fn=_ellevio_realtime_value,
         extra_attrs_fn=_ellevio_realtime_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="shadow",
+        translation_key="shadow",
+        icon="mdi:compare-horizontal",
+        value_fn=_shadow_value,
+        extra_attrs_fn=_shadow_attrs,
     ),
 )
 

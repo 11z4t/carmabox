@@ -564,3 +564,220 @@ async def test_summary_step_without_ev(hass: HomeAssistant) -> None:
     assert result["step_id"] == "summary"
     assert "EV" not in result["description_placeholders"]["strategy"]
     assert "analysläge" in result["description_placeholders"]["strategy"]
+
+
+async def test_adapter_keys_populated_from_entities(hass: HomeAssistant) -> None:
+    """Config flow should populate inverter_prefix and device_id from entity scanning."""
+    from homeassistant.helpers import (
+        device_registry as dr,
+    )
+    from homeassistant.helpers import (
+        entity_registry as er,
+    )
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    # Create a real config entry so device registry accepts it
+    goodwe_entry = MockConfigEntry(domain="goodwe", title="GoodWe", entry_id="e1")
+    goodwe_entry.add_to_hass(hass)
+
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    # Create a real device in the device registry
+    device = dev_reg.async_get_or_create(
+        config_entry_id="e1",
+        identifiers={("goodwe", "kontor_inverter")},
+        name="GoodWe Kontor",
+    )
+
+    detected = {
+        "inverters": [
+            {
+                "domain": "goodwe",
+                "name": "GoodWe",
+                "entry_id": "e1",
+                "device_ids": [device.id],
+                "prefix": "goodwe",  # Title-derived — does NOT match entity suffix
+            },
+        ],
+        "ev_chargers": [],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    # Create entities with real suffixes (kontor, not goodwe)
+    hass.states.async_set("sensor.pv_battery_soc_kontor", "57")
+    hass.states.async_set("sensor.goodwe_battery_power_kontor", "200")
+    hass.states.async_set("select.goodwe_kontor_ems_mode", "battery_standby")
+    hass.states.async_set("number.goodwe_kontor_peak_shaving_power", "5000")
+
+    # Register entity in entity registry with device_id
+    ent_reg.async_get_or_create(
+        "sensor",
+        "goodwe",
+        "pv_battery_soc_kontor",
+        suggested_object_id="pv_battery_soc_kontor",
+        config_entry=goodwe_entry,
+        device_id=device.id,
+    )
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": False,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    opts = result["options"]
+
+    # Prefix should come from entity suffix, not config entry title
+    assert opts["inverter_1_prefix"] == "kontor"
+    # Device ID should come from entity registry lookup
+    assert opts["inverter_1_device_id"] == device.id
+
+
+async def test_ev_adapter_keys_populated(hass: HomeAssistant) -> None:
+    """Config flow should populate ev_device_id and ev_charger_id."""
+    detected = {
+        "inverters": [
+            {
+                "domain": "goodwe",
+                "name": "GoodWe",
+                "entry_id": "e1",
+                "device_ids": [],
+                "prefix": "kontor",
+            },
+        ],
+        "ev_chargers": [
+            {
+                "domain": "easee",
+                "name": "Easee",
+                "entry_id": "e2",
+                "device_ids": ["dev_easee_456"],
+                "prefix": "easee_home_12840",
+            },
+        ],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    # Easee status entity with charger ID in attributes
+    hass.states.async_set(
+        "sensor.easee_home_12840_status",
+        "connected",
+        {"id": "EH128405"},
+    )
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": True,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    opts = result["options"]
+
+    assert opts["ev_device_id"] == "dev_easee_456"
+    assert opts["ev_charger_id"] == "EH128405"
+    assert opts["ev_prefix"] == "easee_home_12840"
+
+
+async def test_easee_charger_id_fallback_from_prefix(hass: HomeAssistant) -> None:
+    """When Easee attributes lack charger ID, extract from entity prefix."""
+    detected = {
+        "inverters": [
+            {
+                "domain": "goodwe",
+                "name": "GoodWe",
+                "entry_id": "e1",
+                "device_ids": [],
+                "prefix": "kontor",
+            },
+        ],
+        "ev_chargers": [
+            {
+                "domain": "easee",
+                "name": "Easee",
+                "entry_id": "e2",
+                "device_ids": [],
+                "prefix": "easee_home_12840",
+            },
+        ],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    # Easee status without charger ID in attributes
+    hass.states.async_set("sensor.easee_home_12840_status", "disconnected")
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": True,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    opts = result["options"]
+
+    # Should extract from prefix pattern: easee_home_12840 → EH12840
+    assert opts["ev_charger_id"] == "EH12840"

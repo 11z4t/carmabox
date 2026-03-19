@@ -53,7 +53,7 @@ from .const import (
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
-from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan
+from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
 from .optimizer.planner import generate_plan
 from .optimizer.report import (
     DailySample,
@@ -136,8 +136,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if self._cfg.get("ev_enabled", False):
             ev_prefix = self._cfg.get("ev_prefix", "easee_home_12840")
             ev_device_id = self._cfg.get("ev_device_id", "")
+            ev_charger_id = self._cfg.get("ev_charger_id", "")
             if ev_prefix:
-                self.ev_adapter = EaseeAdapter(hass, ev_device_id, str(ev_prefix))
+                self.ev_adapter = EaseeAdapter(
+                    hass, ev_device_id, str(ev_prefix), charger_id=ev_charger_id
+                )
 
         self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
@@ -158,6 +161,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Plan accuracy tracking
         self.hourly_actuals: list[HourActual] = []
         self._last_tracked_hour: int = -1
+
+        # PLAT-940: Shadow mode — CARMA vs v6 comparison
+        self.shadow: ShadowComparison = ShadowComparison()
+        self.shadow_log: list[ShadowComparison] = []
+        self._shadow_savings_kr: float = 0.0
 
         # PLAT-927: Ellevio realtime tracking
         self._ellevio_hour_samples: list[tuple[float, float]] = []
@@ -314,6 +322,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._check_repair_issues()
 
             await self._execute(state)
+            self._track_shadow(state)
             self._track_savings(state)
             await self._async_save_savings()
             await self._async_save_consumption()
@@ -778,6 +787,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         reasoning.append(step5)
         chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+        # R5: Actively set standby so batteries don't stay in previous mode
+        await self._cmd_standby(state)
         self._record_decision(
             state,
             "idle",
@@ -904,6 +915,109 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
             self._daily_avg_price = sum(prices) / len(prices)
+
+    def _track_shadow(self, state: CarmaboxState) -> None:
+        """PLAT-940: Compare CARMA recommendation vs v6 actual behavior."""
+        hour = datetime.now().hour
+        night_wt = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        weight = ellevio_weight(hour, night_weight=night_wt)
+        interval_hours = SCAN_INTERVAL_SECONDS / 3600
+
+        # Detect what v6 is ACTUALLY doing from battery power direction
+        total_battery_w = state.battery_power_1 + state.battery_power_2
+        if total_battery_w < -100:
+            actual_action = "discharge"
+            actual_discharge_w = int(abs(total_battery_w))
+        elif total_battery_w > 100:
+            actual_action = "charge"
+            actual_discharge_w = 0
+        else:
+            actual_action = "idle"
+            actual_discharge_w = 0
+
+        # What CARMA recommends
+        carma = self.last_decision
+        carma_action = carma.action
+        carma_discharge_w = carma.discharge_w
+
+        # Actual weighted grid
+        actual_grid_kw = max(0, state.grid_power_w) / 1000
+        actual_weighted = actual_grid_kw * weight
+
+        # What CARMA's weighted grid WOULD be
+        # If CARMA says discharge X W → grid would be reduced by X W
+        if carma_action == "discharge" and carma_discharge_w > 0:
+            carma_grid_kw = max(
+                0, actual_grid_kw - carma_discharge_w / 1000 + actual_discharge_w / 1000
+            )
+        elif carma_action == "standby" and actual_action == "discharge":
+            # CARMA says standby but v6 discharges → grid would be higher
+            carma_grid_kw = actual_grid_kw + actual_discharge_w / 1000
+        else:
+            carma_grid_kw = actual_grid_kw
+        carma_weighted = carma_grid_kw * weight
+
+        # Agreement?
+        agreement = carma_action == actual_action
+
+        # Value difference: lower weighted peak = savings
+        # Ellevio cost per kW per month = peak_cost_per_kw
+        # But we calculate per-sample contribution to hourly average
+        peak_cost = float(self._cfg.get("peak_cost_per_kw", 80.0))
+        # Rough: each 30s sample contributes 1/120 of an hour
+        # If CARMA has lower weighted kW → it would reduce the peak → saves money
+        delta_weighted = actual_weighted - carma_weighted  # Positive = CARMA is better
+        # Annual cost impact (very rough): delta × peak_cost / samples_per_hour
+        carma_better_kr = delta_weighted * peak_cost / 120 if delta_weighted > 0.01 else 0.0
+
+        # Also price optimization: if CARMA says "don't discharge" at cheap price but v6 does
+        if (
+            actual_action == "discharge"
+            and carma_action != "discharge"
+            and state.current_price < self._daily_avg_price
+        ):
+            # v6 discharges at cheap price = waste. CARMA saved that.
+            wasted_kwh = actual_discharge_w / 1000 * interval_hours
+            carma_better_kr += wasted_kwh * (self._daily_avg_price - state.current_price) / 100
+
+        self._shadow_savings_kr += carma_better_kr
+
+        reason = ""
+        if not agreement:
+            if carma_action == "idle" and actual_action == "discharge":
+                reason = (
+                    f"v6 laddar ur vid {state.current_price:.0f} öre"
+                    " — CARMA hade vilat (sparar batteri till dyrare timmar)"
+                )
+            elif carma_action == "discharge" and actual_action == "idle":
+                reason = (
+                    f"v6 vilar men grid {actual_grid_kw:.1f} kW > target"
+                    f" — CARMA hade laddat ur {carma_discharge_w}W"
+                )
+            elif carma_action == "standby" and actual_action == "discharge":
+                reason = "v6 laddar ur onödigt — batterier fulla, CARMA hade standby"
+            else:
+                reason = f"CARMA: {carma_action}, v6: {actual_action}"
+
+        shadow = ShadowComparison(
+            timestamp=datetime.now().isoformat(),
+            carma_action=carma_action,
+            actual_action=actual_action,
+            carma_discharge_w=carma_discharge_w,
+            actual_discharge_w=actual_discharge_w,
+            carma_weighted_kw=round(carma_weighted, 2),
+            actual_weighted_kw=round(actual_weighted, 2),
+            price_ore=round(state.current_price, 1),
+            agreement=agreement,
+            carma_better_kr=round(carma_better_kr, 4),
+            reason=reason,
+        )
+        self.shadow = shadow
+
+        # Keep last 48 comparisons
+        self.shadow_log.append(shadow)
+        if len(self.shadow_log) > 48:
+            self.shadow_log = self.shadow_log[-48:]
 
     def _track_savings(self, state: CarmaboxState) -> None:
         """Track savings data from current state."""
@@ -1265,25 +1379,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         _LOGGER.info("CARMA: discharge %dW (target %.1f kW)", watts, self.target_kw)
 
         if self.inverter_adapters:
-            # Calculate SoC-proportional split across adapters
-            socs = [max(0, a.soc) for a in self.inverter_adapters]
-            total_soc = sum(socs)
+            # Calculate energy-proportional split across adapters
+            # Use SoC × capacity (kWh) so different-sized batteries
+            # discharge proportional to stored energy, not just SoC %
+            opts = self._cfg
+            defaults = [DEFAULT_BATTERY_1_KWH, DEFAULT_BATTERY_2_KWH]
+            caps = [
+                float(opts.get(f"battery_{i}_kwh", defaults[i - 1]))
+                for i in range(1, len(self.inverter_adapters) + 1)
+            ]
+            stored = [max(0, a.soc) * caps[idx] for idx, a in enumerate(self.inverter_adapters)]
+            total_soc = sum(stored)
             if total_soc <= 0:
                 return
 
             success = False
+            failed = False
             remaining_w = watts
             for idx, adapter in enumerate(self.inverter_adapters):
                 if idx == len(self.inverter_adapters) - 1:
                     w = remaining_w  # Last adapter gets remainder
                 else:
-                    w = int(watts * socs[idx] / total_soc)
+                    w = int(watts * stored[idx] / total_soc)
                     remaining_w -= w
                 if w <= 0:
                     continue
                 ems_ok = await adapter.set_ems_mode("discharge_battery")
                 if not ems_ok:
-                    # Fail-safe: do NOT set discharge limit if EMS mode failed
+                    failed = True
                     continue
                 if self.executor_enabled and adapter.ems_mode != "discharge_battery":
                     _LOGGER.error(
@@ -1291,20 +1414,35 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         adapter.ems_mode,
                     )
                     self._daily_safety_blocks += 1
-                    continue  # K3: Do NOT set limit if mode wrong
+                    failed = True
+                    continue
                 await adapter.set_discharge_limit(w)
                 success = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning("Partial discharge failure — rolling back all to standby")
+                for adapter in self.inverter_adapters:
+                    await adapter.set_ems_mode("battery_standby")
+                self._daily_safety_blocks += 1
+                success = False
 
             if success:
                 self._last_command = BatteryCommand.DISCHARGE
                 self.safety.record_mode_change()
         else:
             # Legacy: raw entity-based control
-            total_soc = state.battery_soc_1 + max(0, state.battery_soc_2)
-            if total_soc <= 0:
+            # Energy-proportional split (SoC × capacity)
+            opts = self._cfg
+            cap1 = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
+            cap2 = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
+            energy_1 = state.battery_soc_1 * cap1
+            energy_2 = max(0, state.battery_soc_2) * cap2
+            total_energy = energy_1 + energy_2
+            if total_energy <= 0:
                 return
 
-            ratio_1 = state.battery_soc_1 / total_soc
+            ratio_1 = energy_1 / total_energy
             w1 = int(watts * ratio_1)
             w2 = watts - w1
 
