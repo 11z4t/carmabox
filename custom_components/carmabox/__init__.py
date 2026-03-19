@@ -33,9 +33,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
 
-    # Register Lovelace card (may not be available during tests)
+    # Register Lovelace card (may not be available during tests/reload)
     if hass.http is not None:
-        hass.http.register_static_path(CARD_URL, str(CARD_JS), cache_headers=False)
+        try:
+            hass.http.register_static_path(CARD_URL, str(CARD_JS), cache_headers=False)
+        except Exception:
+            _LOGGER.debug("Static path %s already registered", CARD_URL)
 
     _LOGGER.info("CARMA Box started: %s", entry.title)
     return True

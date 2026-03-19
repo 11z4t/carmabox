@@ -117,7 +117,7 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     d = coord.last_decision
     attrs: dict[str, Any] = {
         "action": d.action,
-        "reason": d.reason,
+        "reason_text": d.reason,
         "target_kw": d.target_kw,
         "grid_kw": d.grid_kw,
         "weighted_kw": d.weighted_kw,
@@ -130,10 +130,21 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "timestamp": d.timestamp,
         "analyze_only": not coord.executor_enabled,
     }
-    # Last 24 decisions as compact list
-    attrs["log"] = [
-        {"t": e.timestamp[11:19], "a": e.action, "r": e.reason[:80]}
-        for e in coord.decision_log[-24:]
+    # Last 24h decisions as compact list (max 48 entries)
+    attrs["decisions_24h"] = [
+        {
+            "timestamp": e.timestamp,
+            "action": e.action,
+            "reason_text": e.reason[:120],
+            "target_kw": e.target_kw,
+            "grid_kw": e.grid_kw,
+            "weighted_kw": e.weighted_kw,
+            "price_ore": e.price_ore,
+            "battery_soc": e.battery_soc,
+            "ev_soc": e.ev_soc,
+            "pv_kw": e.pv_kw,
+        }
+        for e in coord.decision_log[-48:]
     ]
     return attrs
 
@@ -278,7 +289,7 @@ class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):
         """Initialize sensor from description."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_unique_id = f"carmabox_{description.key}"
         self._entry = entry
 
     @property

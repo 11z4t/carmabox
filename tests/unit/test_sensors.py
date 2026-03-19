@@ -27,6 +27,7 @@ def _make_sensor_deps(
     coord.last_decision = Decision()
     coord.decision_log = []
     coord.hourly_actuals = []
+    coord.executor_enabled = True
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -220,7 +221,105 @@ class TestUniqueId:
     def test_unique_id_format(self) -> None:
         coord, entry = _make_sensor_deps()
         sensor = _get_sensor("target_kw", coord, entry)
-        assert sensor.unique_id == "test_entry_target_kw"
+        assert sensor.unique_id == "carmabox_target_kw"
+
+
+class TestDecisionSensor:
+    def test_decision_value_shows_reason(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.last_decision = Decision(
+            action="discharge",
+            reason="Urladdning 500W — grid 3.2 kW > target 2.0 kW (141 öre/kWh)",
+        )
+        sensor = _get_sensor("decision", coord, entry)
+        assert "Urladdning 500W" in sensor.native_value
+
+    def test_decision_value_no_data(self) -> None:
+        coord, entry = _make_sensor_deps()
+        sensor = _get_sensor("decision", coord, entry)
+        assert sensor.native_value == "Ingen data"
+
+    def test_decision_attrs_has_required_fields(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.last_decision = Decision(
+            timestamp="2026-03-19T14:30:00",
+            action="discharge",
+            reason="Urladdning 500W — grid 3.2 kW > target 2.0 kW (141 öre/kWh)",
+            target_kw=2.0,
+            grid_kw=3.2,
+            weighted_kw=3.2,
+            price_ore=141.0,
+            battery_soc=80.0,
+            ev_soc=65.0,
+            pv_kw=1.5,
+        )
+        sensor = _get_sensor("decision", coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert attrs is not None
+        # All AC-required attributes
+        assert attrs["action"] == "discharge"
+        assert "Urladdning 500W" in attrs["reason_text"]
+        assert attrs["target_kw"] == 2.0
+        assert attrs["grid_kw"] == 3.2
+        assert attrs["weighted_kw"] == 3.2
+        assert attrs["price_ore"] == 141.0
+        assert attrs["battery_soc"] == 80.0
+        assert attrs["ev_soc"] == 65.0
+        assert attrs["pv_kw"] == 1.5
+        assert attrs["timestamp"] == "2026-03-19T14:30:00"
+
+    def test_decisions_24h_attribute(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.decision_log = [
+            Decision(
+                timestamp=f"2026-03-19T{h:02d}:00:00",
+                action="idle",
+                reason=f"Vila — timme {h}",
+                target_kw=2.0,
+                grid_kw=1.0,
+                weighted_kw=1.0,
+                price_ore=50.0,
+                battery_soc=60.0,
+                ev_soc=-1.0,
+                pv_kw=0.5,
+            )
+            for h in range(48)
+        ]
+        sensor = _get_sensor("decision", coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert "decisions_24h" in attrs
+        assert len(attrs["decisions_24h"]) == 48
+        # Verify structure of each entry
+        entry_0 = attrs["decisions_24h"][0]
+        assert "timestamp" in entry_0
+        assert "action" in entry_0
+        assert "reason_text" in entry_0
+        assert "target_kw" in entry_0
+        assert "grid_kw" in entry_0
+        assert "weighted_kw" in entry_0
+        assert "price_ore" in entry_0
+        assert "battery_soc" in entry_0
+        assert "pv_kw" in entry_0
+
+    def test_decision_updates_on_execute(self) -> None:
+        """Decision sensor must update whenever _execute() runs."""
+        coord, entry = _make_sensor_deps()
+        coord.last_decision = Decision(
+            timestamp="2026-03-19T14:00:00",
+            action="idle",
+            reason="Vila — grid 1.0 kW < target 2.0 kW",
+        )
+        sensor = _get_sensor("decision", coord, entry)
+        assert sensor.native_value == "Vila — grid 1.0 kW < target 2.0 kW"
+
+        # Simulate _execute() updating the decision
+        coord.last_decision = Decision(
+            timestamp="2026-03-19T14:00:30",
+            action="discharge",
+            reason="Urladdning 3000W — grid 5.0 kW > target 2.0 kW (120 öre/kWh)",
+        )
+        # Sensor reads live from coordinator — no staleness
+        assert "Urladdning 3000W" in sensor.native_value
 
 
 class TestNoExtraAttrs:

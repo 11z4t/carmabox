@@ -12,6 +12,7 @@ No YAML automations. No shell_commands. No cron.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
@@ -99,8 +100,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             update_interval=timedelta(seconds=SCAN_INTERVAL_SECONDS),
         )
         self.entry = entry
+
+        # ── Config: options override data ─────────────────────
+        self._cfg = {**entry.data, **entry.options}
+
         self.safety = SafetyGuard(
-            min_soc=entry.options.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
+            min_soc=self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
         )
         self.plan: list[HourPlan] = []
         self._plan_counter = 0
@@ -108,23 +113,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── Inverter adapters ─────────────────────────────────
         self.inverter_adapters: list[InverterAdapter] = []
-        opts = entry.options
         for i in (1, 2):
-            prefix = opts.get(f"inverter_{i}_prefix", "")
-            device_id = opts.get(f"inverter_{i}_device_id", "")
+            prefix = self._cfg.get(f"inverter_{i}_prefix", "")
+            device_id = self._cfg.get(f"inverter_{i}_device_id", "")
             if prefix:
                 self.inverter_adapters.append(GoodWeAdapter(hass, device_id, prefix))
 
         # ── EV adapter ────────────────────────────────────────
         self.ev_adapter: EVAdapter | None = None
-        if opts.get("ev_enabled", False):
-            ev_prefix = opts.get("ev_prefix", "easee_home_12840")
-            ev_device_id = opts.get("ev_device_id", "")
+        if self._cfg.get("ev_enabled", False):
+            ev_prefix = self._cfg.get("ev_prefix", "easee_home_12840")
+            ev_device_id = self._cfg.get("ev_device_id", "")
             if ev_prefix:
                 self.ev_adapter = EaseeAdapter(hass, ev_device_id, str(ev_prefix))
 
-        self.target_kw: float = opts.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
-        self.min_soc: float = opts.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
+        self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
+        self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
         init_now = datetime.now()
         self.savings = SavingsState(month=init_now.month, year=init_now.year)
         self.report_collector = ReportCollector(month=init_now.month, year=init_now.year)
@@ -139,7 +143,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_tracked_hour: int = -1
 
         # Consumption learning
-        stored = opts.get("consumption_profile", {})
+        stored = self._cfg.get("consumption_profile", {})
         self.consumption_profile = (
             ConsumptionProfile.from_dict(stored)
             if isinstance(stored, dict) and stored
@@ -147,10 +151,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self._current_date = datetime.now().strftime("%Y-%m-%d")
         self._daily_avg_price: float = float(
-            opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
+            self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
         )
         self._avg_price_initialized = False
-        self.executor_enabled: bool = not bool(opts.get("analyze_only", True))
+        self.executor_enabled: bool = bool(self._cfg.get("executor_enabled", False))
 
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
@@ -159,11 +163,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
 
         if not self.executor_enabled:
-            _LOGGER.warning("CARMA Box running in DRY-RUN mode — no commands will be sent")
+            _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
 
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
-        return str(self.entry.options.get(key, default))
+        return str(self._cfg.get(key, default))
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read float state from HA entity with validation."""
@@ -223,7 +227,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         Uses inverter/EV adapters when configured, falls back to raw entity reads.
         """
-        opts = self.entry.options
+        opts = self._cfg
         adapters = self.inverter_adapters
         a1 = adapters[0] if len(adapters) >= 1 else None
         a2 = adapters[1] if len(adapters) >= 2 else None
@@ -272,9 +276,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Collect prices — try primary, fallback to secondary
             price_entity = self._get_entity("price_entity", "")
             price_entity_fallback = self._get_entity("price_entity_fallback", "")
-            fallback_price = float(
-                self.entry.options.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
-            )
+            fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
             price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
             today_prices = price_adapter.today_prices
 
@@ -298,7 +300,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             consumption = base[start_hour:] + base
 
             # EV demand — dynamic schedule based on prices + SoC
-            opts = self.entry.options
+            opts = self._cfg
             ev_enabled = opts.get("ev_enabled", False)
             ev_capacity = float(opts.get("ev_capacity_kwh", 98))
             ev_morning_target = float(opts.get("ev_night_target_soc", 75))
@@ -457,7 +459,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── Compute metrics for decision ──────────────────────
         hour = datetime.now().hour
-        night_weight = float(self.entry.options.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
         weight = ellevio_weight(hour, night_weight=night_weight)
         net_w = max(0, state.grid_power_w + state.ev_power_w - state.pv_power_w)
         weighted_net = net_w * weight
@@ -579,6 +581,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         _LOGGER.info("CARMA decision: %s — %s", action, reason)
 
+        # HA logbook entry for transparency (best-effort)
+        self.hass.async_create_task(
+            self._log_decision(reason),
+            "carmabox_logbook_entry",
+        )
+
+    async def _log_decision(self, reason: str) -> None:
+        """Log decision to system_log (best-effort, silently ignores missing service)."""
+        with contextlib.suppress(Exception):
+            await self.hass.services.async_call(
+                "system_log",
+                "write",
+                {
+                    "message": f"CARMA Box: {reason}",
+                    "level": "info",
+                    "logger": "carmabox.decision",
+                },
+            )
+
     def _read_battery_temp(self) -> float | None:
         """Read battery temperature — uses adapters when available, else legacy entity."""
         if self.inverter_adapters:
@@ -630,7 +651,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         price_entity = self._get_entity("price_entity", "")
         if not price_entity:
             return
-        fallback = float(self.entry.options.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+        fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
         adapter = NordpoolAdapter(self.hass, price_entity, fallback)
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
@@ -639,7 +660,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     def _track_savings(self, state: CarmaboxState) -> None:
         """Track savings data from current state."""
         hour = datetime.now().hour
-        night_weight = float(self.entry.options.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
         weight = ellevio_weight(hour, night_weight=night_weight)
         # Net load for peak tracking (what Ellevio meters see)
         grid_kw = max(0, state.grid_power_w) / 1000
@@ -693,7 +714,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Daily savings snapshot for trend graph
         today = datetime.now().strftime("%Y-%m-%d")
-        cost = float(self.entry.options.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
+        cost = float(self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
         record_daily_snapshot(self.savings, today, cost)
 
         # Record daily sample for monthly report

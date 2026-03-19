@@ -224,7 +224,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_household(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 5: Household info."""
+        """Step 5: Household info + mode."""
         if user_input is not None:
             self._user_input.update(user_input)
             return self._create_entry()
@@ -237,16 +237,18 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                         vol.Coerce(int), vol.Range(min=1, max=10)
                     ),
                     vol.Optional("has_pool_pump", default=False): bool,
+                    vol.Optional("executor_enabled", default=False): bool,
                 }
             ),
         )
 
     def _create_entry(self) -> ConfigFlowResult:
-        """Create the config entry with all collected data."""
-        data = {
-            "detected": self._detected,
-        }
-        options = {
+        """Create the config entry with all collected data.
+
+        All config is stored in BOTH data and options for maximum compatibility.
+        HA guaranteed persistence is via data; options can be live-updated.
+        """
+        config = {
             # Battery
             "battery_1_kwh": self._user_input.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH),
             "battery_2_kwh": self._user_input.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH),
@@ -286,8 +288,15 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             # Household
             "household_size": self._user_input.get("household_size", 4),
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
+            # Mode — analyzer only by default (no battery commands sent)
+            "executor_enabled": self._user_input.get("executor_enabled", False),
             # Entity mappings (from auto-detect, user can change in options)
             **self._build_entity_mappings(),
+        }
+
+        data = {
+            "detected": self._detected,
+            **config,
         }
 
         title = "CARMA Box"
@@ -295,7 +304,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         if inv:
             title = f"CARMA Box ({inv[0]['name']})"
 
-        return self.async_create_entry(title=title, data=data, options=options)
+        return self.async_create_entry(title=title, data=data, options=config)
 
     def _build_entity_mappings(self) -> dict[str, str]:
         """Build entity ID mappings from detected integrations."""
@@ -514,8 +523,8 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         default=opts.get("has_pool_pump", False),
                     ): bool,
                     vol.Optional(
-                        "analyze_only",
-                        default=opts.get("analyze_only", True),
+                        "executor_enabled",
+                        default=opts.get("executor_enabled", False),
                     ): bool,
                 }
             ),

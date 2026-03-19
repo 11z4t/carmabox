@@ -25,6 +25,7 @@ def _make_coordinator(
 
     entry = MagicMock()
     entry.options = options or {}
+    entry.data = dict(entry.options)
     entry.entry_id = "test_entry"
 
     # Mock states
@@ -38,6 +39,7 @@ def _make_coordinator(
     coord = CarmaboxCoordinator.__new__(CarmaboxCoordinator)
     coord.hass = hass
     coord.entry = entry
+    coord._cfg = {**entry.data, **entry.options} if hasattr(entry, "data") else dict(entry.options)
     coord.safety = MagicMock()
     # All safety checks default to PASS so existing tests work unchanged
     coord.safety.check_heartbeat = MagicMock(return_value=MagicMock(ok=True, reason=""))
@@ -231,6 +233,54 @@ class TestExecute:
 
         # Should call standby (all full), not charge_pv
         assert coord._last_command == BatteryCommand.STANDBY
+
+
+class TestRecordDecision:
+    def test_record_decision_updates_last_decision(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(grid_power_w=1500, battery_soc_1=60)
+        coord._record_decision(state, "idle", "Vila — test")
+        assert coord.last_decision.action == "idle"
+        assert coord.last_decision.reason == "Vila — test"
+
+    def test_record_decision_appends_to_log(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState()
+        for i in range(5):
+            coord._record_decision(state, "idle", f"Decision {i}")
+        assert len(coord.decision_log) == 5
+
+    def test_record_decision_caps_at_48(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState()
+        for i in range(60):
+            coord._record_decision(state, "idle", f"Decision {i}")
+        assert len(coord.decision_log) == 48
+        assert "Decision 59" in coord.decision_log[-1].reason
+
+    def test_record_decision_calls_system_log(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState()
+        coord._record_decision(state, "discharge", "Urladdning 500W — test")
+        coord.hass.async_create_task.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_execute_updates_decision_sensor(self) -> None:
+        """Decision sensor must update on every _execute() call."""
+        coord = _make_coordinator()
+        state = CarmaboxState(
+            grid_power_w=1000,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 18
+            mock_dt.now.return_value.isoformat.return_value = "2026-03-19T18:00:00"
+            await coord._execute(state)
+
+        assert coord.last_decision.action == "idle"
+        assert coord.last_decision.timestamp != ""
+        assert len(coord.decision_log) == 1
 
 
 class TestBatteryCommand:

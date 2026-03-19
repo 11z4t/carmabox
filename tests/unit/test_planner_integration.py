@@ -30,11 +30,13 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
 
     entry = MagicMock()
     entry.options = options or {}
+    entry.data = dict(entry.options)
     entry.entry_id = "test"
 
     coord = CarmaboxCoordinator.__new__(CarmaboxCoordinator)
     coord.hass = hass
     coord.entry = entry
+    coord._cfg = {**entry.data, **entry.options}
     coord.safety = MagicMock()
     coord.safety.check_discharge = MagicMock(return_value=MagicMock(ok=True, reason=""))
     coord.safety.check_charge = MagicMock(return_value=MagicMock(ok=True, reason=""))
