@@ -175,6 +175,14 @@ if [[ -z "$FLOW_ID" ]]; then
     fail "Could not start config flow. Response: $FLOW"
 fi
 log "Flow started: $FLOW_ID (step: $STEP)"
+FLOW_TYPE=""
+
+# Step 4a2: User step (auto-detect, may need empty submit)
+if [[ -z "$STEP" || "$STEP" == "user" ]]; then
+    FLOW=$(ha_api POST "/config/config_entries/flow/${FLOW_ID}" "{}")
+    STEP=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('step_id',''))" 2>/dev/null)
+    log "User step completed (step: $STEP)"
+fi
 
 # Step 4b: Confirm detected equipment
 if [[ "$STEP" == "confirm" ]]; then
@@ -215,14 +223,23 @@ if [[ "$STEP" == "household" ]]; then
         "has_pool_pump": true,
         "executor_enabled": false
     }')
+    STEP=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('step_id',''))" 2>/dev/null)
     FLOW_TYPE=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('type',''))" 2>/dev/null)
+    log "Household configured (step: $STEP)"
+fi
 
-    if [[ "$FLOW_TYPE" == "create_entry" ]]; then
-        log "Config entry created!"
-    else
-        warn "Unexpected flow result: $FLOW_TYPE"
-        echo "$FLOW" | python3 -m json.tool 2>/dev/null || echo "$FLOW"
-    fi
+# Step 4f: Summary step (if present)
+if [[ "$STEP" == "summary" ]]; then
+    FLOW=$(ha_api POST "/config/config_entries/flow/${FLOW_ID}" '{}')
+    FLOW_TYPE=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('type',''))" 2>/dev/null)
+    log "Summary confirmed"
+fi
+
+if [[ "$FLOW_TYPE" == "create_entry" ]]; then
+    log "Config entry created!"
+else
+    warn "Unexpected flow result: $FLOW_TYPE"
+    echo "$FLOW" | python3 -m json.tool 2>/dev/null || echo "$FLOW"
 fi
 
 # Wait for sensors to populate

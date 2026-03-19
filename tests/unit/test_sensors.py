@@ -47,7 +47,7 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 8
+        assert len(SENSOR_DESCRIPTIONS) == 12
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
         assert "plan_accuracy" in keys
         assert "decision" in keys

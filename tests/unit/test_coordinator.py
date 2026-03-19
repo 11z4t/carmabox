@@ -70,6 +70,9 @@ def _make_coordinator(
     coord.consumption_profile = ConsumptionProfile()
     coord.hourly_actuals = []
     coord._last_tracked_hour = -1
+    coord._ellevio_hour_samples = []
+    coord._ellevio_current_hour = -1
+    coord._ellevio_monthly_hourly_peaks = []
     coord.executor_enabled = True  # Tests need executor active
     coord._savings_loaded = True  # Skip restore in tests
     coord._savings_last_save = 0.0

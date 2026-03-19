@@ -55,6 +55,15 @@ class SavingsState:
     baseline_cost_kr: float = 0.0
     actual_cost_kr: float = 0.0
 
+    # PLAT-924: Battery efficiency tracking
+    charge_from_grid_kwh: float = 0.0
+    charge_from_grid_cost_ore: float = 0.0
+    discharge_offset_kwh: float = 0.0
+    discharge_offset_value_ore: float = 0.0
+
+    # PLAT-926: Grid charge price samples
+    grid_charge_prices: list[float] = field(default_factory=list)
+
 
 def reset_if_new_month(state: SavingsState, now: datetime) -> SavingsState:
     """Reset savings if a new month has started."""
@@ -342,6 +351,11 @@ def state_to_dict(state: SavingsState) -> dict[str, object]:
         ],
         "baseline_cost_kr": state.baseline_cost_kr,
         "actual_cost_kr": state.actual_cost_kr,
+        "charge_from_grid_kwh": state.charge_from_grid_kwh,
+        "charge_from_grid_cost_ore": state.charge_from_grid_cost_ore,
+        "discharge_offset_kwh": state.discharge_offset_kwh,
+        "discharge_offset_value_ore": state.discharge_offset_value_ore,
+        "grid_charge_prices": list(state.grid_charge_prices[-2000:]),
     }
 
 
@@ -376,6 +390,11 @@ def state_from_dict(data: dict[str, Any]) -> SavingsState:
             daily_savings=daily,
             baseline_cost_kr=float(data.get("baseline_cost_kr", 0)),
             actual_cost_kr=float(data.get("actual_cost_kr", 0)),
+            charge_from_grid_kwh=float(data.get("charge_from_grid_kwh", 0)),
+            charge_from_grid_cost_ore=float(data.get("charge_from_grid_cost_ore", 0)),
+            discharge_offset_kwh=float(data.get("discharge_offset_kwh", 0)),
+            discharge_offset_value_ore=float(data.get("discharge_offset_value_ore", 0)),
+            grid_charge_prices=[float(x) for x in data.get("grid_charge_prices", [])],
         )
     except (KeyError, ValueError, TypeError):
         return SavingsState()

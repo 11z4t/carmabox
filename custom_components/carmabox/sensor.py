@@ -206,6 +206,134 @@ def _plan_accuracy_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+def _battery_efficiency_value(coord: CarmaboxCoordinator) -> float | None:
+    """Battery buy/sell ratio."""
+    s = coord.savings
+    if s.charge_from_grid_kwh < 0.01 or s.discharge_offset_kwh < 0.01:
+        return None
+    avg_buy = s.charge_from_grid_cost_ore / s.charge_from_grid_kwh
+    avg_sell = s.discharge_offset_value_ore / s.discharge_offset_kwh
+    return round(avg_sell / avg_buy, 1) if avg_buy > 0.01 else None
+
+
+def _battery_efficiency_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Battery efficiency details."""
+    s = coord.savings
+    avg_buy = (
+        round(s.charge_from_grid_cost_ore / s.charge_from_grid_kwh, 1)
+        if s.charge_from_grid_kwh > 0.01
+        else 0.0
+    )
+    avg_sell = (
+        round(s.discharge_offset_value_ore / s.discharge_offset_kwh, 1)
+        if s.discharge_offset_kwh > 0.01
+        else 0.0
+    )
+    ratio = round(avg_sell / avg_buy, 1) if avg_buy > 0.01 else 0.0
+    return {
+        "avg_buy_price_ore": avg_buy,
+        "avg_sell_price_ore": avg_sell,
+        "ratio": ratio,
+        "summary": f"Köpte {avg_buy:.0f} öre, sålde {avg_sell:.0f} öre = {ratio:.1f}x"
+        if ratio > 0
+        else "Ingen data",
+        "charge_from_grid_kwh": round(s.charge_from_grid_kwh, 2),
+        "discharge_offset_kwh": round(s.discharge_offset_kwh, 2),
+    }
+
+
+def _optimization_score_value(coord: CarmaboxCoordinator) -> float | None:
+    """CARMA Box vs native peak shaving score."""
+    s = coord.savings
+    if len(s.baseline_peak_samples) < 3 or len(s.peak_samples) < 3:
+        return None
+    baseline = sorted(s.baseline_peak_samples, reverse=True)
+    carma = sorted(s.peak_samples, reverse=True)
+    base_avg = sum(baseline[:3]) / 3
+    carma_avg = sum(carma[:3]) / 3
+    if base_avg < 0.01:
+        return None
+    return round(max(0, (base_avg - carma_avg) / base_avg * 100), 0)
+
+
+def _optimization_score_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Optimization score details."""
+    s = coord.savings
+    cost = float(coord._cfg.get("peak_cost_per_kw", 80.0))
+    baseline = sorted(s.baseline_peak_samples, reverse=True)[:3]
+    carma = sorted(s.peak_samples, reverse=True)[:3]
+    base_avg = sum(baseline) / len(baseline) if baseline else 0.0
+    carma_avg = sum(carma) / len(carma) if carma else 0.0
+    return {
+        "native_top3_avg_kw": round(base_avg, 2),
+        "carma_top3_avg_kw": round(carma_avg, 2),
+        "native_monthly_kr": round(base_avg * cost, 0),
+        "carma_monthly_kr": round(carma_avg * cost, 0),
+        "saved_kr": round((base_avg - carma_avg) * cost, 0),
+    }
+
+
+def _grid_charge_efficiency_value(coord: CarmaboxCoordinator) -> float | None:
+    """How much cheaper we charge vs daily average."""
+    s = coord.savings
+    if s.charge_from_grid_kwh < 0.01:
+        return None
+    avg_buy = s.charge_from_grid_cost_ore / s.charge_from_grid_kwh
+    avg_daily = coord._daily_avg_price
+    if avg_daily < 0.01:
+        return None
+    return round(max(0, (1 - avg_buy / avg_daily) * 100), 0)
+
+
+def _grid_charge_efficiency_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Grid charge efficiency details."""
+    s = coord.savings
+    avg_buy = (
+        round(s.charge_from_grid_cost_ore / s.charge_from_grid_kwh, 1)
+        if s.charge_from_grid_kwh > 0.01
+        else 0.0
+    )
+    avg_daily = round(coord._daily_avg_price, 1)
+    prices = s.grid_charge_prices
+    return {
+        "avg_charge_price_ore": avg_buy,
+        "avg_daily_price_ore": avg_daily,
+        "summary": f"Nätladdade vid {avg_buy:.0f} öre (snitt {avg_daily:.0f} öre)"
+        if avg_buy > 0
+        else "Ingen data",
+        "total_grid_charge_kwh": round(s.charge_from_grid_kwh, 2),
+        "price_min": round(min(prices), 1) if prices else 0.0,
+        "price_max": round(max(prices), 1) if prices else 0.0,
+    }
+
+
+def _ellevio_realtime_value(coord: CarmaboxCoordinator) -> float | None:
+    """Current hour rolling weighted average."""
+    samples = coord._ellevio_hour_samples
+    if not samples:
+        return None
+    total = sum(p * w for p, w in samples)
+    wt = sum(w for _, w in samples)
+    return round(total / wt, 2) if wt > 0.01 else None
+
+
+def _ellevio_realtime_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Ellevio realtime: current hour + monthly top-3."""
+    peaks = sorted(coord._ellevio_monthly_hourly_peaks, reverse=True)
+    top3 = peaks[:3]
+    top3_avg = round(sum(top3) / len(top3), 2) if top3 else 0.0
+    cost = float(coord._cfg.get("peak_cost_per_kw", 80.0))
+    return {
+        "samples_this_hour": len(coord._ellevio_hour_samples),
+        "top1_kw": round(top3[0], 2) if len(top3) >= 1 else 0.0,
+        "top2_kw": round(top3[1], 2) if len(top3) >= 2 else 0.0,
+        "top3_kw": round(top3[2], 2) if len(top3) >= 3 else 0.0,
+        "top3_avg_kw": top3_avg,
+        "estimated_monthly_cost_kr": round(top3_avg * cost, 0),
+        "total_hours_tracked": len(peaks),
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -283,6 +411,47 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         value_fn=lambda coord: (
             round(coord.data.ev_soc, 0) if coord.data and coord.data.has_ev else None
         ),
+    ),
+    CarmaboxSensorDescription(
+        key="battery_efficiency",
+        translation_key="battery_efficiency",
+        icon="mdi:battery-arrow-up",
+        native_unit_of_measurement="x",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=_battery_efficiency_value,
+        extra_attrs_fn=_battery_efficiency_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="optimization_score",
+        translation_key="optimization_score",
+        icon="mdi:trophy",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=_optimization_score_value,
+        extra_attrs_fn=_optimization_score_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="grid_charge_efficiency",
+        translation_key="grid_charge_efficiency",
+        icon="mdi:lightning-bolt-circle",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=_grid_charge_efficiency_value,
+        extra_attrs_fn=_grid_charge_efficiency_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="ellevio_realtime",
+        translation_key="ellevio_realtime",
+        icon="mdi:gauge",
+        native_unit_of_measurement=UnitOfPower.KILO_WATT,
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=_ellevio_realtime_value,
+        extra_attrs_fn=_ellevio_realtime_attrs,
     ),
 )
 

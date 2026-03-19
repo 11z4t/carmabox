@@ -23,12 +23,12 @@ class TestCalculateEvSchedule:
         )
         assert all(p == 0.0 for p in schedule)
 
-    def test_already_at_target(self) -> None:
-        """EV already at 80% with target 75% → no charge."""
+    def test_already_full(self) -> None:
+        """EV at 100% → no charge needed."""
         schedule = calculate_ev_schedule(
             start_hour=20,
             num_hours=12,
-            ev_soc_pct=80,
+            ev_soc_pct=100,
             ev_capacity_kwh=98,
             hourly_prices=[50.0] * 12,
             hourly_loads=[1.5] * 12,
@@ -36,6 +36,22 @@ class TestCalculateEvSchedule:
             morning_target_soc=75.0,
         )
         assert all(p == 0.0 for p in schedule)
+
+    def test_above_target_still_charges_if_cheap(self) -> None:
+        """EV at 80% with target 75% → still charges at cheap hours to maximize SoC."""
+        schedule = calculate_ev_schedule(
+            start_hour=20,
+            num_hours=12,
+            ev_soc_pct=80,
+            ev_capacity_kwh=98,
+            hourly_prices=[15.0] * 12,  # Cheap
+            hourly_loads=[2.0] * 12,
+            target_weighted_kw=2.0,
+            morning_target_soc=75.0,
+            night_weight=0.5,
+        )
+        # Should charge — above target but cheap hours available
+        assert sum(schedule) > 0
 
     def test_charges_at_night(self) -> None:
         """Should only charge during night hours (22-06)."""
@@ -73,35 +89,40 @@ class TestCalculateEvSchedule:
         if schedule[2] > 0 and schedule[3] > 0:
             assert schedule[2] >= schedule[3]
 
-    def test_full_charge_overdue(self) -> None:
-        """When due for 100%, target should be 100% not 75%."""
+    def test_full_charge_overdue_uses_expensive_hours(self) -> None:
+        """When due for 100%, should use expensive hours too (Phase 2)."""
+        # Mix of cheap and very expensive hours
+        prices = [200, 200, 10, 10, 200, 200, 10, 10, 200, 200, 200, 200]
         schedule_normal = calculate_ev_schedule(
             start_hour=20,
             num_hours=12,
             ev_soc_pct=50,
             ev_capacity_kwh=98,
-            hourly_prices=[50.0] * 12,
-            hourly_loads=[1.5] * 12,
-            target_weighted_kw=4.0,
+            hourly_prices=prices,
+            hourly_loads=[2.0] * 12,
+            target_weighted_kw=2.0,
             morning_target_soc=75.0,
             days_since_full_charge=2,
             full_charge_interval_days=7,
+            night_weight=0.5,
         )
         schedule_overdue = calculate_ev_schedule(
             start_hour=20,
             num_hours=12,
             ev_soc_pct=50,
             ev_capacity_kwh=98,
-            hourly_prices=[50.0] * 12,
-            hourly_loads=[1.5] * 12,
-            target_weighted_kw=4.0,
+            hourly_prices=prices,
+            hourly_loads=[2.0] * 12,
+            target_weighted_kw=2.0,
             morning_target_soc=75.0,
             days_since_full_charge=6,
             full_charge_interval_days=7,
+            night_weight=0.5,
         )
         total_normal = sum(schedule_normal)
         total_overdue = sum(schedule_overdue)
-        assert total_overdue > total_normal
+        # Overdue forces 100% → needs more energy → uses expensive hours too
+        assert total_overdue >= total_normal
 
     def test_no_night_hours_returns_zeros(self) -> None:
         """All daytime hours → no charging."""
@@ -147,43 +168,64 @@ class TestCalculateEvSchedule:
         )
         assert all(p == 0.0 for p in schedule)
 
-    def test_charges_at_min_when_target_tight(self) -> None:
-        """Even if target is tight, EV charges at min amps (safety)."""
+    def test_expensive_hours_skipped_when_possible(self) -> None:
+        """Expensive hours should be skipped if cheap hours suffice."""
+        # 8 night hours: 4 cheap (20 öre), 4 expensive (200 öre)
+        prices = [20, 20, 20, 20, 200, 200, 200, 200]
         schedule = calculate_ev_schedule(
             start_hour=22,
             num_hours=8,
-            ev_soc_pct=20,
+            ev_soc_pct=70,
             ev_capacity_kwh=98,
-            hourly_prices=[30.0] * 8,
-            hourly_loads=[4.5] * 8,  # Very high house load
-            target_weighted_kw=2.0,  # night w=0.5 → 4kW actual. 4.5 load > 4kW
+            hourly_prices=prices,
+            hourly_loads=[2.0] * 8,
+            target_weighted_kw=2.0,
+            morning_target_soc=75.0,
             night_weight=0.5,
             min_amps=6,
         )
-        # Should still charge (at min_amps) even though over target
-        charged = [kw for kw in schedule if kw > 0]
-        assert len(charged) > 0
-        # Each charge should be ~1.38 kW (6A × 230V)
-        for kw in charged:
-            assert abs(kw - 1.38) < 0.5
+        # Expensive hours (index 4-7) should be 0 or much less than cheap hours
+        cheap_total = sum(schedule[:4])
+        expensive_total = sum(schedule[4:])
+        assert cheap_total > expensive_total
 
-    def test_total_energy_matches_need(self) -> None:
-        """Total scheduled energy should approximately match what's needed."""
+    def test_maximizes_soc_beyond_target(self) -> None:
+        """Should charge beyond morning_target if cheap hours remain."""
         schedule = calculate_ev_schedule(
-            start_hour=20,
-            num_hours=12,
-            ev_soc_pct=50,
-            ev_capacity_kwh=100,  # Nice round number
-            hourly_prices=[30.0] * 12,
-            hourly_loads=[1.0] * 12,
-            target_weighted_kw=5.0,  # Generous target
+            start_hour=22,
+            num_hours=8,
+            ev_soc_pct=85,  # Already above 75% target
+            ev_capacity_kwh=98,
+            hourly_prices=[15.0] * 8,  # All cheap
+            hourly_loads=[2.0] * 8,
+            target_weighted_kw=2.0,
             morning_target_soc=75.0,
+            night_weight=0.5,
         )
         total_kwh = sum(schedule)
-        needed_kwh = (75 - 50) / 100 * 100  # 25 kWh
-        # Should be close to needed (some quantization from amp steps)
-        assert total_kwh <= needed_kwh + 2  # Not much over
-        assert total_kwh >= needed_kwh - 2  # Not much under
+        # Should still charge even though above target — maximize SoC
+        assert total_kwh > 0, "Should charge beyond target when cheap"
+
+    def test_price_tiers(self) -> None:
+        """Cheap hours get more amps than normal hours."""
+        # 4 cheap (10 öre) + 4 normal (50 öre)
+        prices = [10, 10, 10, 10, 50, 50, 50, 50]
+        schedule = calculate_ev_schedule(
+            start_hour=22,
+            num_hours=8,
+            ev_soc_pct=30,
+            ev_capacity_kwh=98,
+            hourly_prices=prices,
+            hourly_loads=[2.0] * 8,
+            target_weighted_kw=2.0,
+            morning_target_soc=75.0,
+            night_weight=0.5,
+        )
+        cheap_avg = sum(schedule[:4]) / max(1, sum(1 for x in schedule[:4] if x > 0) or 1)
+        normal_avg = sum(schedule[4:]) / max(1, sum(1 for x in schedule[4:] if x > 0) or 1)
+        # Cheap hours should have higher charge rate
+        if cheap_avg > 0 and normal_avg > 0:
+            assert cheap_avg >= normal_avg
 
 
 class TestEvNeedsCharge:

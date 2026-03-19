@@ -159,6 +159,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.hourly_actuals: list[HourActual] = []
         self._last_tracked_hour: int = -1
 
+        # PLAT-927: Ellevio realtime tracking
+        self._ellevio_hour_samples: list[tuple[float, float]] = []
+        self._ellevio_current_hour: int = -1
+        self._ellevio_monthly_hourly_peaks: list[float] = []
+
         # Consumption learning (persistent via Store)
         self.consumption_profile = ConsumptionProfile()
         self._consumption_store: Store[dict[str, Any]] = Store(
@@ -290,7 +295,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._consumption_loaded = True
                 await self._async_restore_consumption()
 
+            old_month = self.savings.month
             self.savings = reset_if_new_month(self.savings, now)
+            if self.savings.month != old_month:
+                self._ellevio_monthly_hourly_peaks = []
             self.report_collector = reset_report_month(self.report_collector, now)
             self._reset_daily_counters_if_new_day(now)
             if not self._avg_price_initialized:
@@ -924,6 +932,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._daily_avg_price,
             )
             self._daily_discharge_kwh += battery_discharge_kw * interval_hours
+            # PLAT-924: Accumulate discharge value
+            self.savings.discharge_offset_kwh += battery_discharge_kw * interval_hours
+            self.savings.discharge_offset_value_ore += (
+                battery_discharge_kw * interval_hours * state.current_price
+            )
 
         # Record grid charge savings (battery charging while importing from grid)
         battery_charge_kw = 0.0
@@ -939,6 +952,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.current_price,
                 self._daily_avg_price,
             )
+            # PLAT-924/926: Accumulate grid charge cost + price samples
+            charge_kwh = grid_charge_kw * interval_hours
+            self.savings.charge_from_grid_kwh += charge_kwh
+            self.savings.charge_from_grid_cost_ore += charge_kwh * state.current_price
+            self.savings.grid_charge_prices.append(state.current_price)
+            if len(self.savings.grid_charge_prices) > 2000:
+                self.savings.grid_charge_prices = self.savings.grid_charge_prices[-2000:]
 
         # What-if cost tracking
         consumption_kw = max(0, state.grid_power_w) / 1000 + battery_discharge_kw
@@ -964,6 +984,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             plans_generated=self._daily_plans,
         )
         record_daily_sample(self.report_collector, sample)
+
+        # PLAT-927: Ellevio realtime — rolling hourly weighted average
+        now_hour = datetime.now().hour
+        if now_hour != self._ellevio_current_hour:
+            if self._ellevio_hour_samples and self._ellevio_current_hour >= 0:
+                total_w = sum(p * w for p, w in self._ellevio_hour_samples)
+                total_wt = sum(w for _, w in self._ellevio_hour_samples)
+                if total_wt > 0:
+                    self._ellevio_monthly_hourly_peaks.append(total_w / total_wt)
+            self._ellevio_hour_samples = []
+            self._ellevio_current_hour = now_hour
+        self._ellevio_hour_samples.append((grid_kw, weight))
 
         # Track plan vs actual (once per hour)
         now_obj = datetime.now()

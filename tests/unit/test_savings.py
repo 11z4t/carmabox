@@ -366,6 +366,11 @@ class TestStateSerialization:
             "daily_savings",
             "baseline_cost_kr",
             "actual_cost_kr",
+            "charge_from_grid_kwh",
+            "charge_from_grid_cost_ore",
+            "discharge_offset_kwh",
+            "discharge_offset_value_ore",
+            "grid_charge_prices",
         }
         assert set(data.keys()) == expected_keys
 
