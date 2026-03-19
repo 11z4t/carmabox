@@ -42,6 +42,10 @@
           "has_pool_pump": "Pool med värmepump",
           "executor_enabled": "Aktivera styrning (av = enbart analys)"
         }
+      },
+      "summary": {
+        "title": "CARMA Box har hittat din utrustning",
+        "description": "**Hittade:**\n{equipment}\n\n**Din strategi:** {strategy}\n\nFörsta planen genereras om 5 minuter.\n\n**Tips:** Öppna CARMA Box-kortet i din dashboard för att följa optimeringen i realtid."
       }
     },
     "abort": {

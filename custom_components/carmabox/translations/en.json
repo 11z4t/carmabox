@@ -42,6 +42,10 @@
           "has_pool_pump": "Pool with heat pump",
           "executor_enabled": "Enable control (off = analyze only)"
         }
+      },
+      "summary": {
+        "title": "CARMA Box found your equipment",
+        "description": "**Found:**\n{equipment}\n\n**Your strategy:** {strategy}\n\nFirst plan will be generated in 5 minutes.\n\n**Tip:** Open the CARMA Box card in your dashboard to follow optimization in real time."
       }
     },
     "abort": {

@@ -227,7 +227,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5: Household info + mode."""
         if user_input is not None:
             self._user_input.update(user_input)
-            return self._create_entry()
+            return await self.async_step_summary()
 
         return self.async_show_form(
             step_id="household",
@@ -241,6 +241,95 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 }
             ),
         )
+
+    async def async_step_summary(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 6: Onboarding summary — show what was found and what happens next."""
+        if user_input is not None:
+            return self._create_entry()
+
+        # ── Build equipment summary lines ──
+        equipment_lines: list[str] = []
+        for inv in self._detected.get("inverters", []):
+            soc_str = self._read_soc(inv.get("prefix", ""))
+            label = inv["name"]
+            if inv.get("prefix"):
+                label += f" {inv['prefix'].replace('_', ' ').title()}"
+            equipment_lines.append(f"{label} ({soc_str})" if soc_str else label)
+
+        for ev in self._detected.get("ev_chargers", []):
+            status = self._read_ev_status(ev.get("prefix", ""))
+            equipment_lines.append(f"{ev['name']} ({status})")
+
+        for price in self._detected.get("price_sources", []):
+            current = self._read_current_price(price.get("entity_id", ""))
+            equipment_lines.append(f"{price['name']} ({current})" if current else price["name"])
+
+        for pv in self._detected.get("pv_forecasts", []):
+            equipment_lines.append(pv["name"])
+
+        # ── Build strategy summary ──
+        target_kw = self._user_input.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
+        ev_enabled = self._user_input.get("ev_enabled", False)
+        ev_target = self._user_input.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC)
+        executor = self._user_input.get("executor_enabled", False)
+
+        strategy_parts: list[str] = []
+        strategy_parts.append(f"{target_kw} kW target")
+        if ev_enabled:
+            strategy_parts.append(f"EV {ev_target}% varje natt")
+        strategy_parts.append("styrning aktiv" if executor else "analysläge")
+
+        equipment_text = "\n".join(equipment_lines) if equipment_lines else "-"
+        strategy_text = ", ".join(strategy_parts)
+
+        return self.async_show_form(
+            step_id="summary",
+            description_placeholders={
+                "equipment": equipment_text,
+                "strategy": strategy_text,
+            },
+        )
+
+    def _read_soc(self, prefix: str) -> str:
+        """Read battery SoC for an inverter prefix, returns e.g. '57%' or ''."""
+        if not prefix:
+            return ""
+        entity_id = f"sensor.pv_battery_soc_{prefix}"
+        state = self.hass.states.get(entity_id)
+        if state and state.state not in ("unknown", "unavailable"):
+            try:
+                return f"{int(float(state.state))}%"
+            except (ValueError, TypeError):
+                pass
+        return ""
+
+    def _read_ev_status(self, prefix: str) -> str:
+        """Read EV charger status, returns e.g. 'ansluten' or 'okänd'."""
+        if not prefix:
+            return "okänd"
+        entity_id = f"sensor.{prefix}_status"
+        state = self.hass.states.get(entity_id)
+        if state and state.state not in ("unknown", "unavailable"):
+            return state.state.lower()
+        return "okänd"
+
+    def _read_current_price(self, entity_id: str) -> str:
+        """Read current electricity price, returns e.g. '141 öre' or ''."""
+        if not entity_id:
+            return ""
+        state = self.hass.states.get(entity_id)
+        if state and state.state not in ("unknown", "unavailable"):
+            try:
+                price = float(state.state)
+                # Nordpool reports in SEK/kWh — convert to öre
+                if price < 20:
+                    price = price * 100
+                return f"{int(round(price))} öre"
+            except (ValueError, TypeError):
+                pass
+        return ""
 
     def _create_entry(self) -> ConfigFlowResult:
         """Create the config entry with all collected data.
