@@ -133,3 +133,50 @@ class TestConsumptionProfile:
         p.update(10, 2.0, is_weekend=False)
         p.update(10, 2.0, is_weekend=True)
         assert p.total_samples == 2
+
+    def test_168h_data_gives_weekday_weekend_difference(self) -> None:
+        """AC: consumption profile med 168h data ger vardag/helg-skillnad."""
+        from custom_components.carmabox.const import DEFAULT_CONSUMPTION_PROFILE
+
+        p = ConsumptionProfile()
+        # Simulate 7 days of weekday data (5 days × 24h = 120 samples)
+        # with higher evening consumption
+        for _day in range(7):
+            for hour in range(24):
+                p.update(hour, 3.0 if 17 <= hour <= 21 else 1.0, is_weekend=False)
+
+        # Simulate 7 days of weekend data (different pattern — higher midday)
+        for _day in range(7):
+            for hour in range(24):
+                p.update(hour, 4.0 if 10 <= hour <= 15 else 0.5, is_weekend=True)
+
+        assert p.is_learned
+        weekday = p.get_profile(is_weekend=False)
+        weekend = p.get_profile(is_weekend=True)
+
+        # Profiles must differ from each other
+        assert weekday != weekend
+        # Profiles must differ from static default
+        static = list(DEFAULT_CONSUMPTION_PROFILE)
+        assert weekday != static
+        assert weekend != static
+        # Weekday evening (17-21) should be higher than weekend evening
+        assert weekday[18] > weekend[18]
+        # Weekend midday (10-15) should be higher than weekday midday
+        assert weekend[12] > weekday[12]
+
+    def test_new_installation_zero_data_returns_static(self) -> None:
+        """AC: ny installation (0h data) → statisk profil."""
+        from custom_components.carmabox.const import DEFAULT_CONSUMPTION_PROFILE
+
+        p = ConsumptionProfile()
+        assert not p.is_learned
+        assert p.total_samples == 0
+        # Must return exactly the static default profile
+        assert p.get_profile(is_weekend=False) == list(DEFAULT_CONSUMPTION_PROFILE)
+        assert p.get_profile(is_weekend=True) == list(DEFAULT_CONSUMPTION_PROFILE)
+        # Also via date-based access
+        weekday_profile = p.get_profile_for_date(datetime(2026, 3, 16))  # Monday
+        weekend_profile = p.get_profile_for_date(datetime(2026, 3, 21))  # Saturday
+        assert weekday_profile == list(DEFAULT_CONSUMPTION_PROFILE)
+        assert weekend_profile == list(DEFAULT_CONSUMPTION_PROFILE)

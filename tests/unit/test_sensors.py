@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
-from custom_components.carmabox.optimizer.models import CarmaboxState, Decision
+from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourActual
 from custom_components.carmabox.optimizer.savings import SavingsState
 from custom_components.carmabox.sensor import (
     SENSOR_DESCRIPTIONS,
@@ -320,6 +320,109 @@ class TestDecisionSensor:
         )
         # Sensor reads live from coordinator — no staleness
         assert "Urladdning 3000W" in sensor.native_value
+
+
+class TestPlanAccuracySensor:
+    """Tests for plan_accuracy sensor — PLAT-896 AC requirements."""
+
+    def test_ac_example_plan_2_actual_2_3_gives_87(self) -> None:
+        """AC: plan=2.0 kW, actual=2.3 kW → accuracy 87%."""
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.3) for h in range(3)
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value == 87  # 2.0/2.3 = 86.96 ≈ 87
+
+    def test_perfect_match_gives_100(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(3)
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value == 100
+
+    def test_none_when_insufficient_data(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [HourActual(hour=0, planned_weighted_kw=2.0, actual_weighted_kw=2.0)]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value is None
+
+    def test_none_when_empty(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = []
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value is None
+
+    def test_both_zero_counts_as_perfect(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(hour=0, planned_weighted_kw=0.0, actual_weighted_kw=0.0),
+            HourActual(hour=1, planned_weighted_kw=2.0, actual_weighted_kw=2.0),
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value == 100
+
+    def test_actual_lower_than_plan(self) -> None:
+        """Symmetrical: plan=2.3, actual=2.0 → same 87%."""
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.3, actual_weighted_kw=2.0) for h in range(3)
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        assert sensor.native_value == 87
+
+    def test_attrs_include_full_history(self) -> None:
+        """AC: 24h history with plan/actual per hour."""
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(
+                hour=h,
+                planned_action="d",
+                actual_action="d",
+                planned_grid_kw=2.0,
+                actual_grid_kw=2.3,
+                planned_weighted_kw=2.0,
+                actual_weighted_kw=2.3,
+                planned_battery_soc=80,
+                actual_battery_soc=78,
+                planned_ev_soc=65,
+                actual_ev_soc=62,
+                price=141.0,
+            )
+            for h in range(5)
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert attrs is not None
+        assert attrs["hours_tracked"] == 5
+        assert attrs["goal_pct"] == 70
+        assert attrs["goal_met"] is True
+        assert len(attrs["history"]) == 5
+        entry_0 = attrs["history"][0]
+        assert entry_0["plan_grid_kw"] == 2.0
+        assert entry_0["actual_grid_kw"] == 2.3
+        assert entry_0["plan_kw"] == 2.0
+        assert entry_0["actual_kw"] == 2.3
+        assert entry_0["plan_action"] == "d"
+        assert entry_0["actual_action"] == "d"
+        assert entry_0["bat_plan"] == 80
+        assert entry_0["bat_actual"] == 78
+        assert entry_0["ev_plan"] == 65
+        assert entry_0["ev_actual"] == 62
+        assert entry_0["price"] == 141.0
+
+    def test_goal_not_met_below_70(self) -> None:
+        """AC: driftmål >70%."""
+        coord, entry = _make_sensor_deps()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=5.0) for h in range(3)
+        ]
+        sensor = _get_sensor("plan_accuracy", coord, entry)
+        # 2.0/5.0 = 40%
+        assert sensor.native_value == 40
+        attrs = sensor.extra_state_attributes
+        assert attrs["goal_met"] is False
 
 
 class TestNoExtraAttrs:

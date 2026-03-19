@@ -150,37 +150,58 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
 
 
 def _plan_accuracy_value(coord: CarmaboxCoordinator) -> float | None:
-    """Plan accuracy: how close actual grid matched plan."""
+    """Plan accuracy: how close actual grid matched plan (min/max ratio, weighted average).
+
+    Formula per hour: min(planned, actual) / max(planned, actual) × 100
+    Example: plan=2.0, actual=2.3 → 2.0/2.3 = 87%
+    Hours where both are near-zero count as 100% (nothing to compare).
+    """
     actuals = coord.hourly_actuals
     if len(actuals) < 2:
         return None
-    total_diff = 0.0
-    total_planned = 0.0
+    total_accuracy = 0.0
+    counted = 0
     for a in actuals:
-        total_diff += abs(a.actual_weighted_kw - a.planned_weighted_kw)
-        total_planned += max(0.01, a.planned_weighted_kw)
-    if total_planned <= 0:
+        p = abs(a.planned_weighted_kw)
+        r = abs(a.actual_weighted_kw)
+        if p < 0.01 and r < 0.01:
+            total_accuracy += 100.0  # Both near-zero = perfect match
+        else:
+            lo, hi = min(p, r), max(p, r)
+            total_accuracy += (lo / hi) * 100
+        counted += 1
+    if counted == 0:
         return None
-    accuracy = max(0, 100 - (total_diff / total_planned * 100))
-    return round(accuracy, 0)
+    return round(total_accuracy / counted, 0)
 
 
 def _plan_accuracy_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
-    """Plan accuracy details."""
+    """Plan accuracy details with 24h history and goal tracking."""
     actuals = coord.hourly_actuals
+    accuracy = _plan_accuracy_value(coord)
     history = [
         {
             "h": a.hour,
+            "plan_grid_kw": a.planned_grid_kw,
+            "actual_grid_kw": a.actual_grid_kw,
             "plan_kw": a.planned_weighted_kw,
             "actual_kw": a.actual_weighted_kw,
             "plan_action": a.planned_action,
             "actual_action": a.actual_action,
             "bat_plan": a.planned_battery_soc,
             "bat_actual": a.actual_battery_soc,
+            "ev_plan": a.planned_ev_soc,
+            "ev_actual": a.actual_ev_soc,
+            "price": a.price,
         }
         for a in actuals[-24:]
     ]
-    return {"hours_tracked": len(actuals), "history": history}
+    return {
+        "hours_tracked": len(actuals),
+        "goal_pct": 70,
+        "goal_met": accuracy is not None and accuracy >= 70,
+        "history": history,
+    }
 
 
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (

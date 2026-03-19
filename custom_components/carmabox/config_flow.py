@@ -307,36 +307,60 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_create_entry(title=title, data=data, options=config)
 
     def _build_entity_mappings(self) -> dict[str, str]:
-        """Build entity ID mappings from detected integrations."""
+        """Build entity ID mappings from detected integrations.
+
+        Uses real HA entity scanning instead of guessing names from prefixes.
+        """
         mappings: dict[str, str] = {}
 
-        # Inverter entities
+        # ── Inverter entities (scan real states, fallback to prefix) ──
         inverters = self._detected.get("inverters", [])
-        if inverters:
-            inv = inverters[0]
-            prefix = inv.get("prefix", "")
-            mappings["battery_soc_1"] = f"sensor.pv_battery_soc_{prefix}" if prefix else ""
-            mappings["battery_power_1"] = f"sensor.goodwe_battery_power_{prefix}" if prefix else ""
-            mappings["battery_ems_1"] = f"select.goodwe_{prefix}_ems_mode" if prefix else ""
-            mappings["battery_limit_1"] = (
-                f"number.goodwe_{prefix}_ems_power_limit" if prefix else ""
-            )
+        battery_soc_entities = self._find_entities("sensor", "pv_battery_soc_")
+        battery_power_entities = self._find_entities("sensor", "goodwe_battery_power_")
+        battery_ems_entities = self._find_entities("select", "goodwe_", "_ems_mode")
+        battery_limit_entities = self._find_entities("number", "goodwe_", "_peak_shaving_power")
 
-        if len(inverters) > 1:
-            inv2 = inverters[1]
-            prefix2 = inv2.get("prefix", "")
-            mappings["battery_soc_2"] = f"sensor.pv_battery_soc_{prefix2}"
-            mappings["battery_power_2"] = f"sensor.goodwe_battery_power_{prefix2}"
-            mappings["battery_ems_2"] = f"select.goodwe_{prefix2}_ems_mode"
-            mappings["battery_limit_2"] = f"number.goodwe_{prefix2}_ems_power_limit"
+        if battery_soc_entities:
+            # Real entities found — use them
+            for i, soc_eid in enumerate(battery_soc_entities[:2], 1):
+                suffix = soc_eid.split("pv_battery_soc_")[-1]
+                mappings[f"battery_soc_{i}"] = soc_eid
+                mappings[f"battery_power_{i}"] = self._find_by_suffix(
+                    battery_power_entities, suffix, f"sensor.goodwe_battery_power_{suffix}"
+                )
+                mappings[f"battery_ems_{i}"] = self._find_by_suffix(
+                    battery_ems_entities, suffix, f"select.goodwe_{suffix}_ems_mode"
+                )
+                mappings[f"battery_limit_{i}"] = self._find_by_suffix(
+                    battery_limit_entities, suffix, f"number.goodwe_{suffix}_peak_shaving_power"
+                )
+        else:
+            # Fallback: build from detected prefixes
+            for i, inv in enumerate(inverters[:2], 1):
+                prefix = inv.get("prefix", "")
+                if not prefix:
+                    continue
+                mappings[f"battery_soc_{i}"] = f"sensor.pv_battery_soc_{prefix}"
+                mappings[f"battery_power_{i}"] = f"sensor.goodwe_battery_power_{prefix}"
+                mappings[f"battery_ems_{i}"] = f"select.goodwe_{prefix}_ems_mode"
+                mappings[f"battery_limit_{i}"] = f"number.goodwe_{prefix}_peak_shaving_power"
+
+        # Battery temperature
+        temp_entity = self._find_first_entity("sensor", "pv_battery_min_temperature")
+        if temp_entity:
+            mappings["battery_temp_entity"] = temp_entity
 
         # Grid
-        mappings["grid_entity"] = "sensor.house_grid_power"
+        mappings["grid_entity"] = (
+            self._find_first_entity("sensor", "house_grid_power") or "sensor.house_grid_power"
+        )
 
         # PV
-        mappings["pv_entity"] = "sensor.pv_solar_total"
+        mappings["pv_entity"] = (
+            self._find_first_entity("sensor", "pv_solar_total") or "sensor.pv_solar_total"
+        )
 
-        # EV
+        # ── EV ─────────────────────────────────────────────────
         ev_chargers = self._detected.get("ev_chargers", [])
         if ev_chargers:
             ev_prefix = ev_chargers[0].get("prefix", "easee")
@@ -344,19 +368,54 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             mappings["ev_status_entity"] = f"sensor.{ev_prefix}_status"
             mappings["ev_current_entity"] = f"sensor.{ev_prefix}_current"
             mappings["ev_power_entity"] = f"sensor.{ev_prefix}_power"
-            # Auto-detect charger_id from status entity attributes
             charger_id = self._detect_easee_charger_id(ev_prefix)
             if charger_id:
                 mappings["ev_charger_id"] = charger_id
 
-        # Price — primary + fallback
+        # EV SoC — scan for known patterns
+        ev_soc = self._find_first_entity("sensor", "battery_soc", exclude="pv_battery")
+        if not ev_soc:
+            ev_soc = self._find_first_entity("sensor", "ev_soc")
+        if ev_soc:
+            mappings["ev_soc_entity"] = ev_soc
+
+        # ── Price — prefer sources with actual entity_id ──────
         price_sources = self._detected.get("price_sources", [])
-        if price_sources:
-            mappings["price_entity"] = price_sources[0].get("entity_id", "")
-            if len(price_sources) > 1:
-                mappings["price_entity_fallback"] = price_sources[1].get("entity_id", "")
+        # Sort: sources with entity_id first
+        price_with_entity = [p for p in price_sources if p.get("entity_id")]
+        price_without = [p for p in price_sources if not p.get("entity_id")]
+        sorted_prices = price_with_entity + price_without
+
+        if sorted_prices:
+            mappings["price_entity"] = sorted_prices[0].get("entity_id", "")
+            if len(sorted_prices) > 1:
+                mappings["price_entity_fallback"] = sorted_prices[1].get("entity_id", "")
 
         return mappings
+
+    def _find_entities(self, domain: str, prefix: str, suffix: str = "") -> list[str]:
+        """Find all entity_ids matching domain.prefix*suffix pattern."""
+        results = []
+        for state in self.hass.states.async_all(domain):
+            eid = state.entity_id.replace(f"{domain}.", "")
+            if eid.startswith(prefix) and (not suffix or eid.endswith(suffix)):
+                results.append(state.entity_id)
+        return sorted(results)
+
+    def _find_first_entity(self, domain: str, pattern: str, exclude: str = "") -> str:
+        """Find first entity_id containing pattern."""
+        for state in self.hass.states.async_all(domain):
+            if pattern in state.entity_id and (not exclude or exclude not in state.entity_id):
+                return state.entity_id
+        return ""
+
+    @staticmethod
+    def _find_by_suffix(entities: list[str], suffix: str, fallback: str) -> str:
+        """Find entity containing suffix, or return fallback."""
+        for eid in entities:
+            if suffix in eid:
+                return eid
+        return fallback
 
     def _detect_easee_charger_id(self, ev_prefix: str) -> str:
         """Auto-detect Easee charger ID from status entity attributes."""
