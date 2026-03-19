@@ -331,9 +331,14 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         ev_chargers = self._detected.get("ev_chargers", [])
         if ev_chargers:
             ev_prefix = ev_chargers[0].get("prefix", "easee")
+            mappings["ev_prefix"] = ev_prefix
             mappings["ev_status_entity"] = f"sensor.{ev_prefix}_status"
             mappings["ev_current_entity"] = f"sensor.{ev_prefix}_current"
             mappings["ev_power_entity"] = f"sensor.{ev_prefix}_power"
+            # Auto-detect charger_id from status entity attributes
+            charger_id = self._detect_easee_charger_id(ev_prefix)
+            if charger_id:
+                mappings["ev_charger_id"] = charger_id
 
         # Price — primary + fallback
         price_sources = self._detected.get("price_sources", [])
@@ -343,6 +348,16 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 mappings["price_entity_fallback"] = price_sources[1].get("entity_id", "")
 
         return mappings
+
+    def _detect_easee_charger_id(self, ev_prefix: str) -> str:
+        """Auto-detect Easee charger ID from status entity attributes."""
+        status_entity = f"sensor.{ev_prefix}_status"
+        state = self.hass.states.get(status_entity)
+        if state and state.attributes:
+            charger_id = state.attributes.get("id", "")
+            if charger_id:
+                return str(charger_id)
+        return ""
 
     async def _auto_detect(self) -> dict[str, list[dict[str, Any]]]:
         """Auto-detect supported integrations in HA."""

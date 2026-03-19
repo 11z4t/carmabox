@@ -417,20 +417,24 @@ class CarmaboxCard extends HTMLElement {
 
   _evStart() {
     if (!this._hass) return;
-    const entity = this._config.ev_current_entity || "number.easee_home_12840_dynamic_charger_limit";
-    this._hass.callService("number", "set_value", {
-      entity_id: entity,
-      value: 6,
-    });
+    const chargerId = this._config.ev_charger_id;
+    if (chargerId) {
+      this._hass.callService("easee", "set_charger_dynamic_limit", {
+        charger_id: chargerId,
+        current: 6,
+      });
+    }
   }
 
   _evStop() {
     if (!this._hass) return;
-    const entity = this._config.ev_current_entity || "number.easee_home_12840_dynamic_charger_limit";
-    this._hass.callService("number", "set_value", {
-      entity_id: entity,
-      value: 0,
-    });
+    const chargerId = this._config.ev_charger_id;
+    if (chargerId) {
+      this._hass.callService("easee", "set_charger_dynamic_limit", {
+        charger_id: chargerId,
+        current: 0,
+      });
+    }
   }
 }
 

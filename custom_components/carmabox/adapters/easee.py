@@ -30,6 +30,7 @@ class EaseeAdapter(EVAdapter):
         hass: HomeAssistant,
         device_id: str,
         entity_prefix: str = "easee_home_12840",
+        charger_id: str = "",
     ) -> None:
         """Initialize Easee adapter.
 
@@ -37,9 +38,11 @@ class EaseeAdapter(EVAdapter):
             hass: Home Assistant instance.
             device_id: Easee device ID for service calls.
             entity_prefix: Entity prefix (e.g. 'easee_home_12840').
+            charger_id: Easee charger serial (e.g. 'EH128405') for native service calls.
         """
         self.hass = hass
         self.device_id = device_id
+        self.charger_id = charger_id
         self.prefix = entity_prefix
 
     def _state(self, suffix: str, default: float = 0.0) -> float:
@@ -155,13 +158,26 @@ class EaseeAdapter(EVAdapter):
         )
 
     async def set_current(self, amps: int) -> bool:
-        """Set dynamic charger limit (A). Min 6, max 16 (1-phase).
+        """Set dynamic charger limit (A).
 
-        Uses number.set_value (reliable) instead of easee.set_charger_dynamic_limit
-        (returns 500 errors frequently).
+        Uses easee.set_charger_dynamic_limit service (requires charger_id).
+        Falls back to number.set_value if charger_id not available.
         """
         amps = max(0, min(32, amps))
         _LOGGER.info("Easee: set current → %dA", amps)
+
+        # Primary: Easee native service (always works)
+        if self.charger_id:
+            return await self._safe_call(
+                "easee",
+                "set_charger_dynamic_limit",
+                {
+                    "charger_id": self.charger_id,
+                    "current": amps,
+                },
+            )
+
+        # Fallback: number entity (may not exist in newer Easee versions)
         return await self._safe_call(
             "number",
             "set_value",
