@@ -16,6 +16,17 @@ from datetime import datetime
 
 
 @dataclass
+class DailySavings:
+    """One day's savings for trend tracking."""
+
+    date: str  # ISO format YYYY-MM-DD
+    peak_kr: float = 0.0
+    discharge_kr: float = 0.0
+    grid_charge_kr: float = 0.0
+    total_kr: float = 0.0
+
+
+@dataclass
 class SavingsState:
     """Running savings state for the current month."""
 
@@ -35,6 +46,13 @@ class SavingsState:
     # Counters
     total_discharge_kwh: float = 0.0
     total_grid_charge_kwh: float = 0.0
+
+    # Daily savings trend (last 30 days)
+    daily_savings: list[DailySavings] = field(default_factory=list)
+
+    # What-if: estimated total electricity cost without CARMA Box
+    baseline_cost_kr: float = 0.0
+    actual_cost_kr: float = 0.0
 
 
 def reset_if_new_month(state: SavingsState, now: datetime) -> SavingsState:
@@ -156,6 +174,85 @@ def total_savings(
     return round(peak + state.discharge_savings_kr + state.grid_charge_savings_kr, 1)
 
 
+def record_daily_snapshot(
+    state: SavingsState,
+    date_str: str,
+    cost_per_kw: float = 80.0,
+    top_n: int = 3,
+) -> None:
+    """Snapshot today's savings into the daily trend list.
+
+    Call once per day (or idempotently — same date updates in place).
+    Keeps max 30 days of history.
+
+    Args:
+        state: Current savings state.
+        date_str: ISO date string (YYYY-MM-DD).
+        cost_per_kw: Grid operator peak cost (kr/kW/month).
+        top_n: Number of top peaks.
+    """
+    peak_kr = calculate_peak_savings(state, cost_per_kw, top_n)
+    total = round(peak_kr + state.discharge_savings_kr + state.grid_charge_savings_kr, 1)
+
+    entry = DailySavings(
+        date=date_str,
+        peak_kr=round(peak_kr, 1),
+        discharge_kr=round(state.discharge_savings_kr, 1),
+        grid_charge_kr=round(state.grid_charge_savings_kr, 1),
+        total_kr=total,
+    )
+
+    # Update or append
+    for i, ds in enumerate(state.daily_savings):
+        if ds.date == date_str:
+            state.daily_savings[i] = entry
+            return
+    state.daily_savings.append(entry)
+    # Keep max 30 days
+    if len(state.daily_savings) > 30:
+        state.daily_savings = state.daily_savings[-30:]
+
+
+def record_cost_estimate(
+    state: SavingsState,
+    consumption_kwh: float,
+    price_ore: float,
+    battery_discharge_kwh: float,
+) -> None:
+    """Track what-if cost comparison.
+
+    Accumulates estimated electricity cost with and without CARMA Box.
+
+    Args:
+        state: Current savings state.
+        consumption_kwh: Household consumption this interval (kWh).
+        price_ore: Current electricity price (öre/kWh).
+        battery_discharge_kwh: Energy discharged from battery this interval (kWh).
+    """
+    cost_per_kwh = price_ore / 100  # öre → kr
+
+    # Without CARMA Box: all consumption from grid
+    state.baseline_cost_kr += consumption_kwh * cost_per_kwh
+
+    # With CARMA Box: consumption minus battery discharge from grid
+    grid_consumption = max(0, consumption_kwh - battery_discharge_kwh)
+    state.actual_cost_kr += grid_consumption * cost_per_kwh
+
+
+def peak_comparison(
+    state: SavingsState,
+    top_n: int = 3,
+) -> dict[str, list[float]]:
+    """Return top-N peaks with vs without CARMA Box.
+
+    Returns:
+        Dict with 'actual' and 'baseline' peak lists (kW), sorted descending.
+    """
+    actual = [round(p, 1) for p in state.peak_samples[:top_n]]
+    baseline = [round(p, 1) for p in state.baseline_peak_samples[:top_n]]
+    return {"actual": actual, "baseline": baseline}
+
+
 def savings_breakdown(
     state: SavingsState,
     cost_per_kw: float = 80.0,
@@ -171,3 +268,51 @@ def savings_breakdown(
         "total_discharge_kwh": round(state.total_discharge_kwh, 1),
         "total_grid_charge_kwh": round(state.total_grid_charge_kwh, 1),
     }
+
+
+def savings_whatif(
+    state: SavingsState,
+    cost_per_kw: float = 80.0,
+    top_n: int = 3,
+) -> dict[str, float]:
+    """What-if comparison: cost with vs without CARMA Box.
+
+    Returns:
+        Dict with baseline_cost_kr, actual_cost_kr, peak costs, and totals.
+    """
+    # Peak cost component
+    actual_peaks = state.peak_samples[:top_n]
+    baseline_peaks = state.baseline_peak_samples[:top_n]
+    peak_cost_actual = (
+        round(sum(actual_peaks) / len(actual_peaks) * cost_per_kw, 1) if actual_peaks else 0.0
+    )
+    peak_cost_baseline = (
+        round(sum(baseline_peaks) / len(baseline_peaks) * cost_per_kw, 1) if baseline_peaks else 0.0
+    )
+
+    without_carma = round(state.baseline_cost_kr + peak_cost_baseline, 0)
+    with_carma = round(state.actual_cost_kr + peak_cost_actual, 0)
+
+    return {
+        "without_carma_kr": without_carma,
+        "with_carma_kr": with_carma,
+        "saved_kr": round(without_carma - with_carma, 0),
+    }
+
+
+def daily_trend(state: SavingsState) -> list[dict[str, object]]:
+    """Return daily savings trend for the last 30 days.
+
+    Returns:
+        List of dicts with date, peak_kr, discharge_kr, grid_charge_kr, total_kr.
+    """
+    return [
+        {
+            "date": ds.date,
+            "peak_kr": ds.peak_kr,
+            "discharge_kr": ds.discharge_kr,
+            "grid_charge_kr": ds.grid_charge_kr,
+            "total_kr": ds.total_kr,
+        }
+        for ds in state.daily_savings
+    ]

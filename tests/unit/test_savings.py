@@ -5,13 +5,19 @@ from __future__ import annotations
 from datetime import datetime
 
 from custom_components.carmabox.optimizer.savings import (
+    DailySavings,
     SavingsState,
     calculate_peak_savings,
+    daily_trend,
+    peak_comparison,
+    record_cost_estimate,
+    record_daily_snapshot,
     record_discharge,
     record_grid_charge,
     record_peak,
     reset_if_new_month,
     savings_breakdown,
+    savings_whatif,
     total_savings,
 )
 
@@ -183,3 +189,95 @@ class TestDailyResetAndAvgPrice:
         record_grid_charge(state, 2.0, 20.0, 50.0)  # 2*(50-20)/100 = 0.6
         assert abs(state.grid_charge_savings_kr - 1.0) < 0.01
         assert state.total_grid_charge_kwh == 3.0
+
+
+class TestDailySnapshot:
+    def test_creates_entry(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.discharge_savings_kr = 10.0
+        state.grid_charge_savings_kr = 5.0
+        state.peak_samples = [2.0, 2.0, 2.0]
+        state.baseline_peak_samples = [4.0, 4.0, 4.0]
+        record_daily_snapshot(state, "2026-03-15")
+        assert len(state.daily_savings) == 1
+        assert state.daily_savings[0].date == "2026-03-15"
+        assert state.daily_savings[0].discharge_kr == 10.0
+
+    def test_updates_same_date(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.discharge_savings_kr = 5.0
+        record_daily_snapshot(state, "2026-03-15")
+        state.discharge_savings_kr = 15.0
+        record_daily_snapshot(state, "2026-03-15")
+        assert len(state.daily_savings) == 1
+        assert state.daily_savings[0].discharge_kr == 15.0
+
+    def test_max_30_days(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        for i in range(35):
+            record_daily_snapshot(state, f"2026-03-{i + 1:02d}")
+        assert len(state.daily_savings) == 30
+
+
+class TestCostEstimate:
+    def test_accumulates_costs(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        # 2 kWh consumption, 100 öre, 1 kWh from battery
+        record_cost_estimate(state, 2.0, 100.0, 1.0)
+        # Without CARMA: 2 kWh × 1 kr = 2 kr
+        assert abs(state.baseline_cost_kr - 2.0) < 0.01
+        # With CARMA: (2-1) kWh × 1 kr = 1 kr
+        assert abs(state.actual_cost_kr - 1.0) < 0.01
+
+    def test_no_negative_grid(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        # Battery discharge exceeds consumption
+        record_cost_estimate(state, 1.0, 100.0, 2.0)
+        assert state.actual_cost_kr == 0.0  # max(0, 1-2) = 0
+
+
+class TestWhatIf:
+    def test_whatif_with_data(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.baseline_cost_kr = 4000.0
+        state.actual_cost_kr = 3500.0
+        state.peak_samples = [2.0, 2.0, 2.0]
+        state.baseline_peak_samples = [4.0, 4.0, 4.0]
+        result = savings_whatif(state, cost_per_kw=80.0)
+        assert result["without_carma_kr"] > result["with_carma_kr"]
+        assert result["saved_kr"] > 0
+
+    def test_whatif_empty_state(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        result = savings_whatif(state)
+        assert result["without_carma_kr"] == 0
+        assert result["with_carma_kr"] == 0
+
+
+class TestPeakComparison:
+    def test_returns_peaks(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.peak_samples = [2.1, 1.9, 1.8]
+        state.baseline_peak_samples = [4.5, 3.8, 3.2]
+        result = peak_comparison(state)
+        assert result["actual"] == [2.1, 1.9, 1.8]
+        assert result["baseline"] == [4.5, 3.8, 3.2]
+
+    def test_empty_state(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        result = peak_comparison(state)
+        assert result["actual"] == []
+        assert result["baseline"] == []
+
+
+class TestDailyTrend:
+    def test_returns_trend_data(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.daily_savings = [
+            DailySavings(date="2026-03-14", total_kr=10.0),
+            DailySavings(date="2026-03-15", total_kr=25.0),
+        ]
+        result = daily_trend(state)
+        assert len(result) == 2
+        assert result[0]["date"] == "2026-03-14"
+        assert result[1]["total_kr"] == 25.0

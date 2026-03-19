@@ -25,7 +25,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import BatteryCommand, CarmaboxCoordinator
-from .optimizer.savings import savings_breakdown, total_savings
+from .optimizer.savings import (
+    daily_trend,
+    peak_comparison,
+    savings_breakdown,
+    savings_whatif,
+    total_savings,
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -91,9 +97,13 @@ def _savings_value(coord: CarmaboxCoordinator) -> float:
 
 
 def _savings_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
-    """Savings breakdown."""
+    """Savings breakdown with what-if, trend, and peak comparison."""
     cost = float(coord.entry.options.get("peak_cost_per_kw", 80.0))
-    return dict(savings_breakdown(coord.savings, cost))
+    attrs: dict[str, Any] = dict(savings_breakdown(coord.savings, cost))
+    attrs["whatif"] = savings_whatif(coord.savings, cost)
+    attrs["trend"] = daily_trend(coord.savings)
+    attrs["peaks"] = peak_comparison(coord.savings)
+    return attrs
 
 
 def _decision_value(coord: CarmaboxCoordinator) -> str:

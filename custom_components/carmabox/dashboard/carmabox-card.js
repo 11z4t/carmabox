@@ -131,9 +131,43 @@ class CarmaboxCard extends HTMLElement {
 
         /* Savings */
         .cb-savings { background: var(--card-background-color, var(--ha-card-background)); border: 1px solid var(--divider-color); border-radius: 10px; padding: 12px; margin-bottom: 14px; }
-        .cb-sav-total { font-size: 1.3em; font-weight: 600; text-align: center; color: var(--cb-charge); }
-        .cb-sav-label { font-size: 0.7em; color: var(--secondary-text-color); text-align: center; }
-        .cb-sav-detail { display: flex; justify-content: space-around; font-size: 0.72em; color: var(--secondary-text-color); margin-top: 6px; }
+        .cb-sav-hero { text-align: center; margin-bottom: 10px; }
+        .cb-sav-total { font-size: 1.6em; font-weight: 700; color: var(--cb-charge); margin-top: 4px; }
+        .cb-sav-label { font-size: 0.75em; color: var(--secondary-text-color); }
+        .cb-sav-breakdown { display: flex; justify-content: space-around; margin-bottom: 10px; padding: 8px 0; border-top: 1px solid var(--divider-color); border-bottom: 1px solid var(--divider-color); }
+        .cb-sav-cat { text-align: center; }
+        .cb-sav-cat-val { font-size: 1.1em; font-weight: 600; color: var(--primary-text-color); }
+        .cb-sav-cat-lbl { font-size: 0.65em; color: var(--secondary-text-color); }
+
+        /* What-if */
+        .cb-whatif { margin: 10px 0; padding: 8px; background: rgba(76,175,80,0.06); border-radius: 8px; }
+        .cb-whatif-title { font-size: 0.7em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+        .cb-whatif-row { display: flex; align-items: center; justify-content: space-around; }
+        .cb-whatif-item { text-align: center; flex: 1; }
+        .cb-whatif-arrow { flex: 0; padding: 0 8px; }
+        .cb-whatif-val { font-size: 1.15em; font-weight: 600; }
+        .cb-whatif-without .cb-whatif-val { color: var(--error-color, #f44336); }
+        .cb-whatif-with .cb-whatif-val { color: var(--cb-charge); }
+        .cb-whatif-lbl { font-size: 0.65em; color: var(--secondary-text-color); }
+
+        /* Peak comparison */
+        .cb-peaks { margin: 10px 0; }
+        .cb-peaks-title { font-size: 0.7em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .cb-peaks-legend { display: flex; gap: 12px; font-size: 0.65em; color: var(--secondary-text-color); margin-bottom: 6px; }
+        .cb-peak-row { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+        .cb-peak-rank { font-size: 0.7em; color: var(--secondary-text-color); min-width: 20px; }
+        .cb-peak-bars { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+        .cb-peak-bar { height: 14px; border-radius: 3px; font-size: 0.6em; line-height: 14px; padding-left: 4px; color: #fff; min-width: 32px; white-space: nowrap; }
+        .cb-peak-actual { background: var(--cb-charge); }
+        .cb-peak-baseline { background: var(--error-color, #f44336); opacity: 0.7; }
+
+        /* Trend graph */
+        .cb-trend { margin-top: 10px; }
+        .cb-trend-title { font-size: 0.7em; color: var(--secondary-text-color); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .cb-trend-svg { width: 100%; height: 50px; }
+        .cb-trend-line { fill: none; stroke: var(--cb-charge); stroke-width: 1.5; }
+        .cb-trend-area { fill: var(--cb-charge); opacity: 0.1; }
+        .cb-trend-labels { display: flex; justify-content: space-between; font-size: 0.6em; color: var(--secondary-text-color); }
 
         /* Plan section */
         .cb-plan { margin-bottom: 8px; }
@@ -252,14 +286,122 @@ class CarmaboxCard extends HTMLElement {
   }
 
   _renderSavings(savings, peak, discharge, gridCharge) {
+    const whatif = this._attr("savings_month", "whatif") || {};
+    const trend = this._attr("savings_month", "trend") || [];
+    const peaks = this._attr("savings_month", "peaks") || {};
+
     return `
       <div class="cb-savings">
-        <div class="cb-sav-total">${this._fmt(savings, " kr")}</div>
-        <div class="cb-sav-label">Besparing denna manad</div>
-        <div class="cb-sav-detail">
-          <span>Effekt: ${peak} kr</span>
-          <span>Pris: ${discharge} kr</span>
-          <span>Nat: ${gridCharge} kr</span>
+        <div class="cb-sav-hero">
+          <ha-icon icon="mdi:piggy-bank" style="--mdc-icon-size:28px;color:var(--cb-charge)"></ha-icon>
+          <div class="cb-sav-total">Sparat ${this._fmt(savings, " kr")}</div>
+          <div class="cb-sav-label">denna manad</div>
+        </div>
+
+        <div class="cb-sav-breakdown">
+          <div class="cb-sav-cat">
+            <div class="cb-sav-cat-val">${peak} kr</div>
+            <div class="cb-sav-cat-lbl">Effektavgift</div>
+          </div>
+          <div class="cb-sav-cat">
+            <div class="cb-sav-cat-val">${discharge} kr</div>
+            <div class="cb-sav-cat-lbl">Prisoptimering</div>
+          </div>
+          <div class="cb-sav-cat">
+            <div class="cb-sav-cat-val">${gridCharge} kr</div>
+            <div class="cb-sav-cat-lbl">Natladdning</div>
+          </div>
+        </div>
+
+        ${this._renderWhatIf(whatif)}
+        ${this._renderPeakComparison(peaks)}
+        ${this._renderTrend(trend)}
+      </div>`;
+  }
+
+  _renderWhatIf(whatif) {
+    if (!whatif || !whatif.without_carma_kr) return "";
+    return `
+      <div class="cb-whatif">
+        <div class="cb-whatif-title">What-if</div>
+        <div class="cb-whatif-row">
+          <div class="cb-whatif-item cb-whatif-without">
+            <div class="cb-whatif-val">${Math.round(whatif.without_carma_kr)} kr</div>
+            <div class="cb-whatif-lbl">Utan CARMA Box</div>
+          </div>
+          <div class="cb-whatif-arrow">
+            <ha-icon icon="mdi:arrow-right" style="--mdc-icon-size:20px;color:var(--cb-charge)"></ha-icon>
+          </div>
+          <div class="cb-whatif-item cb-whatif-with">
+            <div class="cb-whatif-val">${Math.round(whatif.with_carma_kr)} kr</div>
+            <div class="cb-whatif-lbl">Med CARMA Box</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  _renderPeakComparison(peaks) {
+    if (!peaks || !peaks.baseline || !peaks.baseline.length) return "";
+    const actual = peaks.actual || [];
+    const baseline = peaks.baseline || [];
+    const maxPeak = Math.max(...baseline, ...actual, 1);
+
+    let rows = "";
+    for (let i = 0; i < Math.max(actual.length, baseline.length); i++) {
+      const a = actual[i] != null ? actual[i] : 0;
+      const b = baseline[i] != null ? baseline[i] : 0;
+      const aPct = Math.round((a / maxPeak) * 100);
+      const bPct = Math.round((b / maxPeak) * 100);
+      rows += `
+        <div class="cb-peak-row">
+          <span class="cb-peak-rank">#${i + 1}</span>
+          <div class="cb-peak-bars">
+            <div class="cb-peak-bar cb-peak-actual" style="width:${aPct}%">${a} kW</div>
+            <div class="cb-peak-bar cb-peak-baseline" style="width:${bPct}%">${b} kW</div>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="cb-peaks">
+        <div class="cb-peaks-title">Effekttoppar: Dina vs Utan CARMA</div>
+        <div class="cb-peaks-legend">
+          <span><span class="cb-legend-dot" style="background:var(--cb-charge)"></span>Med</span>
+          <span><span class="cb-legend-dot" style="background:var(--error-color,#f44336)"></span>Utan</span>
+        </div>
+        ${rows}
+      </div>`;
+  }
+
+  _renderTrend(trend) {
+    if (!trend || trend.length < 2) return "";
+    const maxVal = Math.max(...trend.map(d => d.total_kr), 1);
+    const w = 100;
+    const h = 50;
+    const n = trend.length;
+
+    // Build SVG polyline points
+    const points = trend.map((d, i) => {
+      const x = (i / (n - 1)) * w;
+      const y = h - (d.total_kr / maxVal) * (h - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    });
+    const linePoints = points.join(" ");
+    const areaPoints = `0,${h} ${linePoints} ${w},${h}`;
+
+    const first = trend[0];
+    const last = trend[trend.length - 1];
+
+    return `
+      <div class="cb-trend">
+        <div class="cb-trend-title">Sparande senaste ${n} dagar</div>
+        <svg class="cb-trend-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+          <polygon class="cb-trend-area" points="${areaPoints}" />
+          <polyline class="cb-trend-line" points="${linePoints}" />
+        </svg>
+        <div class="cb-trend-labels">
+          <span>${first.date.slice(5)}</span>
+          <span>${last.total_kr} kr</span>
+          <span>${last.date.slice(5)}</span>
         </div>
       </div>`;
   }

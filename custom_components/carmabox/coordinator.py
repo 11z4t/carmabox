@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_MAX_DISCHARGE_KW,
     DEFAULT_MAX_GRID_CHARGE_KW,
     DEFAULT_NIGHT_WEIGHT,
+    DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
@@ -60,6 +61,8 @@ from .optimizer.report import reset_if_new_month as reset_report_month
 from .optimizer.safety_guard import SafetyGuard
 from .optimizer.savings import (
     SavingsState,
+    record_cost_estimate,
+    record_daily_snapshot,
     record_discharge,
     record_grid_charge,
     record_peak,
@@ -679,8 +682,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._daily_avg_price,
             )
 
-        # Record daily sample for monthly report
+        # What-if cost tracking
+        consumption_kw = max(0, state.grid_power_w) / 1000 + battery_discharge_kw
+        record_cost_estimate(
+            self.savings,
+            consumption_kw * interval_hours,
+            state.current_price,
+            battery_discharge_kw * interval_hours,
+        )
+
+        # Daily savings snapshot for trend graph
         today = datetime.now().strftime("%Y-%m-%d")
+        cost = float(self.entry.options.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
+        record_daily_snapshot(self.savings, today, cost)
+
+        # Record daily sample for monthly report
         sample = DailySample(
             date=today,
             peak_kw=weighted_kw,
