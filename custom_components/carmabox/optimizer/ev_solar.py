@@ -9,6 +9,8 @@ Priority: battery > EV > export.
 
 from __future__ import annotations
 
+from ..const import DEFAULT_VOLTAGE
+
 
 def should_start_solar_ev(
     pv_surplus_kw: float,
@@ -73,7 +75,7 @@ def calculate_solar_ev_amps(
     pv_surplus_kw: float,
     min_amps: int = 6,
     max_amps: int = 16,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
 ) -> int:
     """Calculate EV amps from PV surplus.
 

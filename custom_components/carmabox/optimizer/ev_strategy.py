@@ -12,6 +12,8 @@ Calculates per-hour EV charge schedule based on:
 
 from __future__ import annotations
 
+from ..const import DEFAULT_VOLTAGE
+
 
 def calculate_ev_schedule(
     start_hour: int,
@@ -27,7 +29,7 @@ def calculate_ev_schedule(
     full_charge_interval_days: int = 7,
     min_amps: int = 6,
     max_amps: int = 16,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
     battery_kwh_available: float = 0.0,
     pv_tomorrow_kwh: float = 0.0,
     daily_consumption_kwh: float = 15.0,

@@ -13,6 +13,8 @@ Keeps grid import at or below target at all times.
 
 from __future__ import annotations
 
+from ..const import DEFAULT_SPIKE_THRESHOLD_KW, DEFAULT_VOLTAGE
+
 
 def calculate_dynamic_amps(
     house_load_kw: float,
@@ -22,7 +24,7 @@ def calculate_dynamic_amps(
     battery_discharge_kw: float = 0.0,
     min_amps: int = 0,
     max_amps: int = 16,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
 ) -> int:
     """Calculate optimal EV amps for current conditions.
 
@@ -63,7 +65,7 @@ def calculate_dynamic_amps(
 def detect_appliance_spike(
     current_load_kw: float,
     previous_load_kw: float,
-    spike_threshold_kw: float = 1.0,
+    spike_threshold_kw: float = DEFAULT_SPIKE_THRESHOLD_KW,
 ) -> bool:
     """Detect sudden load spike (dishwasher, dryer, etc.).
 
@@ -75,7 +77,7 @@ def detect_appliance_spike(
 def calculate_spike_response(
     current_ev_amps: int,
     spike_kw: float,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
     min_amps: int = 0,
 ) -> int:
     """Reduce EV amps to compensate for appliance spike.
