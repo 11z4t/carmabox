@@ -124,6 +124,13 @@ def calculate_ev_schedule(
 
     battery_support_per_hour = battery_budget_kwh / len(night_slots) if night_slots else 0.0
 
+    # ── Adjust price thresholds based on tomorrow's PV ─────
+    # If sunny tomorrow → batteries refill for free → price doesn't matter
+    # Charge EV regardless of cost tonight
+    solar_refill = pv_tomorrow_kwh > battery_kwh_available / battery_efficiency
+    effective_price_cheap = 999 if solar_refill else PRICE_CHEAP  # Everything is "cheap"
+    effective_price_normal = 999 if solar_refill else PRICE_NORMAL
+
     # ── Sort by price (cheapest first) ────────────────────
     sorted_slots = sorted(night_slots, key=lambda s: s["price"])
 
@@ -150,11 +157,11 @@ def calculate_ev_schedule(
         grid_headroom_kw = (target_weighted_kw / w - effective_load) if w > 0 else max_kw
         grid_headroom_kw = max(0, grid_headroom_kw)
 
-        # Pick amps based on price tier
-        if price < PRICE_CHEAP:
-            # Cheap — charge at max that fits under target
+        # Pick amps based on price tier (adjusted for tomorrow's solar)
+        if price < effective_price_cheap:
+            # Cheap (or solar refill) — charge at max that fits under target
             desired_kw = min(max_kw, grid_headroom_kw)
-        elif price < PRICE_NORMAL:
+        elif price < effective_price_normal:
             # Normal — smyg-ladda at min amps
             desired_kw = min(min_kw, grid_headroom_kw) if grid_headroom_kw >= min_kw else 0.0
         else:
