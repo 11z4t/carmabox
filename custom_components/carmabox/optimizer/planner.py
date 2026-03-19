@@ -102,8 +102,8 @@ def generate_plan(
                 battery_kw = charge_kw
                 soc_kwh += charge_kw * battery_efficiency
                 action = "g"
-                # Grid charge adds to net load
-                net += charge_kw
+                # Grid charge: battery_kw already accounts for the charge load
+                # net stays unchanged — grid = net + battery_kw handles it
 
         elif net * w > target_weighted_kw:
             # Load above target — discharge battery

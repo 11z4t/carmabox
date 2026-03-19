@@ -640,7 +640,8 @@ class CarmaboxOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Main options page."""
         if user_input is not None:
-            return self.async_create_entry(data=user_input)
+            # Merge with existing options to preserve entity mappings
+            return self.async_create_entry(data={**self.entry.options, **user_input})
 
         opts = self.entry.options
 

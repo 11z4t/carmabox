@@ -715,7 +715,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── RULE 3: Load > target → discharge ────────────────
-        if weighted_net > target_w:
+        if weighted_net > target_w and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
             reasoning.append(
                 f"Grid {weighted_net / 1000:.1f} kW viktat > target {self.target_kw:.1f} kW "
@@ -799,7 +799,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     ) -> None:
         """Record a decision for transparency + logging."""
         hour = datetime.now().hour
-        weight = ellevio_weight(hour)
+        night_wt = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        weight = ellevio_weight(hour, night_weight=night_wt)
         decision = Decision(
             timestamp=datetime.now().isoformat(),
             action=action,
@@ -1149,7 +1150,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             "Write-verify FAILED: expected=%s actual=%s", mode, adapter.ems_mode
                         )
                         self._daily_safety_blocks += 1
-                    success = True
+                    else:
+                        success = True
         else:
             # Legacy: raw entity-based control
             for ems_key in ("battery_ems_1", "battery_ems_2"):
@@ -1206,7 +1208,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             adapter.ems_mode,
                         )
                         self._daily_safety_blocks += 1
-                    success = True
+                    else:
+                        success = True
         else:
             # Legacy: raw entity-based control
             for ems_key in ("battery_ems_1", "battery_ems_2"):
@@ -1282,6 +1285,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         adapter.ems_mode,
                     )
                     self._daily_safety_blocks += 1
+                    continue  # K3: Do NOT set limit if mode wrong
                 await adapter.set_discharge_limit(w)
                 success = True
 
