@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from custom_components.carmabox.adapters.easee import EaseeAdapter
 from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
@@ -334,3 +335,96 @@ class TestNordpoolAdapterEdgeCases:
         hass = _make_hass(("sensor.easee_home_12840_current", ""))
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         assert adapter.current_a == 0.0
+
+
+class TestGoodWeSafeCall:
+    """Error handling in GoodWe adapter _safe_call."""
+
+    @pytest.mark.asyncio
+    async def test_service_not_found(self) -> None:
+        hass = _make_hass()
+        hass.services.async_call = AsyncMock(side_effect=ServiceNotFound("select", "select_option"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_ems_mode("charge_pv")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ha_error_retries(self) -> None:
+        hass = _make_hass()
+        hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("modbus timeout"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
+            result = await adapter.set_ems_mode("charge_pv")
+        assert result is False
+        assert hass.services.async_call.call_count == 2  # 1 + 1 retry
+
+    @pytest.mark.asyncio
+    async def test_unexpected_error_retries(self) -> None:
+        hass = _make_hass()
+        hass.services.async_call = AsyncMock(side_effect=RuntimeError("unexpected"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
+            result = await adapter.set_ems_mode("charge_pv")
+        assert result is False
+        assert hass.services.async_call.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_set_fast_charging_partial_failure(self) -> None:
+        """If switch succeeds but power set fails → returns False."""
+        hass = _make_hass()
+        calls = 0
+
+        async def side_effect(*args: object, **kwargs: object) -> None:
+            nonlocal calls
+            calls += 1
+            if calls >= 2:  # power_pct call (and retry) fails
+                raise HomeAssistantError("fail")
+
+        hass.services.async_call = AsyncMock(side_effect=side_effect)
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
+            result = await adapter.set_fast_charging(on=True, power_pct=80, soc_target=90)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_set_discharge_limit_returns_bool(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_discharge_limit(500)
+        assert result is True
+
+
+class TestEaseeSafeCall:
+    """Error handling in Easee adapter _safe_call."""
+
+    @pytest.mark.asyncio
+    async def test_service_not_found(self) -> None:
+        hass = _make_hass()
+        hass.services.async_call = AsyncMock(side_effect=ServiceNotFound("switch", "turn_on"))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        result = await adapter.enable()
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_ha_error_retries(self) -> None:
+        hass = _make_hass()
+        hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("timeout"))
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        with patch("custom_components.carmabox.adapters.easee._RETRY_DELAY_S", 0):
+            result = await adapter.set_current(6)
+        assert result is False
+        assert hass.services.async_call.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_disable_returns_bool(self) -> None:
+        hass = _make_hass()
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        result = await adapter.disable()
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_enable_returns_bool(self) -> None:
+        hass = _make_hass()
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        result = await adapter.enable()
+        assert result is True
