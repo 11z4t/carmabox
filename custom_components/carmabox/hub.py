@@ -176,6 +176,7 @@ class HubSyncClient:
             self._last_sync = datetime.now()
             return True
         except Exception:
+            _LOGGER.debug("MQTT publish failed", exc_info=True)
             return False
 
     def publish_plan(self, plan_data: list[dict[str, Any]]) -> bool:
@@ -187,6 +188,7 @@ class HubSyncClient:
             self._mqtt_client.publish(f"{self.topic_prefix}/plan", payload, qos=1)
             return True
         except Exception:
+            _LOGGER.debug("MQTT publish failed", exc_info=True)
             return False
 
     def publish_savings(self, savings: SavingsState) -> bool:
@@ -198,6 +200,7 @@ class HubSyncClient:
             self._mqtt_client.publish(f"{self.topic_prefix}/savings", payload, qos=1)
             return True
         except Exception:
+            _LOGGER.debug("MQTT publish failed", exc_info=True)
             return False
 
     def publish_status(self, version: str = "1.0.0", error_count: int = 0) -> bool:
@@ -216,6 +219,7 @@ class HubSyncClient:
             self._mqtt_client.publish(f"{self.topic_prefix}/status", payload, qos=0)
             return True
         except Exception:
+            _LOGGER.debug("MQTT publish failed", exc_info=True)
             return False
 
     # ── HTTPS Fallback ──────────────────────────────────────
