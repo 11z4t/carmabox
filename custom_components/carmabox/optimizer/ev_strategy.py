@@ -156,6 +156,52 @@ def calculate_ev_schedule(
     return schedule
 
 
+def calculate_ev_multinight_plan(
+    ev_soc_pct: float,
+    ev_capacity_kwh: float,
+    target_soc: float,
+    tonight_max_kwh: float,
+    pv_tomorrow_kwh: float,
+    daily_consumption_kwh: float,
+    battery_cap_kwh: float,
+) -> dict[str, object]:
+    """Calculate multi-night EV charging plan.
+
+    Returns a human-readable plan showing what happens tonight vs tomorrow.
+    """
+    energy_needed = max(0, (target_soc - ev_soc_pct) / 100 * ev_capacity_kwh)
+    tonight_soc = min(100, ev_soc_pct + (tonight_max_kwh / ev_capacity_kwh * 100))
+    remaining_after_tonight = max(0, energy_needed - tonight_max_kwh)
+
+    # Tomorrow night: estimate battery support from PV
+    pv_surplus = max(0, pv_tomorrow_kwh - daily_consumption_kwh)
+    tomorrow_battery_kwh = min(battery_cap_kwh * 0.85, pv_surplus)
+    tomorrow_max_kwh = 2.0 * 8 + tomorrow_battery_kwh
+    tomorrow_soc = min(100, tonight_soc + (tomorrow_max_kwh / ev_capacity_kwh * 100))
+
+    can_reach_tonight = tonight_soc >= target_soc
+
+    return {
+        "current_soc": round(ev_soc_pct, 0),
+        "target_soc": target_soc,
+        "tonight_soc": round(tonight_soc, 0),
+        "tonight_kwh": round(tonight_max_kwh, 1),
+        "tomorrow_soc": round(tomorrow_soc, 0) if not can_reach_tonight else None,
+        "tomorrow_kwh": round(remaining_after_tonight, 1) if not can_reach_tonight else 0,
+        "pv_tomorrow_kwh": round(pv_tomorrow_kwh, 0),
+        "battery_support_kwh": round(tomorrow_battery_kwh, 1),
+        "nights_needed": 1 if can_reach_tonight else 2,
+        "plan_text": (
+            f"EV {ev_soc_pct:.0f}% → {tonight_soc:.0f}% ikväll"
+            + (
+                f", {tomorrow_soc:.0f}% imorgon (sol {pv_tomorrow_kwh:.0f} kWh)"
+                if not can_reach_tonight
+                else ""
+            )
+        ),
+    }
+
+
 def ev_needs_charge(ev_soc_pct: float, morning_target_soc: float = 75.0) -> bool:
     """Check if EV needs charging tonight."""
     return 0 <= ev_soc_pct < morning_target_soc
