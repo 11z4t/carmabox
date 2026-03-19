@@ -81,11 +81,16 @@ class TestConsumptionProfile:
         assert not p.is_learned
 
     def test_get_profile_weekday(self) -> None:
+        """After MIN_SAMPLES_FOR_LEARNED, weekday profile reflects learned data."""
         p = ConsumptionProfile()
-        for _ in range(50):
-            p.update(12, 5.0, is_weekend=False)
+        # Need 168+ total samples to unlock learned profiles
+        for _ in range(7):
+            for hour in range(24):
+                p.update(hour, 5.0 if hour == 12 else 1.0, is_weekend=False)
+        assert p.total_samples >= 168
         profile = p.get_profile(is_weekend=False)
-        assert profile[12] > p.get_profile(is_weekend=True)[12]  # Weekday updated, weekend not
+        # Hour 12 should have converged toward 5.0 (higher than default 1.5)
+        assert profile[12] > 1.5
 
     def test_get_profile_for_date(self) -> None:
         p = ConsumptionProfile()

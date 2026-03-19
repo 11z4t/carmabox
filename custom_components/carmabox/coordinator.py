@@ -86,6 +86,9 @@ SAVINGS_STORE_VERSION = 1
 SAVINGS_STORE_KEY = "carmabox_savings"
 SAVINGS_SAVE_INTERVAL = 300  # Save at most every 5 minutes
 
+CONSUMPTION_STORE_VERSION = 1
+CONSUMPTION_STORE_KEY = "carmabox_consumption_profile"
+
 
 class BatteryCommand(Enum):
     """Battery command state — replaces fragile string comparison."""
@@ -116,7 +119,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             min_soc=self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
         )
         self.plan: list[HourPlan] = []
-        self._plan_counter = 0
+        # Start at threshold-1 so first update generates a plan immediately
+        self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
 
         # ── Inverter adapters ─────────────────────────────────
@@ -155,13 +159,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.hourly_actuals: list[HourActual] = []
         self._last_tracked_hour: int = -1
 
-        # Consumption learning
-        stored = self._cfg.get("consumption_profile", {})
-        self.consumption_profile = (
-            ConsumptionProfile.from_dict(stored)
-            if isinstance(stored, dict) and stored
-            else ConsumptionProfile()
+        # Consumption learning (persistent via Store)
+        self.consumption_profile = ConsumptionProfile()
+        self._consumption_store: Store[dict[str, Any]] = Store(
+            hass, CONSUMPTION_STORE_VERSION, CONSUMPTION_STORE_KEY
         )
+        self._consumption_loaded = False
+        self._consumption_last_save: float = 0.0
+        self._consumption_last_hour: int = -1
         self._current_date = datetime.now().strftime("%Y-%m-%d")
         self._daily_avg_price: float = float(
             self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
@@ -239,15 +244,51 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Failed to save savings", exc_info=True)
 
+    async def _async_restore_consumption(self) -> None:
+        """Restore consumption profile from persistent storage."""
+        try:
+            data = await self._consumption_store.async_load()
+            if data and isinstance(data, dict):
+                self.consumption_profile = ConsumptionProfile.from_dict(data)
+                _LOGGER.info(
+                    "Restored consumption profile: %d weekday + %d weekend samples",
+                    self.consumption_profile.samples_weekday,
+                    self.consumption_profile.samples_weekend,
+                )
+            else:
+                # Fall back to config entry options (migration from older versions)
+                stored = self._cfg.get("consumption_profile", {})
+                if isinstance(stored, dict) and stored:
+                    self.consumption_profile = ConsumptionProfile.from_dict(stored)
+                    _LOGGER.info("Migrated consumption profile from config entry options")
+        except Exception:
+            _LOGGER.warning("Failed to restore consumption profile, starting fresh", exc_info=True)
+
+    async def _async_save_consumption(self) -> None:
+        """Persist consumption profile (rate-limited to every 5 minutes)."""
+        import time
+
+        now = time.monotonic()
+        if now - self._consumption_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._consumption_last_save = now
+        try:
+            await self._consumption_store.async_save(self.consumption_profile.to_dict())
+        except Exception:
+            _LOGGER.debug("Failed to save consumption profile", exc_info=True)
+
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
         try:
             now = datetime.now()
 
-            # Restore savings from disk on first run
+            # Restore persistent state on first run
             if not self._savings_loaded:
                 self._savings_loaded = True
                 await self._async_restore_savings()
+            if not self._consumption_loaded:
+                self._consumption_loaded = True
+                await self._async_restore_consumption()
 
             self.savings = reset_if_new_month(self.savings, now)
             self.report_collector = reset_report_month(self.report_collector, now)
@@ -267,6 +308,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._execute(state)
             self._track_savings(state)
             await self._async_save_savings()
+            await self._async_save_consumption()
             return state
 
         except Exception as err:
@@ -802,20 +844,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if len(self.hourly_actuals) > 48:
                 self.hourly_actuals = self.hourly_actuals[-48:]
 
-        # Update consumption learning
+        # Update consumption learning (once per hour to match 7-day learning period)
         now = datetime.now()
-        house_kw = calculate_house_consumption(
-            state.grid_power_w,
-            state.battery_power_1,
-            state.battery_power_2,
-            state.pv_power_w,
-            state.ev_power_w,
-        )
-        self.consumption_profile.update(
-            hour=now.hour,
-            consumption_kw=house_kw,
-            is_weekend=now.weekday() >= 5,
-        )
+        if now.hour != self._consumption_last_hour:
+            self._consumption_last_hour = now.hour
+            house_kw = calculate_house_consumption(
+                state.grid_power_w,
+                state.battery_power_1,
+                state.battery_power_2,
+                state.pv_power_w,
+                state.ev_power_w,
+            )
+            self.consumption_profile.update(
+                hour=now.hour,
+                consumption_kw=house_kw,
+                is_weekend=now.weekday() >= 5,
+            )
 
     async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         """Call HA service with error handling and retry. Returns True on success.
@@ -924,7 +968,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 mode = "battery_standby" if adapter.soc >= 100 else "charge_pv"
                 ok = await adapter.set_ems_mode(mode)
                 if ok:
-                    if adapter.ems_mode != mode:
+                    if self.executor_enabled and adapter.ems_mode != mode:
                         _LOGGER.error(
                             "Write-verify FAILED: expected=%s actual=%s", mode, adapter.ems_mode
                         )
@@ -942,7 +986,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if await self._safe_service_call(
                     "select", "select_option", {"entity_id": entity, "option": mode}
                 ):
-                    self._check_write_verify(entity, mode)
+                    if self.executor_enabled:
+                        self._check_write_verify(entity, mode)
                     success = True
 
         if success:
@@ -979,7 +1024,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             for adapter in self.inverter_adapters:
                 ok = await adapter.set_ems_mode("battery_standby")
                 if ok:
-                    if adapter.ems_mode != "battery_standby":
+                    if self.executor_enabled and adapter.ems_mode != "battery_standby":
                         _LOGGER.error(
                             "Write-verify FAILED: expected=battery_standby actual=%s",
                             adapter.ems_mode,
@@ -993,7 +1038,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if entity and await self._safe_service_call(
                     "select", "select_option", {"entity_id": entity, "option": "battery_standby"}
                 ):
-                    self._check_write_verify(entity, "battery_standby")
+                    if self.executor_enabled:
+                        self._check_write_verify(entity, "battery_standby")
                     success = True
 
         if success:
@@ -1054,7 +1100,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if not ems_ok:
                     # Fail-safe: do NOT set discharge limit if EMS mode failed
                     continue
-                if adapter.ems_mode != "discharge_battery":
+                if self.executor_enabled and adapter.ems_mode != "discharge_battery":
                     _LOGGER.error(
                         "Write-verify FAILED: expected=discharge_battery actual=%s",
                         adapter.ems_mode,
@@ -1092,7 +1138,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     if not ems_ok:
                         # Fail-safe: do NOT set discharge limit if EMS mode failed
                         continue
-                    self._check_write_verify(ems_entity, "discharge_battery")
+                    if self.executor_enabled:
+                        self._check_write_verify(ems_entity, "discharge_battery")
                     if limit_entity:
                         await self._safe_service_call(
                             "number", "set_value", {"entity_id": limit_entity, "value": w}

@@ -75,6 +75,11 @@ def _make_coordinator(
     coord._savings_last_save = 0.0
     coord._savings_store = MagicMock()
     coord._savings_store.async_save = AsyncMock()
+    coord._consumption_loaded = True  # Skip restore in tests
+    coord._consumption_last_save = 0.0
+    coord._consumption_last_hour = -1
+    coord._consumption_store = MagicMock()
+    coord._consumption_store.async_save = AsyncMock()
 
     return coord
 

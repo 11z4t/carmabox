@@ -55,15 +55,15 @@ class ConsumptionProfile:
     def get_profile(self, is_weekend: bool) -> list[float]:
         """Get 24h profile for the given day type.
 
-        Falls back to static DEFAULT_CONSUMPTION_PROFILE when less than
-        24 samples exist for the requested day type (<24h of data).
+        Falls back to static DEFAULT_CONSUMPTION_PROFILE until at least
+        MIN_SAMPLES_FOR_LEARNED (168 = 7 days × 24h) total samples exist.
+        This ensures enough data across both day types before trusting
+        the learned profile.
         """
-        if is_weekend:
-            if self.samples_weekend < 24:
-                return list(DEFAULT_CONSUMPTION_PROFILE)
-            return [round(v, 2) for v in self.weekend]
-        if self.samples_weekday < 24:
+        if self.total_samples < MIN_SAMPLES_FOR_LEARNED:
             return list(DEFAULT_CONSUMPTION_PROFILE)
+        if is_weekend:
+            return [round(v, 2) for v in self.weekend]
         return [round(v, 2) for v in self.weekday]
 
     def get_profile_for_date(self, dt: datetime) -> list[float]:

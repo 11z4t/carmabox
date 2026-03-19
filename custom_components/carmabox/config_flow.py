@@ -402,35 +402,47 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         return mappings
 
     def _find_entities(self, domain: str, prefix: str, suffix: str = "") -> list[str]:
-        """Find all entity_ids matching domain.prefix*suffix pattern."""
+        """Find all entity_ids matching domain.prefix*suffix pattern.
+
+        Sorted reverse-alphabetically so 'kontor' comes before 'forrad'
+        (primary/larger battery first).
+        """
         results = []
         for state in self.hass.states.async_all(domain):
             eid = state.entity_id.replace(f"{domain}.", "")
             if eid.startswith(prefix) and (not suffix or eid.endswith(suffix)):
                 results.append(state.entity_id)
-        return sorted(results)
+        return sorted(results, reverse=True)
 
     def _find_first_entity(self, domain: str, pattern: str, exclude: str = "") -> str:
-        """Find first entity_id containing pattern."""
+        """Find first entity_id containing pattern, preferring exact match."""
+        exact = f"{domain}.{pattern}"
+        candidates: list[str] = []
         for state in self.hass.states.async_all(domain):
             if pattern in state.entity_id and (not exclude or exclude not in state.entity_id):
-                return state.entity_id
-        return ""
+                if state.entity_id == exact:
+                    return exact
+                candidates.append(state.entity_id)
+        return candidates[0] if candidates else ""
 
     def _find_ev_soc_entity(self) -> str:
-        """Find EV battery SoC entity — prefer one with valid numeric state."""
-        candidates: list[str] = []
+        """Find EV battery SoC entity — prefer numeric + longer (more specific) names."""
+        numeric: list[str] = []
+        non_numeric: list[str] = []
         for state in self.hass.states.async_all("sensor"):
             eid = state.entity_id
             if "pv_battery" in eid or "goodwe" in eid:
                 continue
             if "battery_soc" in eid or "ev_soc" in eid:
-                # Prefer entities with actual numeric values
                 try:
                     float(state.state)
-                    candidates.insert(0, eid)  # Numeric first
+                    numeric.append(eid)
                 except (ValueError, TypeError):
-                    candidates.append(eid)
+                    non_numeric.append(eid)
+        # Longer names are more specific (e.g. xpeng_g9_xpeng_g9_battery_soc)
+        numeric.sort(key=len, reverse=True)
+        non_numeric.sort(key=len, reverse=True)
+        candidates = numeric + non_numeric
         return candidates[0] if candidates else ""
 
     @staticmethod
