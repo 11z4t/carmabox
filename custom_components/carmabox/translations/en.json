@@ -106,7 +106,8 @@
           "grid_charge_price_threshold": "Grid charge price threshold (öre/kWh)",
           "grid_charge_max_soc": "Max SoC for grid charging (%)",
           "household_size": "Number of people",
-          "has_pool_pump": "Pool with heat pump"
+          "has_pool_pump": "Pool with heat pump",
+          "analyze_only": "Analyze only (plans but does not control)"
         }
       }
     }

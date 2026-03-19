@@ -513,6 +513,10 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "has_pool_pump",
                         default=opts.get("has_pool_pump", False),
                     ): bool,
+                    vol.Optional(
+                        "analyze_only",
+                        default=opts.get("analyze_only", True),
+                    ): bool,
                 }
             ),
         )

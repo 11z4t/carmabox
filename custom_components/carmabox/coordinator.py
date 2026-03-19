@@ -147,6 +147,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
         )
         self._avg_price_initialized = False
+        self.executor_enabled: bool = not bool(opts.get("analyze_only", True))
+
+        # Propagate dry_run to adapters
+        for adapter in self.inverter_adapters:
+            adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+        if self.ev_adapter:
+            self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+
+        if not self.executor_enabled:
+            _LOGGER.warning("CARMA Box running in DRY-RUN mode — no commands will be sent")
 
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
@@ -722,11 +732,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         """Call HA service with error handling and retry. Returns True on success.
 
-        - Catches ServiceNotFound, HomeAssistantError specifically
-        - Max 1 retry with 5s delay on failure
-        - Does NOT set _last_command on failure (caller handles that)
+        In dry-run mode: logs the call but does NOT execute it.
         """
         entity_id = data.get("entity_id", "?")
+
+        if not self.executor_enabled:
+            _LOGGER.info(
+                "DRY-RUN: would call %s.%s → %s %s",
+                domain,
+                service,
+                entity_id,
+                {k: v for k, v in data.items() if k != "entity_id"},
+            )
+            return True  # Pretend success so decision logging works
+
         for attempt in range(2):  # max 1 retry
             try:
                 await self.hass.services.async_call(domain, service, data)

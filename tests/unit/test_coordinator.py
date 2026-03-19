@@ -68,6 +68,7 @@ def _make_coordinator(
     coord.consumption_profile = ConsumptionProfile()
     coord.hourly_actuals = []
     coord._last_tracked_hour = -1
+    coord.executor_enabled = True  # Tests need executor active
 
     return coord
 

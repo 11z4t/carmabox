@@ -66,6 +66,11 @@ class EaseeAdapter(EVAdapter):
     async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         """Call HA service with error handling and 1 retry. Returns True on success."""
         entity_id = data.get("entity_id", "?")
+
+        if getattr(self, "_analyze_only", False):
+            _LOGGER.info("DRY-RUN Easee: %s.%s → %s", domain, service, entity_id)
+            return True
+
         for attempt in range(2):
             try:
                 await self.hass.services.async_call(domain, service, data)

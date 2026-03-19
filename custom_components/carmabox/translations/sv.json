@@ -106,7 +106,8 @@
           "grid_charge_price_threshold": "Nätladdning prisgräns (öre/kWh)",
           "grid_charge_max_soc": "Max SoC vid nätladdning (%)",
           "household_size": "Antal personer",
-          "has_pool_pump": "Pool med värmepump"
+          "has_pool_pump": "Pool med värmepump",
+          "analyze_only": "Enbart analys (planerar men styr inte)"
         }
       }
     }

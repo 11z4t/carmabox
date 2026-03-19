@@ -118,6 +118,7 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "discharge_w": d.discharge_w,
         "safety_blocked": d.safety_blocked,
         "timestamp": d.timestamp,
+        "analyze_only": not coord.executor_enabled,
     }
     # Last 24 decisions as compact list
     attrs["log"] = [
