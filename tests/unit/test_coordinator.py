@@ -66,6 +66,8 @@ def _make_coordinator(
     coord.last_decision = Decision()
     coord.decision_log = []
     coord.consumption_profile = ConsumptionProfile()
+    coord.hourly_actuals = []
+    coord._last_tracked_hour = -1
 
     return coord
 

@@ -127,7 +127,51 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return attrs
 
 
+def _plan_accuracy_value(coord: CarmaboxCoordinator) -> float | None:
+    """Plan accuracy: how close actual grid matched plan."""
+    actuals = coord.hourly_actuals
+    if len(actuals) < 2:
+        return None
+    total_diff = 0.0
+    total_planned = 0.0
+    for a in actuals:
+        total_diff += abs(a.actual_weighted_kw - a.planned_weighted_kw)
+        total_planned += max(0.01, a.planned_weighted_kw)
+    if total_planned <= 0:
+        return None
+    accuracy = max(0, 100 - (total_diff / total_planned * 100))
+    return round(accuracy, 0)
+
+
+def _plan_accuracy_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Plan accuracy details."""
+    actuals = coord.hourly_actuals
+    history = [
+        {
+            "h": a.hour,
+            "plan_kw": a.planned_weighted_kw,
+            "actual_kw": a.actual_weighted_kw,
+            "plan_action": a.planned_action,
+            "actual_action": a.actual_action,
+            "bat_plan": a.planned_battery_soc,
+            "bat_actual": a.actual_battery_soc,
+        }
+        for a in actuals[-24:]
+    ]
+    return {"hours_tracked": len(actuals), "history": history}
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
+    CarmaboxSensorDescription(
+        key="plan_accuracy",
+        translation_key="plan_accuracy",
+        icon="mdi:bullseye-arrow",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=_plan_accuracy_value,
+        extra_attrs_fn=_plan_accuracy_attrs,
+    ),
     CarmaboxSensorDescription(
         key="decision",
         translation_key="decision",

@@ -56,6 +56,8 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord.last_decision = Decision()
     coord.decision_log = []
     coord.consumption_profile = ConsumptionProfile()
+    coord.hourly_actuals = []
+    coord._last_tracked_hour = -1
     return coord
 
 

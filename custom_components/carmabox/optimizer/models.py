@@ -40,6 +40,24 @@ class PlanSummary:
 
 
 @dataclass
+class HourActual:
+    """Actual values for a completed hour (plan vs reality)."""
+
+    hour: int = 0
+    planned_action: str = "i"
+    actual_action: str = "i"
+    planned_grid_kw: float = 0.0
+    actual_grid_kw: float = 0.0
+    planned_weighted_kw: float = 0.0
+    actual_weighted_kw: float = 0.0
+    planned_battery_soc: int = 0
+    actual_battery_soc: int = 0
+    planned_ev_soc: int = 0
+    actual_ev_soc: int = 0
+    price: float = 0.0
+
+
+@dataclass
 class Decision:
     """A single optimizer decision with reasoning."""
 

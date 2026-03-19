@@ -26,6 +26,7 @@ def _make_sensor_deps(
     coord.savings = SavingsState(month=3, year=2026)
     coord.last_decision = Decision()
     coord.decision_log = []
+    coord.hourly_actuals = []
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -45,8 +46,9 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 7
+        assert len(SENSOR_DESCRIPTIONS) == 8
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
+        assert "plan_accuracy" in keys
         assert "decision" in keys
         assert "plan_status" in keys
         assert "target_kw" in keys

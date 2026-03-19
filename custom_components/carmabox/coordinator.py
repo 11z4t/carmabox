@@ -49,7 +49,7 @@ from .const import (
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
-from .optimizer.models import CarmaboxState, Decision, HourPlan
+from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan
 from .optimizer.planner import generate_plan
 from .optimizer.report import (
     DailySample,
@@ -130,6 +130,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_plans = 0
         self.last_decision = Decision()
         self.decision_log: list[Decision] = []
+
+        # Plan accuracy tracking
+        self.hourly_actuals: list[HourActual] = []
+        self._last_tracked_hour: int = -1
 
         # Consumption learning
         stored = opts.get("consumption_profile", {})
@@ -676,6 +680,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             plans_generated=self._daily_plans,
         )
         record_daily_sample(self.report_collector, sample)
+
+        # Track plan vs actual (once per hour)
+        now_obj = datetime.now()
+        if now_obj.hour != self._last_tracked_hour:
+            self._last_tracked_hour = now_obj.hour
+            planned = next((h for h in self.plan if h.hour == now_obj.hour), None)
+            actual = HourActual(
+                hour=now_obj.hour,
+                planned_action=planned.action if planned else "?",
+                actual_action=self.last_decision.action,
+                planned_grid_kw=round(planned.grid_kw, 2) if planned else 0,
+                actual_grid_kw=round(grid_kw, 2),
+                planned_weighted_kw=round(planned.weighted_kw, 2) if planned else 0,
+                actual_weighted_kw=round(weighted_kw, 2),
+                planned_battery_soc=planned.battery_soc if planned else 0,
+                actual_battery_soc=int(state.total_battery_soc),
+                planned_ev_soc=planned.ev_soc if planned else 0,
+                actual_ev_soc=int(state.ev_soc) if state.has_ev else -1,
+                price=round(state.current_price, 1),
+            )
+            self.hourly_actuals.append(actual)
+            if len(self.hourly_actuals) > 48:
+                self.hourly_actuals = self.hourly_actuals[-48:]
 
         # Update consumption learning
         now = datetime.now()
