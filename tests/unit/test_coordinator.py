@@ -470,6 +470,102 @@ class TestTrackSavings:
         assert coord.savings.discharge_savings_kr == 0.0
 
 
+class TestSafetyBlockingPaths:
+    @pytest.mark.asyncio
+    async def test_heartbeat_stale_blocks_all(self) -> None:
+        """Stale heartbeat → no commands executed."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_heartbeat = MagicMock(
+            return_value=MagicMock(ok=False, reason="stale 200s")
+        )
+        state = CarmaboxState(grid_power_w=5000, battery_soc_1=80)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 18
+            await coord._execute(state)
+        assert coord._last_command == BatteryCommand.IDLE
+        assert coord._daily_safety_blocks > 0
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_blocks_all(self) -> None:
+        """Rate limit → no commands."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_rate_limit = MagicMock(
+            return_value=MagicMock(ok=False, reason="10 changes/h")
+        )
+        state = CarmaboxState(grid_power_w=5000, battery_soc_1=80)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 18
+            await coord._execute(state)
+        assert coord._last_command == BatteryCommand.IDLE
+
+    @pytest.mark.asyncio
+    async def test_crosscharge_forces_standby(self) -> None:
+        """Crosscharge detected → forced standby."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_crosscharge = MagicMock(
+            return_value=MagicMock(ok=False, reason="crosscharge")
+        )
+        state = CarmaboxState(
+            grid_power_w=2000,
+            battery_soc_1=80,
+            battery_power_1=-1000,
+            battery_power_2=1000,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 18
+            await coord._execute(state)
+        assert coord._last_command == BatteryCommand.STANDBY
+
+    @pytest.mark.asyncio
+    async def test_charge_blocked_during_export(self) -> None:
+        """Export + charge blocked → no charge_pv."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord.safety.check_charge = MagicMock(
+            return_value=MagicMock(ok=False, reason="temp too low")
+        )
+        state = CarmaboxState(grid_power_w=-2000, battery_soc_1=50)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 12
+            await coord._execute(state)
+        assert coord._last_command == BatteryCommand.IDLE
+        assert coord.last_decision.safety_blocked is True
+
+
+class TestDecisionRecording:
+    @pytest.mark.asyncio
+    async def test_idle_decision_recorded(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(grid_power_w=1000, battery_soc_1=80)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 12
+            await coord._execute(state)
+        assert coord.last_decision.action == "idle"
+        assert "Vila" in coord.last_decision.reason
+
+    @pytest.mark.asyncio
+    async def test_discharge_decision_recorded(self) -> None:
+        coord = _make_coordinator(
+            {"battery_ems_1": "select.ems1", "battery_limit_1": "number.limit1"}
+        )
+        state = CarmaboxState(grid_power_w=5000, battery_soc_1=80, battery_soc_2=-1)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 18
+            await coord._execute(state)
+        assert coord.last_decision.action == "discharge"
+        assert "Urladdning" in coord.last_decision.reason
+        assert coord.last_decision.discharge_w > 0
+
+    @pytest.mark.asyncio
+    async def test_decision_log_accumulates(self) -> None:
+        coord = _make_coordinator()
+        state = CarmaboxState(grid_power_w=1000, battery_soc_1=80)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 12
+            for _ in range(5):
+                await coord._execute(state)
+        assert len(coord.decision_log) == 5
+
+
 class TestSafetyGuardBypass:
     """PLAT-877: ALL commands must go through SafetyGuard."""
 
