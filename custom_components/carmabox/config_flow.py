@@ -15,6 +15,10 @@ from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResu
 from homeassistant.core import callback
 
 from .const import (
+    APPLIANCE_CATEGORIES,
+    APPLIANCE_EXCLUDE_PREFIXES,
+    APPLIANCE_HINTS,
+    DEFAULT_APPLIANCE_THRESHOLD_W,
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_MIN_SOC,
@@ -108,6 +112,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize."""
         self._detected: dict[str, Any] = {}
+        self._detected_appliances: dict[str, dict[str, str]] = {}
         self._user_input: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
@@ -227,7 +232,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5: Household info + mode."""
         if user_input is not None:
             self._user_input.update(user_input)
-            return await self.async_step_summary()
+            return await self.async_step_appliances()
 
         return self.async_show_form(
             step_id="household",
@@ -242,10 +247,103 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
+    async def async_step_appliances(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 5b: Auto-detected appliance sensors — user categorizes them."""
+        if user_input is not None:
+            # Parse user selections into appliances list
+            appliances: list[dict[str, Any]] = []
+            for entity_id, info in self._detected_appliances.items():
+                enabled_key = f"enable_{entity_id}"
+                category_key = f"category_{entity_id}"
+                if user_input.get(enabled_key, True):
+                    appliances.append(
+                        {
+                            "entity_id": entity_id,
+                            "name": info["name"],
+                            "category": user_input.get(category_key, info["category"]),
+                            "threshold_w": DEFAULT_APPLIANCE_THRESHOLD_W,
+                        }
+                    )
+            self._user_input["appliances"] = appliances
+            return await self.async_step_summary()
+
+        # Auto-detect power sensors
+        self._detected_appliances = self._detect_appliances()
+
+        if not self._detected_appliances:
+            # No appliances found — skip to summary
+            self._user_input["appliances"] = []
+            return await self.async_step_summary()
+
+        # Build dynamic schema: enable checkbox + category selector per sensor
+        category_options = {k: v for k, v in APPLIANCE_CATEGORIES.items()}
+        schema_dict: dict[Any, Any] = {}
+        for entity_id, info in self._detected_appliances.items():
+            # Checkbox to include/exclude
+            schema_dict[
+                vol.Optional(f"enable_{entity_id}", default=True)
+            ] = bool
+            # Category selector
+            schema_dict[
+                vol.Optional(f"category_{entity_id}", default=info["category"])
+            ] = vol.In(category_options)
+
+        return self.async_show_form(
+            step_id="appliances",
+            data_schema=vol.Schema(schema_dict),
+            description_placeholders={
+                "detected_count": str(len(self._detected_appliances)),
+                "sensor_list": "\n".join(
+                    f"⚡ {info['name']} ({APPLIANCE_CATEGORIES.get(info['category'], info['category'])})"
+                    for info in self._detected_appliances.values()
+                ),
+            },
+        )
+
+    def _detect_appliances(self) -> dict[str, dict[str, str]]:
+        """Auto-detect power sensors that look like appliances.
+
+        Scans all sensor.* entities with unit_of_measurement W or kW,
+        filters out known system sensors, and suggests categories.
+
+        Returns {entity_id: {"name": friendly_name, "category": category_key}}.
+        """
+        result: dict[str, dict[str, str]] = {}
+        for state in self.hass.states.async_all("sensor"):
+            unit = (state.attributes.get("unit_of_measurement") or "").lower()
+            if unit not in ("w", "kw"):
+                continue
+
+            entity_id = state.entity_id
+            name_part = entity_id.replace("sensor.", "")
+
+            # Exclude known system sensors
+            if any(name_part.startswith(prefix) for prefix in APPLIANCE_EXCLUDE_PREFIXES):
+                continue
+
+            # Friendly name from attributes, or cleaned entity_id
+            friendly_name = state.attributes.get("friendly_name") or name_part.replace(
+                "_", " "
+            ).title()
+
+            # Guess category from name hints
+            category = "other"
+            name_lower = name_part.lower()
+            for hint, cat in APPLIANCE_HINTS.items():
+                if hint in name_lower:
+                    category = cat
+                    break
+
+            result[entity_id] = {"name": friendly_name, "category": category}
+
+        return result
+
     async def async_step_summary(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 6: Onboarding summary — show what was found and what happens next."""
+        """Step 7: Onboarding summary — show what was found and what happens next."""
         if user_input is not None:
             return self._create_entry()
 
@@ -280,6 +378,14 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         if ev_enabled:
             strategy_parts.append(f"EV {ev_target}% varje natt")
         strategy_parts.append("styrning aktiv" if executor else "analysläge")
+
+        # ── Appliances summary ──
+        appliances = self._user_input.get("appliances", [])
+        if appliances:
+            equipment_lines.append("")  # blank line separator
+            for app in appliances:
+                cat_label = APPLIANCE_CATEGORIES.get(app["category"], app["category"])
+                equipment_lines.append(f"⚡ {app['name']} ({cat_label})")
 
         equipment_text = "\n".join(equipment_lines) if equipment_lines else "-"
         strategy_text = ", ".join(strategy_parts)
@@ -379,6 +485,8 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
             # Mode — analyzer only by default (no battery commands sent)
             "executor_enabled": self._user_input.get("executor_enabled", False),
+            # Appliances (from auto-detect + user categorization)
+            "appliances": self._user_input.get("appliances", []),
             # Entity mappings (from auto-detect, user can change in options)
             **self._build_entity_mappings(),
         }

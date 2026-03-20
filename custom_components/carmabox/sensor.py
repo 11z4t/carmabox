@@ -23,7 +23,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN
+from .const import APPLIANCE_CATEGORIES, DOMAIN
 from .coordinator import BatteryCommand, CarmaboxCoordinator
 from .optimizer.savings import (
     daily_trend,
@@ -506,6 +506,64 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
 )
 
 
+def _appliance_value_factory(category: str) -> Callable[[CarmaboxCoordinator], float]:
+    """Create a value function for a specific appliance category."""
+
+    def _value(coord: CarmaboxCoordinator) -> float:
+        return round(coord.appliance_power.get(category, 0.0), 1)
+
+    return _value
+
+
+def _appliance_attrs_factory(category: str) -> Callable[[CarmaboxCoordinator], dict[str, Any]]:
+    """Create an attrs function for a specific appliance category."""
+
+    def _attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+        energy_wh = coord.appliance_energy_wh.get(category, 0.0)
+        # List individual appliances in this category
+        members = [
+            app for app in coord._appliances if app.get("category") == category
+        ]
+        return {
+            "energy_today_kwh": round(energy_wh / 1000, 2),
+            "appliances": [
+                {"entity_id": m["entity_id"], "name": m["name"]}
+                for m in members
+            ],
+        }
+
+    return _attrs
+
+
+def _build_appliance_descriptions(
+    appliances: list[dict[str, Any]],
+) -> list[CarmaboxSensorDescription]:
+    """Build sensor descriptions for each appliance category found in config."""
+    categories_in_use: set[str] = set()
+    for app in appliances:
+        cat = app.get("category", "other")
+        categories_in_use.add(cat)
+
+    descriptions: list[CarmaboxSensorDescription] = []
+    for cat in sorted(categories_in_use):
+        label = APPLIANCE_CATEGORIES.get(cat, cat)
+        descriptions.append(
+            CarmaboxSensorDescription(
+                key=f"appliance_{cat}",
+                translation_key=f"appliance_{cat}",
+                icon="mdi:lightning-bolt",
+                name=f"Förbrukning {label}",
+                native_unit_of_measurement="W",
+                device_class=SensorDeviceClass.POWER,
+                state_class=SensorStateClass.MEASUREMENT,
+                suggested_display_precision=0,
+                value_fn=_appliance_value_factory(cat),
+                extra_attrs_fn=_appliance_attrs_factory(cat),
+            )
+        )
+    return descriptions
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -513,7 +571,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up CARMA Box sensors from EntityDescription."""
     coordinator: CarmaboxCoordinator = entry.runtime_data
-    async_add_entities(CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS)
+    entities = [CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS]
+
+    # PLAT-943: Add per-category appliance sensors
+    appliances = list(entry.options.get("appliances") or entry.data.get("appliances") or [])
+    for desc in _build_appliance_descriptions(appliances):
+        entities.append(CarmaboxSensor(coordinator, entry, desc))
+
+    async_add_entities(entities)
 
 
 class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):

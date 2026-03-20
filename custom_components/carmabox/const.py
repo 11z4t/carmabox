@@ -59,6 +59,66 @@ TEMPERATURE_MIN_C = 0
 TEMPERATURE_MAX_C = 45
 MAX_MODE_CHANGES_PER_HOUR = 10
 
+# Appliance categories
+APPLIANCE_CATEGORIES = {
+    "laundry": "Vitvaror",
+    "heating": "Värme/VP",
+    "pool": "Pool",
+    "miner": "Miner",
+    "lighting": "Belysning",
+    "ups": "UPS",
+    "other": "Övrigt",
+}
+
+# Appliance name → category heuristics
+APPLIANCE_HINTS: dict[str, str] = {
+    "tvattmaskin": "laundry",
+    "tvatt": "laundry",
+    "torktumlare": "laundry",
+    "tork": "laundry",
+    "disk": "laundry",
+    "varmepump": "heating",
+    "varmeflakt": "heating",
+    "cirkulationspump": "heating",
+    "fjv": "heating",
+    "golvvarme": "heating",
+    "pool": "pool",
+    "miner": "miner",
+    "mining": "miner",
+    "ups": "ups",
+    "eaton": "ups",
+    "led": "lighting",
+    "belysning": "lighting",
+    "lampor": "lighting",
+    "spot": "lighting",
+}
+
+# System sensor prefixes to exclude from appliance detection
+APPLIANCE_EXCLUDE_PREFIXES = (
+    "goodwe",
+    "pv_",
+    "grid_",
+    "house_grid",
+    "nordpool",
+    "solar",
+    "battery",
+    "ems_",
+    "peak_shaving",
+    "carmabox",
+    "easee",
+    "zaptec",
+    "wallbox",
+    "solcast",
+    "forecast_solar",
+    "tibber",
+    "entsoe",
+    "sun_",
+    "weather_",
+)
+
+# Default appliance power threshold (W) — below this is considered off/standby
+DEFAULT_APPLIANCE_THRESHOLD_W = 10
+
 # Config keys
 CONF_BATTERIES = "batteries"
 CONF_EV = "ev"

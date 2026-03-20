@@ -187,6 +187,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._avg_price_initialized = False
         self.executor_enabled: bool = bool(self._cfg.get("executor_enabled", False))
 
+        # PLAT-943: Appliance tracking
+        self._appliances: list[dict[str, Any]] = list(self._cfg.get("appliances") or [])
+        # Current power per category (W), updated every scan
+        self.appliance_power: dict[str, float] = {}
+        # Daily energy per category (Wh), reset at midnight
+        self.appliance_energy_wh: dict[str, float] = {}
+
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
             adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
@@ -324,6 +331,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._execute(state)
             self._track_shadow(state)
             self._track_savings(state)
+            self._track_appliances()
             await self._async_save_savings()
             await self._async_save_consumption()
             return state
@@ -902,6 +910,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._daily_discharge_kwh = 0.0
             self._daily_safety_blocks = 0
             self._daily_plans = 0
+            self.appliance_energy_wh = {}
             self._current_date = today
             self._update_daily_avg_price()
 
@@ -915,6 +924,36 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
             self._daily_avg_price = sum(prices) / len(prices)
+
+    def _track_appliances(self) -> None:
+        """PLAT-943: Read appliance power sensors and accumulate energy."""
+        category_power: dict[str, float] = {}
+        interval_h = SCAN_INTERVAL_SECONDS / 3600
+
+        for app in self._appliances:
+            entity_id = app.get("entity_id", "")
+            category = app.get("category", "other")
+            threshold = float(app.get("threshold_w", 10))
+            power_w = self._read_float(entity_id)
+
+            # Convert kW sensors to W
+            unit = ""
+            state = self.hass.states.get(entity_id)
+            if state:
+                unit = (state.attributes.get("unit_of_measurement") or "").lower()
+            if unit == "kw":
+                power_w = power_w * 1000
+
+            if power_w < threshold:
+                power_w = 0.0
+
+            category_power[category] = category_power.get(category, 0.0) + power_w
+            # Accumulate energy (Wh) = power_w × interval_hours
+            self.appliance_energy_wh[category] = (
+                self.appliance_energy_wh.get(category, 0.0) + power_w * interval_h
+            )
+
+        self.appliance_power = category_power
 
     def _track_shadow(self, state: CarmaboxState) -> None:
         """PLAT-940: Compare CARMA recommendation vs v6 actual behavior."""

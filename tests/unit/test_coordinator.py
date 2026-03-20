@@ -76,6 +76,9 @@ def _make_coordinator(
     coord.shadow = ShadowComparison()
     coord.shadow_log = []
     coord._shadow_savings_kr = 0.0
+    coord._appliances = []
+    coord.appliance_power = {}
+    coord.appliance_energy_wh = {}
     coord.executor_enabled = True  # Tests need executor active
     coord._savings_loaded = True  # Skip restore in tests
     coord._savings_last_save = 0.0

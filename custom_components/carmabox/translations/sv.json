@@ -43,6 +43,10 @@
           "executor_enabled": "Aktivera styrning (av = enbart analys)"
         }
       },
+      "appliances": {
+        "title": "Energisensorer ({detected_count} hittade)",
+        "description": "Vi hittade dessa effektsensorer:\n{sensor_list}\n\nVälj kategori för varje sensor och avmarkera de du inte vill spåra."
+      },
       "summary": {
         "title": "CARMA Box har hittat din utrustning",
         "description": "**Hittade:**\n{equipment}\n\n**Din strategi:** {strategy}\n\nFörsta planen genereras om 5 minuter.\n\n**Tips:** Öppna CARMA Box-kortet i din dashboard för att följa optimeringen i realtid."
