@@ -42,11 +42,17 @@ from .const import (
     DEFAULT_FALLBACK_PRICE_ORE,
     DEFAULT_GRID_CHARGE_MAX_SOC,
     DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_MAX_DISCHARGE_KW,
     DEFAULT_MAX_GRID_CHARGE_KW,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
+    DEFAULT_VOLTAGE,
+    EV_RAMP_INTERVAL_S,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
@@ -123,6 +129,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
         self._last_discharge_w = 0
+
+        # EV executor state (PLAT-949)
+        self._ev_enabled: bool = False
+        self._ev_current_amps: int = 0
+        self._ev_last_ramp_time: float = 0.0
+        self._ev_initialized: bool = False
 
         # K3 (PLAT-945): Deferred write-verify — store (entity, expected_mode)
         # pairs after service calls, verify on NEXT update cycle (30s later)
@@ -344,6 +356,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if not self._avg_price_initialized:
                 self._update_daily_avg_price()
                 self._avg_price_initialized = True
+
+            # EV startup: set safe fallback + disable (PLAT-949)
+            if not self._ev_initialized and self.ev_adapter:
+                self._ev_initialized = True
+                _LOGGER.info("CARMA: EV startup — setting 6A fallback + disabling charger")
+                await self._cmd_ev_stop()
+
             self.safety.update_heartbeat()
 
             # K3 (PLAT-945): Deferred write-verify — check pending verifications
@@ -886,6 +905,131 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             reasoning=reasoning,
             reasoning_chain=chain,
         )
+
+        # ── EV CONTROL (runs AFTER battery rules) ────────────
+        await self._execute_ev(state)
+
+    async def _execute_ev(self, state: CarmaboxState) -> None:
+        """Execute EV charging decisions (PLAT-949).
+
+        Runs AFTER battery rules. Controls Easee enable/disable + amps.
+        Always starts at 6A, ramps gradually, reduces immediately.
+        """
+        import time as _time
+
+        if not self.ev_adapter:
+            return
+
+        hour = datetime.now().hour
+        is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+        night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+
+        # ── EV-1: Not connected → stop ───────────────────────
+        if not self.ev_adapter.cable_locked or state.ev_soc < 0:
+            if self._ev_enabled:
+                await self._cmd_ev_stop()
+            return
+
+        # ── EV-2: Target SoC reached → stop ──────────────────
+        ev_target = float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
+        if state.ev_soc >= ev_target:
+            if self._ev_enabled:
+                _LOGGER.info("CARMA: EV SoC %.0f%% >= target %.0f%% — stop", state.ev_soc, ev_target)
+                await self._cmd_ev_stop()
+            return
+
+        # ── EV-3: Night → follow plan schedule ───────────────
+        if is_night:
+            planned_ev_kw = 0.0
+            for h in self.plan:
+                if h.hour == hour:
+                    planned_ev_kw = h.ev_kw
+                    break
+
+            if planned_ev_kw <= 0:
+                if self._ev_enabled:
+                    await self._cmd_ev_stop()
+                return
+
+            # Calculate optimal amps from grid headroom
+            ev_load_kw = state.ev_power_w / 1000
+            house_only_kw = max(0, max(0, state.grid_power_w) / 1000 - ev_load_kw)
+            weight = night_weight if is_night else 1.0
+            headroom_kw = (self.target_kw / weight - house_only_kw) if weight > 0 else 4.0
+            optimal_amps = max(0, int(headroom_kw * 1000 / DEFAULT_VOLTAGE))
+            optimal_amps = min(optimal_amps, DEFAULT_EV_MAX_AMPS)
+
+            if optimal_amps >= 6:
+                if not self._ev_enabled:
+                    await self._cmd_ev_start(6)
+                elif optimal_amps > self._ev_current_amps:
+                    now = _time.monotonic()
+                    if now - self._ev_last_ramp_time >= EV_RAMP_INTERVAL_S:
+                        await self._cmd_ev_adjust(optimal_amps)
+                        self._ev_last_ramp_time = now
+                elif optimal_amps < self._ev_current_amps:
+                    await self._cmd_ev_adjust(optimal_amps)
+            else:
+                if self._ev_enabled:
+                    await self._cmd_ev_stop()
+            return
+
+        # ── EV-4: Day → PV surplus only ──────────────────────
+        if state.is_exporting and state.total_battery_soc >= 95:
+            surplus_kw = abs(state.grid_power_w) / 1000
+            solar_amps = max(0, int(surplus_kw * 1000 / DEFAULT_VOLTAGE))
+            solar_amps = min(solar_amps, DEFAULT_EV_MAX_AMPS)
+            if solar_amps >= 6:
+                if not self._ev_enabled:
+                    await self._cmd_ev_start(6)
+                else:
+                    await self._cmd_ev_adjust(solar_amps)
+                return
+
+        # Default: not charging → ensure disabled
+        if self._ev_enabled and not is_night:
+            await self._cmd_ev_stop()
+
+    async def _cmd_ev_start(self, amps: int = 6) -> None:
+        """Start EV: set current FIRST, then enable (prevent 16A burst)."""
+        amps = max(6, min(amps, DEFAULT_EV_MAX_AMPS))
+        if self._ev_enabled and self._ev_current_amps == amps:
+            return
+        if not self.ev_adapter:
+            return
+        _LOGGER.info("CARMA: EV start %dA", amps)
+        ok = await self.ev_adapter.set_current(amps)
+        if not ok:
+            return
+        if not self._ev_enabled:
+            ok = await self.ev_adapter.enable()
+            if not ok:
+                await self.ev_adapter.disable()
+                return
+        self._ev_enabled = True
+        self._ev_current_amps = amps
+
+    async def _cmd_ev_stop(self) -> None:
+        """Stop EV: disable + reset to 6A."""
+        if not self.ev_adapter:
+            return
+        _LOGGER.info("CARMA: EV stop")
+        await self.ev_adapter.disable()
+        await self.ev_adapter.reset_to_default()
+        self._ev_enabled = False
+        self._ev_current_amps = 0
+
+    async def _cmd_ev_adjust(self, amps: int) -> None:
+        """Adjust EV amps without enable/disable."""
+        if not self.ev_adapter or not self._ev_enabled:
+            return
+        amps = max(6, min(amps, DEFAULT_EV_MAX_AMPS))
+        if amps == self._ev_current_amps:
+            return
+        _LOGGER.info("CARMA: EV adjust %dA → %dA", self._ev_current_amps, amps)
+        ok = await self.ev_adapter.set_current(amps)
+        if ok:
+            self._ev_current_amps = amps
 
     def _record_decision(
         self,

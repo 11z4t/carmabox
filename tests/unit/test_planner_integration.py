@@ -62,6 +62,11 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._last_tracked_hour = -1
     coord.executor_enabled = True
     coord._consumption_last_hour = -1
+    coord._pending_write_verifies = []
+    coord._ev_enabled = False
+    coord._ev_current_amps = 0
+    coord._ev_last_ramp_time = 0.0
+    coord._ev_initialized = True
     return coord
 
 
