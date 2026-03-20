@@ -50,6 +50,8 @@ def _make_coordinator(
     coord.plan = []
     coord._plan_counter = 0
     coord._last_command = BatteryCommand.IDLE
+    coord._last_discharge_w = 0
+    coord._pending_write_verifies = []
     coord.target_kw = options.get("target_weighted_kw", 2.0) if options else 2.0
     coord.min_soc = options.get("min_soc", 15.0) if options else 15.0
     coord.logger = MagicMock()
@@ -486,6 +488,31 @@ class TestNoDuplicateCommands:
         coord._last_command = BatteryCommand.CHARGE_PV
         await coord._cmd_charge_pv(CarmaboxState())
         coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_discharge_no_duplicate_similar_wattage(self) -> None:
+        """K1: Skip redundant discharge if wattage within 100W tolerance."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._last_command = BatteryCommand.DISCHARGE
+        coord._last_discharge_w = 3000
+        await coord._cmd_discharge(CarmaboxState(battery_soc_1=50), 3050)
+        coord.hass.services.async_call.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_discharge_sends_when_wattage_differs(self) -> None:
+        """K1: Re-send discharge when wattage differs by ≥100W."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+            }
+        )
+        coord._last_command = BatteryCommand.DISCHARGE
+        coord._last_discharge_w = 3000
+        await coord._cmd_discharge(
+            CarmaboxState(battery_soc_1=50, grid_power_w=5000), 3200
+        )
+        coord.hass.services.async_call.assert_called()
 
     @pytest.mark.asyncio
     async def test_charge_pv_sends_when_different(self) -> None:
@@ -994,8 +1021,8 @@ class TestWriteVerify:
         assert coord._last_command == BatteryCommand.CHARGE_PV
 
     @pytest.mark.asyncio
-    async def test_write_verify_fail_increments_counter(self) -> None:
-        """Write-verify detects mismatch → error counter incremented."""
+    async def test_write_verify_deferred_detects_mismatch(self) -> None:
+        """PLAT-945: Write-verify deferred to next cycle detects lockup."""
         coord = _make_coordinator({"battery_ems_1": "select.ems1", "battery_soc_1": "sensor.soc1"})
         _set_state(coord, "sensor.soc1", "50")
         # Entity still shows old mode after service call
@@ -1006,22 +1033,45 @@ class TestWriteVerify:
         state = CarmaboxState(battery_soc_1=50)
         await coord._cmd_charge_pv(state)
 
-        # Write-verify should detect mismatch and increment counter
+        # Should NOT increment immediately (deferred)
+        assert coord._daily_safety_blocks == initial_blocks
+        assert len(coord._pending_write_verifies) > 0
+
+        # Simulate next cycle: state still stale → lockup detected
+        coord._run_deferred_write_verifies()
         assert coord._daily_safety_blocks > initial_blocks
 
-    def test_check_write_verify_match(self) -> None:
-        """_check_write_verify returns True when modes match."""
+    def test_check_write_verify_queues_pending(self) -> None:
+        """PLAT-945: _check_write_verify queues for deferred check, not immediate."""
         coord = _make_coordinator()
-        _set_state(coord, "select.ems1", "battery_standby")
-        assert coord._check_write_verify("select.ems1", "battery_standby") is True
+        _set_state(coord, "select.ems1", "charge_pv")  # Stale state
+        initial = coord._daily_safety_blocks
+        coord._check_write_verify("select.ems1", "battery_standby")
+        # Should NOT increment immediately — deferred to next cycle
+        assert coord._daily_safety_blocks == initial
+        assert len(coord._pending_write_verifies) == 1
 
-    def test_check_write_verify_mismatch(self) -> None:
-        """_check_write_verify returns False and increments counter on mismatch."""
+    def test_deferred_write_verify_match(self) -> None:
+        """PLAT-945: Deferred verify passes when state has propagated."""
         coord = _make_coordinator()
+        coord._check_write_verify("select.ems1", "battery_standby")
+        # Simulate Modbus propagation (state updated before next cycle)
+        _set_state(coord, "select.ems1", "battery_standby")
+        initial = coord._daily_safety_blocks
+        coord._run_deferred_write_verifies()
+        assert coord._daily_safety_blocks == initial
+        assert len(coord._pending_write_verifies) == 0
+
+    def test_deferred_write_verify_mismatch(self) -> None:
+        """PLAT-945: Deferred verify detects lockup when state didn't propagate."""
+        coord = _make_coordinator()
+        coord._check_write_verify("select.ems1", "battery_standby")
+        # Simulate Modbus lockup (state still stale after 30s)
         _set_state(coord, "select.ems1", "charge_pv")
         initial = coord._daily_safety_blocks
-        assert coord._check_write_verify("select.ems1", "battery_standby") is False
+        coord._run_deferred_write_verifies()
         assert coord._daily_safety_blocks == initial + 1
+        assert len(coord._pending_write_verifies) == 0
 
 
 def _make_mock_adapter(

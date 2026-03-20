@@ -124,6 +124,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_command = BatteryCommand.IDLE
         self._last_discharge_w = 0
 
+        # K3 (PLAT-945): Deferred write-verify — store (entity, expected_mode)
+        # pairs after service calls, verify on NEXT update cycle (30s later)
+        # instead of immediately (GoodWe Modbus takes 2-10s to propagate).
+        self._pending_write_verifies: list[tuple[str, str]] = []
+
         # ── Inverter adapters ─────────────────────────────────
         self.inverter_adapters: list[InverterAdapter] = []
         for i in (1, 2):
@@ -225,6 +230,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except (ValueError, TypeError):
             return default
 
+    def _read_float_or_none(self, entity_id: str) -> float | None:
+        """Read float state, returning None if entity is missing/unknown/unavailable.
+
+        Used for battery power readings where None signals unreliable data
+        (e.g. at HA start before first sensor reading). PLAT-946.
+        """
+        if not entity_id:
+            return None
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return None
+        try:
+            val = float(state.state)
+            if abs(val) > 100000:
+                return None
+            return val
+        except (ValueError, TypeError):
+            return None
+
     def _read_str(self, entity_id: str, default: str = "") -> str:
         """Read string state from HA entity."""
         if not entity_id:
@@ -321,6 +345,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._update_daily_avg_price()
                 self._avg_price_initialized = True
             self.safety.update_heartbeat()
+
+            # K3 (PLAT-945): Deferred write-verify — check pending verifications
+            # from the previous cycle (Modbus has had 30s to propagate).
+            self._run_deferred_write_verifies()
+
             state = self._collect_state()
 
             self._plan_counter += 1
@@ -361,6 +390,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         battery_power_2 = a2.power_w if a2 else self._read_float(opts.get("battery_power_2", ""))
         battery_ems_2 = a2.ems_mode if a2 else self._read_str(opts.get("battery_ems_2", ""))
 
+        # PLAT-946: Check if battery power sensors are actually available
+        # At HA start, sensors report unknown/unavailable → _read_float returns 0.0
+        # which masks potential crosscharge. Track validity separately.
+        bp1_entity = (
+            f"sensor.goodwe_battery_power_{a1.prefix}" if a1
+            else opts.get("battery_power_1", "")
+        )
+        bp2_entity = (
+            f"sensor.goodwe_battery_power_{a2.prefix}" if a2
+            else opts.get("battery_power_2", "")
+        )
+        bp1_valid = self._read_float_or_none(bp1_entity) is not None
+        bp2_valid = self._read_float_or_none(bp2_entity) is not None if bp2_entity else True
+
         # EV — adapter or legacy config
         ev = self.ev_adapter
         ev_power_w = ev.power_w if ev else self._read_float(opts.get("ev_power_entity", ""))
@@ -371,10 +414,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             grid_power_w=self._read_float(opts.get("grid_entity", "sensor.house_grid_power")),
             battery_soc_1=battery_soc_1,
             battery_power_1=battery_power_1,
+            battery_power_1_valid=bp1_valid,
             battery_ems_1=battery_ems_1,
             battery_cap_1_kwh=float(opts.get("battery_1_kwh", 15.0)),
             battery_soc_2=battery_soc_2,
             battery_power_2=battery_power_2,
+            battery_power_2_valid=bp2_valid,
             battery_ems_2=battery_ems_2,
             battery_cap_2_kwh=float(opts.get("battery_2_kwh", 5.0)),
             pv_power_w=self._read_float(opts.get("pv_entity", "sensor.pv_solar_total")),
@@ -517,7 +562,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 hourly_pv=pv_forecast,
                 hourly_prices=prices,
                 hourly_ev=ev_demand,
-                battery_soc=state.battery_soc_1,
+                battery_soc=state.total_battery_soc,
                 ev_soc=max(0, state.ev_soc),
                 battery_cap_kwh=total_bat_kwh,
                 battery_min_soc=self.min_soc,
@@ -567,8 +612,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._daily_safety_blocks += 1
             return
 
-        # Crosscharge check every cycle
-        crosscharge = self.safety.check_crosscharge(state.battery_power_1, state.battery_power_2)
+        # Crosscharge check every cycle (PLAT-946: pass validity flags)
+        crosscharge = self.safety.check_crosscharge(
+            state.battery_power_1, state.battery_power_2,
+            power_1_valid=state.battery_power_1_valid,
+            power_2_valid=state.battery_power_2_valid,
+        )
         if not crosscharge.ok:
             _LOGGER.warning("SafetyGuard crosscharge: %s", crosscharge.reason)
             self._daily_safety_blocks += 1
@@ -1285,19 +1334,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_safety_blocks += 1
         return False
 
-    def _check_write_verify(self, ems_entity: str, expected_mode: str) -> bool:
-        """Read back EMS mode and verify it matches expected. Returns True if OK."""
-        actual = self._read_str(ems_entity)
-        if actual != expected_mode:
-            _LOGGER.error(
-                "Write-verify FAILED: %s expected=%s actual=%s",
-                ems_entity,
-                expected_mode,
-                actual,
-            )
-            self._daily_safety_blocks += 1
-            return False
-        return True
+    def _check_write_verify(self, ems_entity: str, expected_mode: str) -> None:
+        """Queue a write-verify check for the NEXT update cycle.
+
+        PLAT-945 (K3): GoodWe Modbus takes 2-10s to propagate writes.
+        Reading entity state immediately after a service call reads stale
+        state and produces false lockup alerts. Instead, we defer the
+        verification to the next coordinator cycle (30s later).
+        """
+        self._pending_write_verifies.append((ems_entity, expected_mode))
+
+    def _run_deferred_write_verifies(self) -> None:
+        """Execute all pending write-verify checks (called at cycle start)."""
+        pending = self._pending_write_verifies
+        self._pending_write_verifies = []
+        for ems_entity, expected_mode in pending:
+            actual = self._read_str(ems_entity)
+            if actual != expected_mode:
+                _LOGGER.error(
+                    "Write-verify FAILED (deferred): %s expected=%s actual=%s",
+                    ems_entity,
+                    expected_mode,
+                    actual,
+                )
+                self._daily_safety_blocks += 1
 
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:
         """Set batteries to charge from solar.
@@ -1433,12 +1493,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         SafetyGuard: heartbeat + rate limit + discharge check.
         """
-        # K1: Skip if already discharging at similar wattage
+        # K1: Skip if already discharging at similar wattage (±100W tolerance)
         if (
             self._last_command == BatteryCommand.DISCHARGE
-            and hasattr(self, "_last_discharge_w")
             and abs(watts - self._last_discharge_w) < 100
         ):
+            _LOGGER.debug(
+                "K1: skip redundant discharge (%dW ≈ %dW)",
+                watts,
+                self._last_discharge_w,
+            )
             return
 
         # ── SafetyGuard gates (defense-in-depth) ─────────────

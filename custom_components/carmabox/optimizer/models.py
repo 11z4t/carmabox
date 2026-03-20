@@ -107,6 +107,7 @@ class CarmaboxState:
     # Battery 1 (primary)
     battery_soc_1: float = 0.0
     battery_power_1: float = 0.0
+    battery_power_1_valid: bool = True  # False = unknown/unavailable at HA start (PLAT-946)
     battery_ems_1: str = ""
 
     battery_cap_1_kwh: float = 15.0
@@ -114,6 +115,7 @@ class CarmaboxState:
     # Battery 2 (optional, -1 = not present)
     battery_soc_2: float = -1.0
     battery_power_2: float = 0.0
+    battery_power_2_valid: bool = True  # False = unknown/unavailable at HA start (PLAT-946)
     battery_ems_2: str = ""
     battery_cap_2_kwh: float = 5.0
 

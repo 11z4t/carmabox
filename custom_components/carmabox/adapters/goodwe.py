@@ -108,8 +108,8 @@ class GoodWeAdapter(InverterAdapter):
 
     @property
     def soc(self) -> float:
-        """Battery SoC (0-100%)."""
-        return self._state(f"sensor.pv_battery_soc_{self.prefix}")
+        """Battery SoC (0-100%). Returns -1 if unavailable."""
+        return self._state(f"sensor.pv_battery_soc_{self.prefix}", default=-1.0)
 
     @property
     def power_w(self) -> float:

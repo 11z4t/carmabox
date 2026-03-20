@@ -197,14 +197,36 @@ class SafetyGuard:
         self,
         power_1_w: float,
         power_2_w: float,
+        power_1_valid: bool = True,
+        power_2_valid: bool = True,
     ) -> SafetyResult:
         """Check for crosscharge condition.
 
         Crosscharge = one battery charging while other discharging.
         Both must be significant (>threshold).
+
+        power_X_valid=False means the sensor was unknown/unavailable (e.g. HA start).
+        When readings are unreliable, we block to be safe (PLAT-946).
         """
-        if power_2_w == 0:  # No second battery
-            return SafetyResult(ok=True)
+        # No second battery (soc_2 == -1 → caller passes power_2=0, valid=True)
+        # Single-battery setups never crosscharge
+        if power_2_w == 0 and power_2_valid:
+            r = SafetyResult(ok=True)
+            self._log("crosscharge", r)
+            return r
+
+        # PLAT-946: Block if either reading is unreliable (unknown/unavailable at HA start)
+        if not power_1_valid or not power_2_valid:
+            reason = (
+                f"unreliable power readings: "
+                f"battery_1={power_1_w}W (valid={power_1_valid}), "
+                f"battery_2={power_2_w}W (valid={power_2_valid}) "
+                f"— blocking until sensors available"
+            )
+            _LOGGER.warning("SafetyGuard BLOCK crosscharge: %s", reason)
+            r = SafetyResult(ok=False, reason=reason)
+            self._log("crosscharge", r)
+            return r
 
         opposite_signs = (power_1_w * power_2_w) < 0
         both_significant = (
