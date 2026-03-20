@@ -58,13 +58,6 @@ class NordpoolAdapter(PriceAdapter):
             hourly.append(round(avg, 2))
         return hourly
 
-    @staticmethod
-    def _ensure_ore(price: float) -> float:
-        """Ensure price is in öre/kWh (Nordpool may report SEK/kWh)."""
-        if 0 < price < 20:
-            return price * 100  # SEK → öre
-        return price
-
     @property
     def current_price(self) -> float:
         """Current electricity price (öre/kWh)."""
@@ -72,7 +65,7 @@ class NordpoolAdapter(PriceAdapter):
         if state is None or state.state in ("unknown", "unavailable", ""):
             return self.fallback_price
         try:
-            return self._ensure_ore(float(state.state))
+            return float(state.state)
         except (ValueError, TypeError):
             return self.fallback_price
 
@@ -88,7 +81,7 @@ class NordpoolAdapter(PriceAdapter):
         if not prices or len(prices) < 24:
             _LOGGER.debug("Nordpool today unavailable — using fallback")
             return [self.fallback_price] * 24
-        return [self._ensure_ore(p) for p in prices]
+        return prices
 
     @property
     def tomorrow_prices(self) -> list[float] | None:
@@ -100,4 +93,4 @@ class NordpoolAdapter(PriceAdapter):
         prices = self._to_hourly(raw)
         if not prices or len(prices) < 24:
             return None
-        return [self._ensure_ore(p) for p in prices]
+        return prices
