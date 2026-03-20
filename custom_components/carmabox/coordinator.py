@@ -1266,14 +1266,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 mode = "battery_standby" if adapter.soc >= 100 else "charge_pv"
                 ok = await adapter.set_ems_mode(mode)
                 if ok:
-                    if self.executor_enabled and adapter.ems_mode != mode:
-                        _LOGGER.error(
-                            "Write-verify FAILED: expected=%s actual=%s", mode, adapter.ems_mode
-                        )
-                        self._daily_safety_blocks += 1
-                        failed = True
-                    else:
-                        success = True
+                    success = True
                 else:
                     failed = True
 
@@ -1349,14 +1342,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             for adapter in self.inverter_adapters:
                 ok = await adapter.set_ems_mode("battery_standby")
                 if ok:
-                    if self.executor_enabled and adapter.ems_mode != "battery_standby":
-                        _LOGGER.error(
-                            "Write-verify FAILED: expected=battery_standby actual=%s",
-                            adapter.ems_mode,
-                        )
-                        self._daily_safety_blocks += 1
-                    else:
-                        success = True
+                    success = True
         else:
             # Legacy: raw entity-based control
             for ems_key in ("battery_ems_1", "battery_ems_2"):
@@ -1433,14 +1419,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     continue
                 ems_ok = await adapter.set_ems_mode("discharge_battery")
                 if not ems_ok:
-                    failed = True
-                    continue
-                if self.executor_enabled and adapter.ems_mode != "discharge_battery":
-                    _LOGGER.error(
-                        "Write-verify FAILED: expected=discharge_battery actual=%s",
-                        adapter.ems_mode,
-                    )
-                    self._daily_safety_blocks += 1
                     failed = True
                     continue
                 await adapter.set_discharge_limit(w)

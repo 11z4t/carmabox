@@ -221,7 +221,7 @@ if [[ "$STEP" == "household" ]]; then
     FLOW=$(ha_api POST "/config/config_entries/flow/${FLOW_ID}" '{
         "household_size": 4,
         "has_pool_pump": true,
-        "executor_enabled": false
+        "executor_enabled": true
     }')
     STEP=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('step_id',''))" 2>/dev/null)
     FLOW_TYPE=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('type',''))" 2>/dev/null)
@@ -342,7 +342,7 @@ for e in data[\"data\"][\"entries\"]:
             \"battery_soc_2\": lambda v: \"kontor\" in v or \"forrad\" in v,
             \"price_entity\": lambda v: \"nordpool\" in v,
             \"ev_soc_entity\": lambda v: \"xpeng\" in v or \"ev\" in v,
-            \"executor_enabled\": lambda v: v == False,
+            \"executor_enabled\": lambda v: v == True,
             \"grid_entity\": lambda v: \"grid\" in str(v),
         }
         passed = 0
