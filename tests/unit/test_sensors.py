@@ -10,6 +10,9 @@ from custom_components.carmabox.optimizer.savings import SavingsState
 from custom_components.carmabox.sensor import (
     SENSOR_DESCRIPTIONS,
     CarmaboxSensor,
+    _appliance_attrs_factory,
+    _appliance_value_factory,
+    _build_appliance_descriptions,
 )
 
 
@@ -435,3 +438,58 @@ class TestNoExtraAttrs:
             if desc.extra_attrs_fn is None:
                 sensor = CarmaboxSensor(coord, entry, desc)
                 assert sensor.extra_state_attributes is None
+
+
+class TestApplianceSensors:
+    """PLAT-943: Appliance category sensor tests."""
+
+    def test_build_descriptions_creates_per_category(self) -> None:
+        appliances = [
+            {"entity_id": "sensor.tvatt", "name": "Tvättmaskin", "category": "laundry"},
+            {"entity_id": "sensor.tork", "name": "Torktumlare", "category": "laundry"},
+            {"entity_id": "sensor.miner", "name": "Miner", "category": "miner"},
+        ]
+        descs = _build_appliance_descriptions(appliances)
+        assert len(descs) == 2  # laundry + miner
+        keys = {d.key for d in descs}
+        assert "appliance_laundry" in keys
+        assert "appliance_miner" in keys
+
+    def test_build_descriptions_empty_appliances(self) -> None:
+        descs = _build_appliance_descriptions([])
+        assert len(descs) == 0
+
+    def test_appliance_value_reads_category_power(self) -> None:
+        coord, _ = _make_sensor_deps()
+        coord.appliance_power = {"laundry": 250.3, "miner": 800.0}
+        fn = _appliance_value_factory("laundry")
+        assert fn(coord) == 250.3
+
+    def test_appliance_value_missing_category_returns_zero(self) -> None:
+        coord, _ = _make_sensor_deps()
+        coord.appliance_power = {}
+        fn = _appliance_value_factory("pool")
+        assert fn(coord) == 0.0
+
+    def test_appliance_attrs_includes_energy_and_members(self) -> None:
+        coord, _ = _make_sensor_deps()
+        coord.appliance_energy_wh = {"laundry": 1500.0}
+        coord._appliances = [
+            {"entity_id": "sensor.tvatt", "name": "Tvättmaskin", "category": "laundry"},
+            {"entity_id": "sensor.tork", "name": "Torktumlare", "category": "laundry"},
+            {"entity_id": "sensor.miner", "name": "Miner", "category": "miner"},
+        ]
+        fn = _appliance_attrs_factory("laundry")
+        attrs = fn(coord)
+        assert attrs["energy_today_kwh"] == 1.5
+        assert len(attrs["appliances"]) == 2
+        assert attrs["appliances"][0]["entity_id"] == "sensor.tvatt"
+
+    def test_appliance_description_has_correct_metadata(self) -> None:
+        appliances = [{"entity_id": "s.x", "name": "X", "category": "heating"}]
+        descs = _build_appliance_descriptions(appliances)
+        assert len(descs) == 1
+        d = descs[0]
+        assert d.key == "appliance_heating"
+        assert d.native_unit_of_measurement == "W"
+        assert d.icon == "mdi:lightning-bolt"

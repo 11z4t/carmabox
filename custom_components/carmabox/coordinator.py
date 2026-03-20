@@ -122,6 +122,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
+        self._last_discharge_w = 0
 
         # ── Inverter adapters ─────────────────────────────────
         self.inverter_adapters: list[InverterAdapter] = []
@@ -581,7 +582,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         hour = datetime.now().hour
         night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
         weight = ellevio_weight(hour, night_weight=night_weight)
-        net_w = max(0, state.grid_power_w + state.ev_power_w - state.pv_power_w)
+        # H5: grid_power_w IS what Ellevio sees (net import after PV + battery)
+        # Don't adjust for EV/PV — they're already in the meter reading
+        net_w = max(0, state.grid_power_w)
         weighted_net = net_w * weight
         target_w = self.target_kw * 1000
         pv_kw = state.pv_power_w / 1000
@@ -716,6 +719,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning_chain=chain,
                 )
             return
+
+        # ── RULE 1.5: Grid charge at very cheap price ────────
+        grid_charge_threshold = float(self._cfg.get(
+            "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
+        ))
+        grid_charge_max_soc = float(self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC))
+        if (
+            state.current_price > 0
+            and state.current_price < grid_charge_threshold
+            and state.total_battery_soc < grid_charge_max_soc
+            and not state.is_exporting
+        ):
+            reasoning.append(
+                f"Pris {state.current_price:.0f} öre < {grid_charge_threshold:.0f} → nätladda batteri"
+            )
+            charge_result = self.safety.check_charge(
+                state.battery_soc_1, state.battery_soc_2, temp_c
+            )
+            if charge_result.ok:
+                await self._cmd_charge_pv(state)  # charge_pv works for grid charge too
+                self._record_decision(
+                    state,
+                    "grid_charge",
+                    f"Nätladdning — {state.current_price:.0f} öre (billigt), "
+                    f"batteri {state.total_battery_soc:.0f}%",
+                    reasoning=reasoning,
+                )
+                return
 
         # ── RULE 2: SoC 100% → standby ──────────────────────
         if state.all_batteries_full:
@@ -1402,6 +1433,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         SafetyGuard: heartbeat + rate limit + discharge check.
         """
+        # K1: Skip if already discharging at similar wattage
+        if (
+            self._last_command == BatteryCommand.DISCHARGE
+            and hasattr(self, "_last_discharge_w")
+            and abs(watts - self._last_discharge_w) < 100
+        ):
+            return
+
         # ── SafetyGuard gates (defense-in-depth) ─────────────
         heartbeat = self.safety.check_heartbeat()
         if not heartbeat.ok:
@@ -1460,7 +1499,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if not ems_ok:
                     failed = True
                     continue
-                await adapter.set_discharge_limit(w)
+                limit_ok = await adapter.set_discharge_limit(w)
+                if not limit_ok:
+                    # K2: Rollback EMS if limit failed — avoid stale discharge
+                    _LOGGER.error("Discharge limit failed — rolling back to standby")
+                    await adapter.set_ems_mode("battery_standby")
+                    failed = True
+                    continue
                 success = True
 
             # R3: Rollback on partial failure — force ALL to standby
@@ -1473,6 +1518,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             if success:
                 self._last_command = BatteryCommand.DISCHARGE
+                self._last_discharge_w = watts
                 self.safety.record_mode_change()
         else:
             # Legacy: raw entity-based control
@@ -1531,4 +1577,5 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             if success:
                 self._last_command = BatteryCommand.DISCHARGE
+                self._last_discharge_w = watts
                 self.safety.record_mode_change()

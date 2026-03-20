@@ -781,3 +781,258 @@ async def test_easee_charger_id_fallback_from_prefix(hass: HomeAssistant) -> Non
 
     # Should extract from prefix pattern: easee_home_12840 → EH12840
     assert opts["ev_charger_id"] == "EH12840"
+
+
+# ── PLAT-943: Appliance detection tests ─────────────────────
+
+
+async def test_appliance_detection_finds_power_sensors(hass: HomeAssistant) -> None:
+    """_detect_appliances should find power sensors and suggest categories."""
+    from custom_components.carmabox.config_flow import CarmaboxConfigFlow
+
+    # Set up power sensors with unit_of_measurement
+    hass.states.async_set(
+        "sensor.102_shelly_plug_g3_power",
+        "250",
+        {"unit_of_measurement": "W", "friendly_name": "Tvättmaskin"},
+    )
+    hass.states.async_set(
+        "sensor.kontor_varmepump_switch_0_power",
+        "1200",
+        {"unit_of_measurement": "W", "friendly_name": "Kontor Värmepump"},
+    )
+    hass.states.async_set(
+        "sensor.shelly1pmg4_miner_power",
+        "0.8",
+        {"unit_of_measurement": "kW", "friendly_name": "SC Miner"},
+    )
+
+    flow = CarmaboxConfigFlow()
+    flow.hass = hass
+    detected = flow._detect_appliances()
+
+    assert len(detected) == 3
+    # Tvättmaskin → laundry (via "tvatt" hint is NOT in entity_id, but friendly_name isn't checked)
+    # Actually entity id is "102_shelly_plug_g3_power" — no hint match → "other"
+    assert "sensor.102_shelly_plug_g3_power" in detected
+    # värmepump → heating
+    assert detected["sensor.kontor_varmepump_switch_0_power"]["category"] == "heating"
+    # miner → miner
+    assert detected["sensor.shelly1pmg4_miner_power"]["category"] == "miner"
+
+
+async def test_appliance_detection_excludes_system_sensors(hass: HomeAssistant) -> None:
+    """System sensors (goodwe, pv_, grid, etc.) should be excluded."""
+    from custom_components.carmabox.config_flow import CarmaboxConfigFlow
+
+    # System sensors that should be excluded
+    hass.states.async_set(
+        "sensor.goodwe_battery_power_kontor",
+        "500",
+        {"unit_of_measurement": "W"},
+    )
+    hass.states.async_set(
+        "sensor.pv_solar_total",
+        "3000",
+        {"unit_of_measurement": "W"},
+    )
+    hass.states.async_set(
+        "sensor.house_grid_power",
+        "1500",
+        {"unit_of_measurement": "W"},
+    )
+    # This one should be included
+    hass.states.async_set(
+        "sensor.eaton_effekt_w",
+        "120",
+        {"unit_of_measurement": "W", "friendly_name": "Eaton UPS"},
+    )
+
+    flow = CarmaboxConfigFlow()
+    flow.hass = hass
+    detected = flow._detect_appliances()
+
+    assert len(detected) == 1
+    assert "sensor.eaton_effekt_w" in detected
+    assert detected["sensor.eaton_effekt_w"]["category"] == "ups"
+
+
+async def test_appliance_step_shown_when_sensors_found(hass: HomeAssistant) -> None:
+    """Appliance step should appear when power sensors are detected."""
+    detected = {
+        "inverters": [{"domain": "goodwe", "name": "GoodWe", "entry_id": "e1", "prefix": "kontor"}],
+        "ev_chargers": [],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    # Add a power sensor
+    hass.states.async_set(
+        "sensor.tvattmaskin_power",
+        "0",
+        {"unit_of_measurement": "W", "friendly_name": "Tvättmaskin"},
+    )
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        # confirm
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        # ev
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": False,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        # grid
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        # household → should go to appliances (not summary)
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+
+    assert result["step_id"] == "appliances"
+    assert "1" in result["description_placeholders"]["detected_count"]
+
+
+async def test_appliance_step_stores_selections(hass: HomeAssistant) -> None:
+    """User category selections should be stored in config entry."""
+    detected = {
+        "inverters": [{"domain": "goodwe", "name": "GoodWe", "entry_id": "e1", "prefix": "kontor"}],
+        "ev_chargers": [],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    hass.states.async_set(
+        "sensor.tvattmaskin_power",
+        "250",
+        {"unit_of_measurement": "W", "friendly_name": "Tvättmaskin"},
+    )
+    hass.states.async_set(
+        "sensor.miner_power",
+        "800",
+        {"unit_of_measurement": "W", "friendly_name": "Miner"},
+    )
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": False,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+        assert result["step_id"] == "appliances"
+
+        # User enables both, changes tvattmaskin to laundry category
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "enable_sensor.tvattmaskin_power": True,
+                "category_sensor.tvattmaskin_power": "laundry",
+                "enable_sensor.miner_power": True,
+                "category_sensor.miner_power": "miner",
+            },
+        )
+        assert result["step_id"] == "summary"
+
+        # Finalize
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    appliances = result["options"]["appliances"]
+    assert len(appliances) == 2
+    assert any(a["entity_id"] == "sensor.tvattmaskin_power" and a["category"] == "laundry" for a in appliances)
+    assert any(a["entity_id"] == "sensor.miner_power" and a["category"] == "miner" for a in appliances)
+
+
+async def test_appliance_step_disable_sensor(hass: HomeAssistant) -> None:
+    """User can disable a sensor in the appliance step."""
+    detected = {
+        "inverters": [{"domain": "goodwe", "name": "GoodWe", "entry_id": "e1", "prefix": "kontor"}],
+        "ev_chargers": [],
+        "price_sources": [],
+        "pv_forecasts": [],
+    }
+
+    hass.states.async_set(
+        "sensor.tvattmaskin_power",
+        "250",
+        {"unit_of_measurement": "W", "friendly_name": "Tvättmaskin"},
+    )
+    hass.states.async_set(
+        "sensor.unwanted_sensor_power",
+        "50",
+        {"unit_of_measurement": "W", "friendly_name": "Unwanted"},
+    )
+
+    with patch(
+        "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
+        return_value=detected,
+    ):
+        result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "ev_enabled": False,
+                "ev_model": "XPENG G9",
+                "ev_capacity_kwh": 98,
+                "ev_night_target_soc": 75,
+                "ev_full_charge_days": 7,
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
+        )
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {"household_size": 4, "has_pool_pump": False},
+        )
+        assert result["step_id"] == "appliances"
+
+        # Disable unwanted sensor
+        result = await hass.config_entries.flow.async_configure(
+            result["flow_id"],
+            {
+                "enable_sensor.tvattmaskin_power": True,
+                "category_sensor.tvattmaskin_power": "laundry",
+                "enable_sensor.unwanted_sensor_power": False,
+                "category_sensor.unwanted_sensor_power": "other",
+            },
+        )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] == FlowResultType.CREATE_ENTRY
+    appliances = result["options"]["appliances"]
+    assert len(appliances) == 1
+    assert appliances[0]["entity_id"] == "sensor.tvattmaskin_power"

@@ -82,6 +82,27 @@
       },
       "ev_soc": {
         "name": "Elbil-SoC"
+      },
+      "appliance_laundry": {
+        "name": "Förbrukning Vitvaror"
+      },
+      "appliance_heating": {
+        "name": "Förbrukning Värme/VP"
+      },
+      "appliance_pool": {
+        "name": "Förbrukning Pool"
+      },
+      "appliance_miner": {
+        "name": "Förbrukning Miner"
+      },
+      "appliance_lighting": {
+        "name": "Förbrukning Belysning"
+      },
+      "appliance_ups": {
+        "name": "Förbrukning UPS"
+      },
+      "appliance_other": {
+        "name": "Förbrukning Övrigt"
       }
     }
   },

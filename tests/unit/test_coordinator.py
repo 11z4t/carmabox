@@ -97,11 +97,12 @@ def _set_state(
     coord: CarmaboxCoordinator,
     entity_id: str,
     value: str,
+    attributes: dict[str, object] | None = None,
 ) -> None:
     """Set a mock state on coordinator's hass."""
     state = MagicMock()
     state.state = value
-    state.attributes = {}
+    state.attributes = attributes or {}
     coord._states[entity_id] = state  # type: ignore[attr-defined]
 
 
@@ -1304,3 +1305,97 @@ class TestR3RollbackPartialFailure:
         for adapter in [a1, a2]:
             for call in adapter.set_ems_mode.call_args_list:
                 assert call.args == ("discharge_battery",)
+
+
+class TestApplianceTracking:
+    """PLAT-943: Appliance power tracking tests."""
+
+    def test_track_appliances_reads_power(self) -> None:
+        """_track_appliances reads power from configured appliance entities."""
+        coord = _make_coordinator()
+        coord._appliances = [
+            {"entity_id": "sensor.tvatt_power", "name": "Tvättmaskin", "category": "laundry", "threshold_w": 10},
+            {"entity_id": "sensor.miner_power", "name": "Miner", "category": "miner", "threshold_w": 10},
+        ]
+        _set_state(coord, "sensor.tvatt_power", "250", {"unit_of_measurement": "W"})
+        _set_state(coord, "sensor.miner_power", "800", {"unit_of_measurement": "W"})
+
+        coord._track_appliances()
+
+        assert coord.appliance_power["laundry"] == 250.0
+        assert coord.appliance_power["miner"] == 800.0
+
+    def test_track_appliances_converts_kw(self) -> None:
+        """kW sensors should be converted to W."""
+        coord = _make_coordinator()
+        coord._appliances = [
+            {"entity_id": "sensor.vp_power", "name": "VP", "category": "heating", "threshold_w": 10},
+        ]
+        _set_state(coord, "sensor.vp_power", "1.5", {"unit_of_measurement": "kW"})
+
+        coord._track_appliances()
+
+        assert coord.appliance_power["heating"] == 1500.0
+
+    def test_track_appliances_threshold_filters_standby(self) -> None:
+        """Power below threshold should read as 0."""
+        coord = _make_coordinator()
+        coord._appliances = [
+            {"entity_id": "sensor.tvatt", "name": "T", "category": "laundry", "threshold_w": 10},
+        ]
+        _set_state(coord, "sensor.tvatt", "5", {"unit_of_measurement": "W"})
+
+        coord._track_appliances()
+
+        assert coord.appliance_power["laundry"] == 0.0
+
+    def test_track_appliances_accumulates_energy(self) -> None:
+        """Energy should accumulate across multiple calls."""
+        coord = _make_coordinator()
+        coord._appliances = [
+            {"entity_id": "sensor.tvatt", "name": "T", "category": "laundry", "threshold_w": 10},
+        ]
+        _set_state(coord, "sensor.tvatt", "1000", {"unit_of_measurement": "W"})
+
+        coord._track_appliances()
+        coord._track_appliances()
+
+        # 1000W × (30/3600)h × 2 calls = 16.67 Wh
+        expected = 1000 * (30 / 3600) * 2
+        assert abs(coord.appliance_energy_wh["laundry"] - expected) < 0.01
+
+    def test_track_appliances_sums_same_category(self) -> None:
+        """Multiple appliances in same category should sum."""
+        coord = _make_coordinator()
+        coord._appliances = [
+            {"entity_id": "sensor.tvatt", "name": "Tvättmaskin", "category": "laundry", "threshold_w": 10},
+            {"entity_id": "sensor.tork", "name": "Torktumlare", "category": "laundry", "threshold_w": 10},
+        ]
+        _set_state(coord, "sensor.tvatt", "200", {"unit_of_measurement": "W"})
+        _set_state(coord, "sensor.tork", "800", {"unit_of_measurement": "W"})
+
+        coord._track_appliances()
+
+        assert coord.appliance_power["laundry"] == 1000.0
+
+    def test_daily_reset_clears_energy(self) -> None:
+        """Daily counter reset should clear appliance energy."""
+        from datetime import datetime
+
+        coord = _make_coordinator()
+        coord.appliance_energy_wh = {"laundry": 5000.0, "miner": 12000.0}
+        coord._current_date = "2026-03-19"
+
+        # Trigger reset by simulating next day
+        coord._reset_daily_counters_if_new_day(datetime(2026, 3, 20, 0, 1))
+
+        assert coord.appliance_energy_wh == {}
+
+    def test_empty_appliances_no_error(self) -> None:
+        """Empty appliance list should not crash."""
+        coord = _make_coordinator()
+        coord._appliances = []
+
+        coord._track_appliances()
+
+        assert coord.appliance_power == {}
