@@ -53,7 +53,7 @@ class SafetyGuard:
         crosscharge_threshold_w: float = 500.0,
         temperature_min_c: float = 0.0,
         temperature_max_c: float = 45.0,
-        max_mode_changes_per_hour: int = 10,
+        max_mode_changes_per_hour: int = 60,
     ) -> None:
         """Initialize with safety thresholds."""
         self.min_soc = min_soc
