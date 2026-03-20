@@ -130,7 +130,8 @@ class SafetyGuard:
             self._log("discharge", r)
             return r
 
-        if soc_2 >= 0 and soc_2 < min_soc:
+        if soc_2 > 0 and soc_2 < min_soc:
+            # soc_2==0 likely means unavailable — don't block on that
             reason = f"battery_2 SoC {soc_2:.0f}% < min {min_soc:.0f}%"
             _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
