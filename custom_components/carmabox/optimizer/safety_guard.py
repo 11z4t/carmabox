@@ -215,8 +215,14 @@ class SafetyGuard:
             self._log("crosscharge", r)
             return r
 
-        # PLAT-946: Block if either reading is unreliable (unknown/unavailable at HA start)
-        if not power_1_valid or not power_2_valid:
+        # PLAT-946: If battery_2 unavailable but battery_1 is fine → single-battery mode (OK)
+        if not power_2_valid and power_1_valid:
+            r = SafetyResult(ok=True)
+            self._log("crosscharge", r)
+            return r
+
+        # Block only if battery_1 is unreliable (we can't make safe decisions)
+        if not power_1_valid:
             reason = (
                 f"unreliable power readings: "
                 f"battery_1={power_1_w}W (valid={power_1_valid}), "
