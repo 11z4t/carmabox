@@ -930,8 +930,8 @@ class TestServiceCallErrorHandling:
         assert coord._last_command == BatteryCommand.IDLE
 
     @pytest.mark.asyncio
-    async def test_charge_pv_one_battery_fails_other_continues(self) -> None:
-        """_cmd_charge_pv: battery 1 fails → battery 2 should still be attempted."""
+    async def test_charge_pv_one_battery_fails_rollback_to_standby(self) -> None:
+        """R3: _cmd_charge_pv partial failure → rollback ALL to standby."""
         coord = _make_coordinator(
             {
                 "battery_ems_1": "select.ems1",
@@ -951,12 +951,14 @@ class TestServiceCallErrorHandling:
 
         coord.hass.services.async_call = AsyncMock(side_effect=side_effect)
 
+        blocks_before = coord._daily_safety_blocks
         state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
         with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
             await coord._cmd_charge_pv(state)
 
-        # Battery 2 succeeded → command should still be set
-        assert coord._last_command == BatteryCommand.CHARGE_PV
+        # R3: partial failure → rollback to standby, command NOT set
+        assert coord._last_command != BatteryCommand.CHARGE_PV
+        assert coord._daily_safety_blocks > blocks_before
 
     @pytest.mark.asyncio
     async def test_standby_service_fail_last_command_unchanged(self) -> None:
@@ -1219,3 +1221,83 @@ class TestAdapterIntegration:
 
         a1.set_ems_mode.assert_called_once_with("battery_standby")
         assert coord._last_command == BatteryCommand.STANDBY
+
+
+class TestR3RollbackPartialFailure:
+    """PLAT-937: R3 rollback — partial adapter failure forces all to standby."""
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_partial_failure_rollback_adapters(self) -> None:
+        """charge_pv: adapter 1 succeeds, adapter 2 fails → rollback all to standby."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=50, ems_mode="charge_pv")
+        a2 = _make_mock_adapter(soc=50, ems_mode="charge_pv")
+        a2.set_ems_mode = AsyncMock(return_value=False)  # adapter 2 fails
+        coord.inverter_adapters = [a1, a2]
+
+        blocks_before = coord._daily_safety_blocks
+        state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
+        await coord._cmd_charge_pv(state)
+
+        # Rollback: both adapters should get standby call
+        assert a1.set_ems_mode.call_count == 2  # charge_pv + standby rollback
+        assert a2.set_ems_mode.call_count == 2  # failed charge_pv + standby rollback
+        assert a1.set_ems_mode.call_args_list[-1].args == ("battery_standby",)
+        assert a2.set_ems_mode.call_args_list[-1].args == ("battery_standby",)
+        assert coord._last_command != BatteryCommand.CHARGE_PV
+        assert coord._daily_safety_blocks > blocks_before
+
+    @pytest.mark.asyncio
+    async def test_charge_pv_all_fail_no_rollback(self) -> None:
+        """charge_pv: both adapters fail → no rollback needed (no partial state)."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=50)
+        a1.set_ems_mode = AsyncMock(return_value=False)
+        a2 = _make_mock_adapter(soc=50)
+        a2.set_ems_mode = AsyncMock(return_value=False)
+        coord.inverter_adapters = [a1, a2]
+
+        blocks_before = coord._daily_safety_blocks
+        state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
+        await coord._cmd_charge_pv(state)
+
+        # No rollback — both failed, no partial state
+        assert a1.set_ems_mode.call_count == 1
+        assert a2.set_ems_mode.call_count == 1
+        assert coord._last_command != BatteryCommand.CHARGE_PV
+
+    @pytest.mark.asyncio
+    async def test_discharge_partial_failure_rollback_adapters(self) -> None:
+        """discharge: adapter 1 succeeds, adapter 2 fails → rollback all to standby."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=80, ems_mode="discharge_battery")
+        a2 = _make_mock_adapter(soc=50, ems_mode="discharge_battery")
+        a2.set_ems_mode = AsyncMock(return_value=False)  # adapter 2 fails
+        coord.inverter_adapters = [a1, a2]
+
+        blocks_before = coord._daily_safety_blocks
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=50)
+        await coord._cmd_discharge(state, 1000)
+
+        # Rollback: both adapters should get standby call
+        assert a1.set_ems_mode.call_args_list[-1].args == ("battery_standby",)
+        assert a2.set_ems_mode.call_args_list[-1].args == ("battery_standby",)
+        assert coord._last_command != BatteryCommand.DISCHARGE
+        assert coord._daily_safety_blocks > blocks_before
+
+    @pytest.mark.asyncio
+    async def test_discharge_all_succeed_no_rollback(self) -> None:
+        """discharge: all adapters succeed → no rollback, command set normally."""
+        coord = _make_coordinator()
+        a1 = _make_mock_adapter(soc=80, ems_mode="discharge_battery")
+        a2 = _make_mock_adapter(soc=50, ems_mode="discharge_battery")
+        coord.inverter_adapters = [a1, a2]
+
+        state = CarmaboxState(battery_soc_1=80, battery_soc_2=50)
+        await coord._cmd_discharge(state, 1000)
+
+        assert coord._last_command == BatteryCommand.DISCHARGE
+        # No standby calls — only discharge_battery
+        for adapter in [a1, a2]:
+            for call in adapter.set_ems_mode.call_args_list:
+                assert call.args == ("discharge_battery",)

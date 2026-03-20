@@ -1259,6 +1259,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         _LOGGER.info("CARMA: charge_pv (solar surplus)")
         success = False
+        failed = False
 
         if self.inverter_adapters:
             for adapter in self.inverter_adapters:
@@ -1270,8 +1271,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             "Write-verify FAILED: expected=%s actual=%s", mode, adapter.ems_mode
                         )
                         self._daily_safety_blocks += 1
+                        failed = True
                     else:
                         success = True
+                else:
+                    failed = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby")
+                for adapter in self.inverter_adapters:
+                    await adapter.set_ems_mode("battery_standby")
+                self._daily_safety_blocks += 1
+                success = False
         else:
             # Legacy: raw entity-based control
             for ems_key in ("battery_ems_1", "battery_ems_2"):
@@ -1287,6 +1299,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     if self.executor_enabled:
                         self._check_write_verify(entity, mode)
                     success = True
+                else:
+                    failed = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby (legacy)")
+                for ems_key in ("battery_ems_1", "battery_ems_2"):
+                    entity = self._get_entity(ems_key)
+                    if entity:
+                        await self._safe_service_call(
+                            "select", "select_option",
+                            {"entity_id": entity, "option": "battery_standby"},
+                        )
+                self._daily_safety_blocks += 1
+                success = False
 
         if success:
             self._last_command = BatteryCommand.CHARGE_PV
@@ -1447,6 +1474,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             w2 = watts - w1
 
             success = False
+            failed = False
             for ems_key, limit_key, w in [
                 ("battery_ems_1", "battery_limit_1", w1),
                 ("battery_ems_2", "battery_limit_2", w2),
@@ -1461,6 +1489,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                     if not ems_ok:
                         # Fail-safe: do NOT set discharge limit if EMS mode failed
+                        failed = True
                         continue
                     if self.executor_enabled:
                         self._check_write_verify(ems_entity, "discharge_battery")
@@ -1469,6 +1498,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             "number", "set_value", {"entity_id": limit_entity, "value": w}
                         )
                         success = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning("Partial discharge failure — rolling back all to standby (legacy)")
+                for ems_key in ("battery_ems_1", "battery_ems_2"):
+                    entity = self._get_entity(ems_key)
+                    if entity:
+                        await self._safe_service_call(
+                            "select", "select_option",
+                            {"entity_id": entity, "option": "battery_standby"},
+                        )
+                self._daily_safety_blocks += 1
+                success = False
 
             if success:
                 self._last_command = BatteryCommand.DISCHARGE
