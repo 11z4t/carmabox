@@ -39,12 +39,12 @@ class TestGoodWeAdapter:
     def test_read_soc_unavailable(self) -> None:
         hass = _make_hass(("sensor.pv_battery_soc_kontor", "unavailable"))
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
-        assert adapter.soc == 0.0
+        assert adapter.soc == -1.0  # -1 signals unavailable
 
     def test_read_soc_missing_entity(self) -> None:
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
-        assert adapter.soc == 0.0
+        assert adapter.soc == -1.0  # -1 signals unavailable
 
     def test_read_power(self) -> None:
         hass = _make_hass(("sensor.goodwe_battery_power_kontor", "-1500"))
@@ -255,7 +255,7 @@ class TestGoodWeAdapterEdgeCases:
     def test_read_float_invalid_string(self) -> None:
         hass = _make_hass(("sensor.pv_battery_soc_kontor", "not_a_number"))
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
-        assert adapter.soc == 0.0
+        assert adapter.soc == -1.0  # -1 signals unavailable/invalid
 
     def test_read_str_unavailable(self) -> None:
         hass = _make_hass(("select.goodwe_kontor_ems_mode", "unavailable"))

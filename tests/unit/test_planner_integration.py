@@ -13,6 +13,7 @@ import pytest
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
 from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
 from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourPlan
+from custom_components.carmabox.optimizer.predictor import ConsumptionPredictor
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
 
@@ -67,6 +68,10 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._ev_current_amps = 0
     coord._ev_last_ramp_time = 0.0
     coord._ev_initialized = True
+
+    # PLAT-965: Predictor
+    coord.predictor = ConsumptionPredictor()
+
     return coord
 
 

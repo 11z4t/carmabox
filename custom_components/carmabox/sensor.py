@@ -377,6 +377,27 @@ def _shadow_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+def _status_value(coord: CarmaboxCoordinator) -> str:
+    """PLAT-964: Transparency sensor — user-friendly status."""
+    return coord.status_text
+
+
+def _status_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """PLAT-964: System health per component."""
+    return {"system_health": coord.system_health}
+
+
+def _plan_score_value(coord: CarmaboxCoordinator) -> float | None:
+    """PLAT-966: Plan score — how well plan matched reality."""
+    scores = coord.plan_score()
+    return scores.get("score_today")
+
+
+def _plan_score_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """PLAT-966: Plan score details with trend."""
+    return coord.plan_score()
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -502,6 +523,23 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         icon="mdi:compare-horizontal",
         value_fn=_shadow_value,
         extra_attrs_fn=_shadow_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="status",
+        translation_key="status",
+        icon="mdi:heart-pulse",
+        value_fn=_status_value,
+        extra_attrs_fn=_status_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="plan_score",
+        translation_key="plan_score",
+        icon="mdi:chart-line",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=_plan_score_value,
+        extra_attrs_fn=_plan_score_attrs,
     ),
 )
 

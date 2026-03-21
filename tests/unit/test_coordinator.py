@@ -11,7 +11,8 @@ from custom_components.carmabox.coordinator import (
     CarmaboxCoordinator,
 )
 from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
-from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, ShadowComparison
+from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourActual, ShadowComparison
+from custom_components.carmabox.optimizer.predictor import ConsumptionPredictor
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
 
@@ -95,6 +96,18 @@ def _make_coordinator(
     coord._consumption_last_hour = -1
     coord._consumption_store = MagicMock()
     coord._consumption_store.async_save = AsyncMock()
+
+    # PLAT-965: Predictor
+    coord.predictor = ConsumptionPredictor()
+    coord._predictor_store = MagicMock()
+    coord._predictor_store.async_save = AsyncMock()
+    coord._predictor_loaded = True
+    coord._predictor_last_save = 0.0
+
+    # PLAT-972: Self-healing
+    coord._ems_consecutive_failures = 0
+    coord._ems_pause_until = 0.0
+    coord._ev_last_known_enabled = None
 
     return coord
 
@@ -1453,3 +1466,253 @@ class TestApplianceTracking:
         coord._track_appliances()
 
         assert coord.appliance_power == {}
+
+
+class TestPredictorIntegration:
+    """PLAT-965: ConsumptionPredictor integration in coordinator."""
+
+    def test_predictor_initialized(self) -> None:
+        """Coordinator should have a predictor instance."""
+        coord = _make_coordinator()
+        assert coord.predictor is not None
+        assert coord.predictor.total_samples == 0
+
+    def test_track_savings_feeds_predictor(self) -> None:
+        """_track_savings should add samples to predictor once per hour."""
+        coord = _make_coordinator()
+        coord._consumption_last_hour = -1  # Force first-hour update
+        state = CarmaboxState(
+            grid_power_w=2000,
+            battery_power_1=0,
+            battery_power_2=0,
+            pv_power_w=1000,
+            ev_power_w=0,
+            current_price=50.0,
+        )
+        mock_now = MagicMock()
+        mock_now.hour = 14
+        mock_now.weekday.return_value = 5  # Saturday
+        mock_now.month = 3
+        mock_now.strftime.return_value = "2026-03-21"
+        mock_now.isoformat.return_value = "2026-03-21T14:00:00"
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = mock_now
+            coord._track_savings(state)
+
+        assert coord.predictor.total_samples == 1
+
+    def test_predictor_used_in_generate_plan_when_trained(self) -> None:
+        """When predictor is trained, _generate_plan should use it."""
+        coord = _make_coordinator({"price_entity": "sensor.np"})
+        # Make predictor appear trained
+        coord.predictor.total_samples = 200
+        for d in range(7):
+            for h in range(24):
+                key = f"{d}_{h}"
+                coord.predictor.history[key] = [2.0, 2.5, 1.8]
+
+        _set_state(
+            coord,
+            "sensor.np",
+            "50",
+            {"today": [50.0] * 24, "tomorrow": [], "tomorrow_valid": False},
+        )
+
+        state = CarmaboxState(battery_soc_1=80)
+        with patch("custom_components.carmabox.coordinator.SolcastAdapter") as mock_sol:
+            mock_sol.return_value.today_hourly_kw = [0.0] * 24
+            mock_sol.return_value.tomorrow_kwh = 10.0
+            mock_sol.return_value.forecast_daily_3d = [10.0, 10.0, 10.0]
+            coord._generate_plan(state)
+
+        assert len(coord.plan) > 0
+
+    def test_predictor_fallback_when_not_trained(self) -> None:
+        """When predictor is NOT trained, use consumption profile."""
+        coord = _make_coordinator({"price_entity": "sensor.np"})
+        assert not coord.predictor.is_trained
+
+        _set_state(
+            coord,
+            "sensor.np",
+            "50",
+            {"today": [50.0] * 24, "tomorrow": [], "tomorrow_valid": False},
+        )
+
+        state = CarmaboxState(battery_soc_1=80)
+        coord._generate_plan(state)  # Should not raise
+
+
+class TestSelfHealing:
+    """PLAT-972: Self-healing tests."""
+
+    @pytest.mark.asyncio
+    async def test_goodwe_self_heal_unavailable_triggers_reload(self) -> None:
+        """When GoodWe EMS entity is unavailable, trigger reload."""
+        from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
+
+        coord = _make_coordinator()
+        adapter = MagicMock(spec=GoodWeAdapter)
+        adapter.prefix = "kontor"
+        adapter.soc = 80.0
+        coord.inverter_adapters = [adapter]
+
+        # Set entity to unavailable
+        _set_state(coord, "select.goodwe_kontor_ems_mode", "unavailable")
+
+        await coord._self_heal_goodwe_entries()
+
+        assert coord._ems_consecutive_failures == 1
+        # Should have called reload service
+        coord.hass.services.async_call.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_goodwe_self_heal_pauses_after_max_failures(self) -> None:
+        """After MAX_FAILURES consecutive, pause for 5 min."""
+        import time
+        from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
+
+        coord = _make_coordinator()
+        adapter = MagicMock(spec=GoodWeAdapter)
+        adapter.prefix = "kontor"
+        adapter.soc = 80.0
+        coord.inverter_adapters = [adapter]
+        coord._ems_consecutive_failures = 2  # One more will trigger pause
+
+        _set_state(coord, "select.goodwe_kontor_ems_mode", "unavailable")
+
+        await coord._self_heal_goodwe_entries()
+
+        assert coord._ems_pause_until > time.monotonic()
+        assert coord._ems_consecutive_failures == 0  # Reset after pause
+
+    @pytest.mark.asyncio
+    async def test_goodwe_self_heal_resets_on_healthy(self) -> None:
+        """Healthy adapter resets failure counter."""
+        from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
+
+        coord = _make_coordinator()
+        adapter = MagicMock(spec=GoodWeAdapter)
+        adapter.prefix = "kontor"
+        adapter.soc = 80.0
+        coord.inverter_adapters = [adapter]
+        coord._ems_consecutive_failures = 2
+
+        # Entity is healthy
+        _set_state(coord, "select.goodwe_kontor_ems_mode", "charge_pv")
+
+        await coord._self_heal_goodwe_entries()
+
+        assert coord._ems_consecutive_failures == 0
+
+    def test_ev_tamper_detection_logs_change(self) -> None:
+        """External EV enable/disable change should be detected."""
+        from custom_components.carmabox.adapters.easee import EaseeAdapter
+
+        coord = _make_coordinator()
+        ev = MagicMock(spec=EaseeAdapter)
+        ev.is_enabled = True
+        coord.ev_adapter = ev
+        coord._ev_last_known_enabled = False  # CARMA thinks disabled
+
+        coord._self_heal_ev_tamper()
+
+        assert coord._ev_last_known_enabled is True  # Updated to current
+
+
+class TestTransparencySensor:
+    """PLAT-964: System status and health."""
+
+    def test_status_text_all_ok(self) -> None:
+        """When everything works, status = 'Allt fungerar'."""
+        coord = _make_coordinator()
+        coord.inverter_adapters = []
+        assert coord.status_text == "Allt fungerar"
+
+    def test_system_health_returns_dict(self) -> None:
+        """system_health should return dict with component statuses."""
+        coord = _make_coordinator()
+        health = coord.system_health
+        assert isinstance(health, dict)
+        # Should at least have safety and control
+        assert "sakerhet" in health
+        assert "styrning" in health
+
+    def test_status_text_adapter_offline(self) -> None:
+        """Offline adapter shows in status."""
+        from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
+
+        coord = _make_coordinator()
+        adapter = MagicMock(spec=GoodWeAdapter)
+        adapter.prefix = "kontor"
+        adapter.soc = -1.0
+        coord.inverter_adapters = [adapter]
+
+        # Entity unavailable
+        _set_state(coord, "select.goodwe_kontor_ems_mode", "unavailable")
+
+        assert "offline" in coord.status_text.lower()
+
+    def test_status_text_paused(self) -> None:
+        """When EMS is paused, status reflects it."""
+        import time
+
+        coord = _make_coordinator()
+        coord._ems_pause_until = time.monotonic() + 300  # Paused for 5 min
+
+        health = coord.system_health
+        assert health["styrning"] == "pausad"
+        assert "pausad" in coord.status_text.lower()
+
+
+class TestPlanScore:
+    """PLAT-966: Plan score calculation."""
+
+    def test_plan_score_no_data(self) -> None:
+        """No hourly actuals → score None."""
+        coord = _make_coordinator()
+        scores = coord.plan_score()
+        assert scores["score_today"] is None
+        assert scores["trend"] == "stable"
+
+    def test_plan_score_perfect_match(self) -> None:
+        """Perfect match → score 100."""
+        coord = _make_coordinator()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
+            for h in range(5)
+        ]
+        scores = coord.plan_score()
+        assert scores["score_today"] == 100.0
+
+    def test_plan_score_partial_match(self) -> None:
+        """Partial match → score < 100."""
+        coord = _make_coordinator()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=3.0)
+            for h in range(5)
+        ]
+        scores = coord.plan_score()
+        assert scores["score_today"] is not None
+        # 2.0/3.0 = 66.7%
+        assert 60 < scores["score_today"] < 70
+
+    def test_plan_score_trend_stable(self) -> None:
+        """With insufficient daily data, trend is stable."""
+        coord = _make_coordinator()
+        coord.hourly_actuals = [
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
+            for h in range(3)
+        ]
+        scores = coord.plan_score()
+        assert scores["trend"] == "stable"
+
+    def test_plan_score_both_zero(self) -> None:
+        """Both planned and actual near zero → 100%."""
+        coord = _make_coordinator()
+        coord.hourly_actuals = [
+            HourActual(hour=0, planned_weighted_kw=0.0, actual_weighted_kw=0.0),
+            HourActual(hour=1, planned_weighted_kw=0.0, actual_weighted_kw=0.0),
+        ]
+        scores = coord.plan_score()
+        assert scores["score_today"] == 100.0

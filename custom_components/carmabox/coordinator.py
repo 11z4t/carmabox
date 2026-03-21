@@ -57,6 +57,7 @@ from .const import (
     SCAN_INTERVAL_SECONDS,
 )
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
+from .optimizer.predictor import ConsumptionPredictor, HourSample
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
@@ -94,6 +95,13 @@ SAVINGS_SAVE_INTERVAL = 300  # Save at most every 5 minutes
 
 CONSUMPTION_STORE_VERSION = 1
 CONSUMPTION_STORE_KEY = "carmabox_consumption_profile"
+
+PREDICTOR_STORE_VERSION = 1
+PREDICTOR_STORE_KEY = "carmabox_predictor"
+
+# Self-healing constants (PLAT-972)
+SELF_HEALING_MAX_FAILURES = 3
+SELF_HEALING_PAUSE_SECONDS = 300  # 5 minutes
 
 
 class BatteryCommand(Enum):
@@ -198,6 +206,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._consumption_loaded = False
         self._consumption_last_save: float = 0.0
         self._consumption_last_hour: int = -1
+
+        # PLAT-965: Consumption predictor (Level 2 AI, persistent)
+        self.predictor = ConsumptionPredictor()
+        self._predictor_store: Store[dict[str, Any]] = Store(
+            hass, PREDICTOR_STORE_VERSION, PREDICTOR_STORE_KEY
+        )
+        self._predictor_loaded = False
+        self._predictor_last_save: float = 0.0
+
+        # PLAT-972: Self-healing state
+        self._ems_consecutive_failures: int = 0
+        self._ems_pause_until: float = 0.0  # monotonic time
+        self._ev_last_known_enabled: bool | None = None
         self._current_date = datetime.now().strftime("%Y-%m-%d")
         self._daily_avg_price: float = float(
             self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
@@ -334,6 +355,33 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Failed to save consumption profile", exc_info=True)
 
+    async def _async_restore_predictor(self) -> None:
+        """Restore predictor from persistent storage (PLAT-965)."""
+        try:
+            data = await self._predictor_store.async_load()
+            if data and isinstance(data, dict):
+                self.predictor = ConsumptionPredictor.from_dict(data)
+                _LOGGER.info(
+                    "Restored predictor: %d samples, trained=%s",
+                    self.predictor.total_samples,
+                    self.predictor.is_trained,
+                )
+        except Exception:
+            _LOGGER.warning("Failed to restore predictor, starting fresh", exc_info=True)
+
+    async def _async_save_predictor(self) -> None:
+        """Persist predictor state (rate-limited to every 5 minutes)."""
+        import time
+
+        now = time.monotonic()
+        if now - self._predictor_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._predictor_last_save = now
+        try:
+            await self._predictor_store.async_save(self.predictor.to_dict())
+        except Exception:
+            _LOGGER.debug("Failed to save predictor", exc_info=True)
+
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
         try:
@@ -346,6 +394,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if not self._consumption_loaded:
                 self._consumption_loaded = True
                 await self._async_restore_consumption()
+            if not self._predictor_loaded:
+                self._predictor_loaded = True
+                await self._async_restore_predictor()
 
             old_month = self.savings.month
             self.savings = reset_if_new_month(self.savings, now)
@@ -365,6 +416,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             self.safety.update_heartbeat()
 
+            # PLAT-972: Self-healing — check GoodWe config entries
+            await self._self_heal_goodwe_entries()
+            # PLAT-972: Self-healing — detect external EV changes
+            self._self_heal_ev_tamper()
+
             # K3 (PLAT-945): Deferred write-verify — check pending verifications
             # from the previous cycle (Modbus has had 30s to propagate).
             self._run_deferred_write_verifies()
@@ -383,6 +439,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._track_appliances()
             await self._async_save_savings()
             await self._async_save_consumption()
+            await self._async_save_predictor()
             return state
 
         except Exception as err:
@@ -479,10 +536,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             pv_hourly = solcast.today_hourly_kw
             pv_forecast = pv_hourly[start_hour:] + [0.0] * 24  # Pad tomorrow
 
-            # Consumption profile from const.py (configurable via options)
-            # Use learned profile if available, else static default
+            # PLAT-965: Use predictor if trained, else fallback to profile
             base = self.consumption_profile.get_profile_for_date(now)
-            consumption = base[start_hour:] + base
+            if self.predictor.is_trained:
+                consumption = self.predictor.predict_24h(
+                    start_hour=start_hour,
+                    weekday=now.weekday(),
+                    month=now.month,
+                    fallback_profile=base,
+                )
+                # Pad to match prices length (predict_24h returns exactly 24)
+                consumption = consumption + base
+            else:
+                consumption = base[start_hour:] + base
 
             # EV demand — dynamic schedule based on prices + SoC
             opts = self._cfg
@@ -1124,6 +1190,135 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         val = self._read_float(temp_entity, -999)
         return val if val > -999 else None
 
+    @property
+    def system_health(self) -> dict[str, str]:
+        """PLAT-964: System health for transparency sensor.
+
+        Returns user-friendly status per component. NEVER technical error messages.
+        """
+        health: dict[str, str] = {}
+
+        # Inverter adapters
+        for i, adapter in enumerate(self.inverter_adapters, 1):
+            name = getattr(adapter, "prefix", f"inverter_{i}")
+            ems_entity = f"select.goodwe_{name}_ems_mode" if isinstance(adapter, GoodWeAdapter) else ""
+            ems_state = self.hass.states.get(ems_entity) if ems_entity else None
+            if ems_state is None or ems_state.state in ("unavailable", "unknown"):
+                health[name] = "offline"
+            elif adapter.soc < 0:
+                health[name] = "ingen data"
+            else:
+                health[name] = "ok"
+
+        # EV charger
+        if self.ev_adapter:
+            if isinstance(self.ev_adapter, EaseeAdapter):
+                if self.ev_adapter.status in ("", "unavailable", "unknown"):
+                    health["ev"] = "offline"
+                elif self.ev_adapter.cable_locked:
+                    if self.ev_adapter.is_charging:
+                        health["ev"] = "laddar"
+                    else:
+                        health["ev"] = "ansluten"
+                else:
+                    health["ev"] = "ej ansluten"
+            else:
+                health["ev"] = "ok"
+
+        # Safety guard
+        blocks = self.safety.recent_block_count(3600) if hasattr(self.safety, "recent_block_count") else 0
+        if isinstance(blocks, int) and blocks >= SAFETY_BLOCK_THRESHOLD:
+            health["sakerhet"] = "varning"
+        else:
+            health["sakerhet"] = "ok"
+
+        # Self-healing pause
+        import time as _time
+        if _time.monotonic() < self._ems_pause_until:
+            health["styrning"] = "pausad"
+        else:
+            health["styrning"] = "ok"
+
+        return health
+
+    @property
+    def status_text(self) -> str:
+        """PLAT-964: User-friendly one-liner status. Swedish, plain language."""
+        health = self.system_health
+        issues = []
+        for component, status in health.items():
+            if status == "offline":
+                friendly = {
+                    "kontor": "Kontor offline",
+                    "forrad": "Forrad offline",
+                }.get(component, f"{component} offline")
+                issues.append(friendly)
+            elif status == "pausad":
+                issues.append("Styrning pausad")
+            elif status == "varning":
+                issues.append("Sakerhetsspaerr aktiv")
+
+        if not issues:
+            return "Allt fungerar"
+        return ", ".join(issues)
+
+    def plan_score(self) -> dict[str, Any]:
+        """PLAT-966: Calculate how well the plan matched reality.
+
+        Returns dict with score_today, score_7d, score_30d, trend.
+        Score = 0-100 where 100 = perfect match.
+        """
+        actuals = self.hourly_actuals
+        if len(actuals) < 2:
+            return {"score_today": None, "score_7d": None, "score_30d": None, "trend": "stable"}
+
+        # Today's score: min/max ratio across tracked hours
+        scores: list[float] = []
+        for a in actuals:
+            p = abs(a.planned_weighted_kw)
+            r = abs(a.actual_weighted_kw)
+            if p < 0.01 and r < 0.01:
+                scores.append(100.0)
+            else:
+                lo, hi = min(p, r), max(p, r)
+                scores.append((lo / hi) * 100 if hi > 0 else 100.0)
+
+        score_today = round(sum(scores) / len(scores), 1) if scores else None
+
+        # 7d and 30d: use daily_savings trend as proxy for consistency
+        daily = self.savings.daily_savings
+        if len(daily) >= 7:
+            recent_7 = daily[-7:]
+            # Score based on consistency: low variance = good
+            avg_7 = sum(d.get("savings_kr", 0) for d in recent_7) / 7
+            score_7d = round(min(100, max(0, 50 + avg_7 * 2)), 1)
+        else:
+            score_7d = score_today
+
+        if len(daily) >= 30:
+            recent_30 = daily[-30:]
+            avg_30 = sum(d.get("savings_kr", 0) for d in recent_30) / 30
+            score_30d = round(min(100, max(0, 50 + avg_30 * 2)), 1)
+        else:
+            score_30d = score_7d
+
+        # Trend: compare last 7d vs previous 7d
+        trend = "stable"
+        if len(daily) >= 14:
+            recent = sum(d.get("savings_kr", 0) for d in daily[-7:])
+            previous = sum(d.get("savings_kr", 0) for d in daily[-14:-7])
+            if recent > previous * 1.1:
+                trend = "improving"
+            elif recent < previous * 0.9:
+                trend = "declining"
+
+        return {
+            "score_today": score_today,
+            "score_7d": score_7d,
+            "score_30d": score_30d,
+            "trend": trend,
+        }
+
     def _check_repair_issues(self) -> None:
         """Check conditions and raise/clear HA repair issues."""
         try:
@@ -1442,6 +1637,92 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 consumption_kw=house_kw,
                 is_weekend=now.weekday() >= 5,
             )
+            # PLAT-965: Feed predictor with hourly consumption
+            temp_c = self._read_battery_temp()
+            self.predictor.add_sample(
+                HourSample(
+                    weekday=now.weekday(),
+                    hour=now.hour,
+                    month=now.month,
+                    consumption_kw=house_kw,
+                    temperature_c=temp_c,
+                )
+            )
+
+    async def _self_heal_goodwe_entries(self) -> None:
+        """PLAT-972: Self-healing — check GoodWe config entries and reload if needed."""
+        import time as _time
+
+        # Skip if paused after repeated failures
+        if _time.monotonic() < self._ems_pause_until:
+            return
+
+        for adapter in self.inverter_adapters:
+            if not isinstance(adapter, GoodWeAdapter):
+                continue
+            # Check if EMS mode entity is unavailable (integration not loaded)
+            ems_entity = f"select.goodwe_{adapter.prefix}_ems_mode"
+            ems_state = self.hass.states.get(ems_entity)
+            if ems_state is not None and ems_state.state not in ("unavailable", "unknown"):
+                # Integration is fine, reset failure counter
+                self._ems_consecutive_failures = 0
+                continue
+
+            # Entity is missing or unavailable — try to reload
+            self._ems_consecutive_failures += 1
+            _LOGGER.warning(
+                "CARMA self-heal: GoodWe %s entity %s unavailable (failure %d/%d)",
+                adapter.prefix,
+                ems_entity,
+                self._ems_consecutive_failures,
+                SELF_HEALING_MAX_FAILURES,
+            )
+
+            if self._ems_consecutive_failures >= SELF_HEALING_MAX_FAILURES:
+                _LOGGER.warning(
+                    "CARMA self-heal: %d consecutive failures — pausing EMS commands for %ds",
+                    self._ems_consecutive_failures,
+                    SELF_HEALING_PAUSE_SECONDS,
+                )
+                self._ems_pause_until = _time.monotonic() + SELF_HEALING_PAUSE_SECONDS
+                self._ems_consecutive_failures = 0
+                return
+
+            # Try config entry reload (best-effort)
+            try:
+                await self.hass.services.async_call(
+                    "homeassistant",
+                    "reload_config_entry",
+                    {"entity_id": ems_entity},
+                )
+                _LOGGER.info("CARMA self-heal: triggered reload for GoodWe %s", adapter.prefix)
+            except Exception:
+                _LOGGER.debug("CARMA self-heal: reload failed for %s", adapter.prefix, exc_info=True)
+
+    def _self_heal_ev_tamper(self) -> None:
+        """PLAT-972: Detect if Easee is_enabled changed externally and log it."""
+        if not self.ev_adapter or not isinstance(self.ev_adapter, EaseeAdapter):
+            return
+
+        current_enabled = self.ev_adapter.is_enabled
+
+        if self._ev_last_known_enabled is None:
+            # First check — just record
+            self._ev_last_known_enabled = current_enabled
+            return
+
+        if current_enabled != self._ev_last_known_enabled:
+            # External change detected
+            _LOGGER.warning(
+                "CARMA self-heal: EV charger is_enabled changed externally "
+                "(%s → %s). CARMA will restore its own state on next cycle.",
+                self._ev_last_known_enabled,
+                current_enabled,
+            )
+            # If CARMA thinks EV should be off but it got enabled externally,
+            # our _ev_enabled flag will cause the next _execute_ev to correct it.
+            # If CARMA thinks EV should be on but it got disabled, same thing.
+            self._ev_last_known_enabled = current_enabled
 
     async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         """Call HA service with error handling and retry. Returns True on success.

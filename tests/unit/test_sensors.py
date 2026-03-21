@@ -13,6 +13,10 @@ from custom_components.carmabox.sensor import (
     _appliance_attrs_factory,
     _appliance_value_factory,
     _build_appliance_descriptions,
+    _status_value,
+    _status_attrs,
+    _plan_score_value,
+    _plan_score_attrs,
 )
 
 
@@ -31,6 +35,11 @@ def _make_sensor_deps(
     coord.decision_log = []
     coord.hourly_actuals = []
     coord.executor_enabled = True
+    coord.status_text = "Allt fungerar"
+    coord.system_health = {"kontor": "ok", "forrad": "ok", "sakerhet": "ok", "styrning": "ok"}
+    coord.plan_score = MagicMock(return_value={
+        "score_today": None, "score_7d": None, "score_30d": None, "trend": "stable",
+    })
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -50,7 +59,7 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 13
+        assert len(SENSOR_DESCRIPTIONS) == 15
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
         assert "plan_accuracy" in keys
         assert "decision" in keys
@@ -493,3 +502,72 @@ class TestApplianceSensors:
         assert d.key == "appliance_heating"
         assert d.native_unit_of_measurement == "W"
         assert d.icon == "mdi:lightning-bolt"
+
+
+class TestStatusSensor:
+    """PLAT-964: Transparency sensor tests."""
+
+    def test_status_value_all_ok(self) -> None:
+        coord, entry = _make_sensor_deps()
+        sensor = _get_sensor("status", coord, entry)
+        assert sensor.native_value == "Allt fungerar"
+
+    def test_status_value_offline(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.status_text = "Kontor offline"
+        sensor = _get_sensor("status", coord, entry)
+        assert sensor.native_value == "Kontor offline"
+
+    def test_status_attrs_has_system_health(self) -> None:
+        coord, entry = _make_sensor_deps()
+        sensor = _get_sensor("status", coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert attrs is not None
+        assert "system_health" in attrs
+        assert isinstance(attrs["system_health"], dict)
+
+    def test_status_never_shows_technical_errors(self) -> None:
+        """Status should NEVER contain technical error messages."""
+        coord, entry = _make_sensor_deps()
+        coord.status_text = "Allt fungerar"
+        sensor = _get_sensor("status", coord, entry)
+        value = sensor.native_value
+        # Should not contain exception names, tracebacks, etc
+        assert "Error" not in value
+        assert "Exception" not in value
+        assert "Traceback" not in value
+
+
+class TestPlanScoreSensor:
+    """PLAT-966: Plan score sensor tests."""
+
+    def test_plan_score_no_data(self) -> None:
+        coord, entry = _make_sensor_deps()
+        sensor = _get_sensor("plan_score", coord, entry)
+        assert sensor.native_value is None
+
+    def test_plan_score_with_data(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.plan_score = MagicMock(return_value={
+            "score_today": 85.0, "score_7d": 80.0, "score_30d": 78.0, "trend": "improving",
+        })
+        sensor = _get_sensor("plan_score", coord, entry)
+        assert sensor.native_value == 85.0
+
+    def test_plan_score_attrs(self) -> None:
+        coord, entry = _make_sensor_deps()
+        coord.plan_score = MagicMock(return_value={
+            "score_today": 85.0, "score_7d": 80.0, "score_30d": 78.0, "trend": "improving",
+        })
+        sensor = _get_sensor("plan_score", coord, entry)
+        attrs = sensor.extra_state_attributes
+        assert attrs is not None
+        assert attrs["score_today"] == 85.0
+        assert attrs["score_7d"] == 80.0
+        assert attrs["score_30d"] == 78.0
+        assert attrs["trend"] == "improving"
+
+    def test_plan_score_has_percent_unit(self) -> None:
+        """Plan score sensor should have % unit."""
+        desc = next(d for d in SENSOR_DESCRIPTIONS if d.key == "plan_score")
+        assert desc.native_unit_of_measurement == "%"
