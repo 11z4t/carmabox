@@ -98,6 +98,9 @@
       },
       "household_insights": {
         "name": "Household Insights"
+      },
+      "daily_insight": {
+        "name": "Daily Insight"
       }
     }
   },

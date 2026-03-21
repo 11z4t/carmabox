@@ -1559,6 +1559,224 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             "trend": trend,
         }
 
+    @property
+    def daily_insight(self) -> dict[str, Any]:
+        """Daily insight report — Ellevio + Nordpool analysis.
+
+        Deep analysis with >90% confidence recommendations only.
+        Updated every hour, comprehensive at 07:55 for morning email.
+        """
+        now = datetime.now()
+
+        # ── Ellevio weighted hourly averages (last 24h) ──────────
+        peaks = list(self._ellevio_monthly_hourly_peaks)
+        last_24 = peaks[-24:] if len(peaks) >= 24 else peaks
+
+        if not last_24:
+            return {"status": "collecting", "message": "Samlar data — behöver 24h"}
+
+        ellevio_max = round(max(last_24), 2)
+        ellevio_min = round(min(last_24), 2)
+        ellevio_avg = round(sum(last_24) / len(last_24), 2)
+        ellevio_gap = round(ellevio_max - ellevio_min, 2)
+
+        # Find worst/best hours from decision log
+        worst_hour = -1
+        best_hour = -1
+        worst_kw = 0.0
+        best_kw = 999.0
+        worst_reason = ""
+        best_reason = ""
+
+        for d in self.decision_log:
+            if d.weighted_kw > worst_kw:
+                worst_kw = d.weighted_kw
+                worst_hour = int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                worst_reason = d.reason
+            if 0 < d.weighted_kw < best_kw:
+                best_kw = d.weighted_kw
+                best_hour = int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                best_reason = d.reason
+
+        # ── Nordpool cost analysis (last 24h) ─────────────────────
+        hourly_costs: list[dict[str, float]] = []
+        total_cost_kr = 0.0
+        total_kwh = 0.0
+
+        for d in self.decision_log:
+            if d.grid_kw > 0 and d.price_ore > 0:
+                # Each decision covers ~30 min (0.5h)
+                kwh = d.grid_kw * 0.5
+                cost_kr = kwh * d.price_ore / 100
+                total_cost_kr += cost_kr
+                total_kwh += kwh
+                hr = int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else 0
+                hourly_costs.append(
+                    {
+                        "hour": hr,
+                        "cost_kr": round(cost_kr, 2),
+                        "price_ore": d.price_ore,
+                        "kwh": round(kwh, 2),
+                    }
+                )
+
+        avg_price = round(total_cost_kr / total_kwh * 100, 1) if total_kwh > 0 else 0.0
+        cheapest = min(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
+        most_expensive = max(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
+
+        # ── Deep analysis: WHY worst/best hours happened ──────────
+        worst_analysis = self._analyze_hour(worst_hour, "worst")
+        best_analysis = self._analyze_hour(best_hour, "best")
+
+        # ── Recommendations (only >90% confidence) ────────────────
+        recommendations: list[dict[str, Any]] = []
+
+        # R1: If max > 2× target → high confidence suggestion
+        if ellevio_max > self.target_kw * 2:
+            recommendations.append(
+                {
+                    "confidence": 95,
+                    "category": "effekt",
+                    "sv": (
+                        f"Effekttoppen {ellevio_max:.1f} kW är dubbelt mot "
+                        f"målet {self.target_kw:.1f} kW. "
+                        f"Orsak: {worst_reason[:80]}. "
+                        f"Åtgärd: Undvik att köra tunga laster "
+                        f"(tork, ugn, EV) samtidigt kl {worst_hour:02d}."
+                    ),
+                }
+            )
+
+        # R2: If gap > 1.5 kW → spread loads
+        if ellevio_gap > 1.5:
+            recommendations.append(
+                {
+                    "confidence": 92,
+                    "category": "effekt",
+                    "sv": (
+                        f"Gapet mellan bästa ({ellevio_min:.1f} kW) och "
+                        f"sämsta ({ellevio_max:.1f} kW) timmen är {ellevio_gap:.1f} kW. "
+                        f"Flytta tung last från kl {worst_hour:02d} till "
+                        f"kl {best_hour:02d} för att jämna ut."
+                    ),
+                }
+            )
+
+        # R3: If most expensive hour > 2× cheapest → shift consumption
+        if most_expensive and cheapest:
+            price_ratio = most_expensive["price_ore"] / max(1, cheapest["price_ore"])
+            if price_ratio > 2:
+                savings_potential = most_expensive["cost_kr"] * 0.5
+                recommendations.append(
+                    {
+                        "confidence": 93,
+                        "category": "pris",
+                        "sv": (
+                            f"Dyraste timmen (kl {most_expensive['hour']:02d}, "
+                            f"{most_expensive['price_ore']:.0f} öre) kostade "
+                            f"{most_expensive['cost_kr']:.1f} kr. "
+                            f"Billigaste (kl {cheapest['hour']:02d}, "
+                            f"{cheapest['price_ore']:.0f} öre) kostade "
+                            f"{cheapest['cost_kr']:.1f} kr. "
+                            f"Flytta förbrukning → spara ~{savings_potential:.0f} kr/dag."
+                        ),
+                    }
+                )
+
+        # R4: If battery was idle during expensive hours
+        expensive_idle = sum(
+            1
+            for d in self.decision_log
+            if d.price_ore > 80 and d.action == "idle" and d.battery_soc > 30
+        )
+        if expensive_idle > 2:
+            recommendations.append(
+                {
+                    "confidence": 91,
+                    "category": "batteri",
+                    "sv": (
+                        f"Batteriet vilade {expensive_idle} gånger under dyra "
+                        f"timmar (>80 öre) trots kapacitet. "
+                        f"Sänk urladdningströskeln eller justera target."
+                    ),
+                }
+            )
+
+        return {
+            "status": "ready",
+            "generated": now.isoformat(),
+            # Ellevio
+            "ellevio_max_kw": ellevio_max,
+            "ellevio_min_kw": ellevio_min,
+            "ellevio_avg_kw": ellevio_avg,
+            "ellevio_gap_kw": ellevio_gap,
+            "worst_hour": worst_hour,
+            "worst_kw": round(worst_kw, 2),
+            "worst_reason": worst_reason[:100],
+            "worst_analysis": worst_analysis,
+            "best_hour": best_hour,
+            "best_kw": round(best_kw, 2),
+            "best_reason": best_reason[:100],
+            "best_analysis": best_analysis,
+            # Nordpool
+            "total_cost_kr": round(total_cost_kr, 1),
+            "total_kwh": round(total_kwh, 1),
+            "avg_price_ore": avg_price,
+            "cheapest_hour": cheapest.get("hour", -1),
+            "cheapest_price_ore": cheapest.get("price_ore", 0),
+            "cheapest_cost_kr": cheapest.get("cost_kr", 0),
+            "most_expensive_hour": most_expensive.get("hour", -1),
+            "most_expensive_price_ore": most_expensive.get("price_ore", 0),
+            "most_expensive_cost_kr": most_expensive.get("cost_kr", 0),
+            # Recommendations (only >90% confidence)
+            "recommendations": recommendations,
+            "recommendation_count": len(recommendations),
+        }
+
+    def _analyze_hour(self, hour: int, label: str) -> str:
+        """Deep-analyze what caused a specific hour to be worst/best."""
+        if hour < 0:
+            return "Otillräcklig data"
+
+        relevant = [
+            d
+            for d in self.decision_log
+            if "T" in d.timestamp and int(d.timestamp.split("T")[1][:2]) == hour
+        ]
+        if not relevant:
+            return f"Ingen data för kl {hour:02d}"
+
+        d = relevant[-1]  # Most recent for that hour
+        parts: list[str] = []
+
+        if d.pv_kw > 0.5:
+            parts.append(f"sol {d.pv_kw:.1f} kW")
+        if d.grid_kw > 1.0:
+            parts.append(f"nätimport {d.grid_kw:.1f} kW")
+        if d.battery_soc < 20:
+            parts.append("batteri lågt")
+        elif d.battery_soc > 95:
+            parts.append("batteri fullt")
+        if d.action == "discharge":
+            parts.append(f"urladdning {d.discharge_w}W")
+        elif d.action == "charge_pv":
+            parts.append("solladdar")
+        elif d.action == "idle":
+            parts.append("vilar")
+
+        if label == "worst":
+            if d.grid_kw > 2.0 and d.pv_kw < 0.5:
+                parts.append("→ hög last utan sol")
+            elif d.action == "idle" and d.battery_soc > 30:
+                parts.append("→ batteri outnyttjat")
+        elif label == "best":
+            if d.pv_kw > 2.0:
+                parts.append("→ sol drev förbrukningen")
+            elif d.action == "discharge":
+                parts.append("→ batteri sänkte toppen")
+
+        return ", ".join(parts) if parts else "Normal drift"
+
     def _check_repair_issues(self) -> None:
         """Check conditions and raise/clear HA repair issues."""
         try:

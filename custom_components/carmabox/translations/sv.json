@@ -123,6 +123,9 @@
       },
       "household_insights": {
         "name": "Hushållsinsikt"
+      },
+      "daily_insight": {
+        "name": "Daglig insikt"
       }
     }
   },

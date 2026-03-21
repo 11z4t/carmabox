@@ -398,6 +398,22 @@ def _plan_score_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return coord.plan_score()
 
 
+def _daily_insight_value(coord: CarmaboxCoordinator) -> str:
+    """Daily insight summary — one-liner for the sensor state."""
+    insight = coord.daily_insight
+    if insight.get("status") == "collecting":
+        return "Samlar data"
+    recs = insight.get("recommendation_count", 0)
+    max_kw = insight.get("ellevio_max_kw", 0)
+    cost = insight.get("total_cost_kr", 0)
+    return f"Max {max_kw:.1f} kW, kostnad {cost:.0f} kr, {recs} rekommendationer"
+
+
+def _daily_insight_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Daily insight full data — Ellevio + Nordpool + recommendations."""
+    return coord.daily_insight
+
+
 def _household_insights_value(coord: CarmaboxCoordinator) -> str:
     """PLAT-962: Monthly household insight — comparison vs similar households."""
     bench = coord.benchmark_data
@@ -585,6 +601,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         icon="mdi:home-analytics",
         value_fn=_household_insights_value,
         extra_attrs_fn=_household_insights_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="daily_insight",
+        translation_key="daily_insight",
+        icon="mdi:lightbulb-on",
+        value_fn=_daily_insight_value,
+        extra_attrs_fn=_daily_insight_attrs,
     ),
 )
 
