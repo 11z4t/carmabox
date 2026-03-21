@@ -787,6 +787,26 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return ""
 
+    def _detect_ev_prefix(self, domain: str) -> str:
+        """Detect EV charger entity prefix by scanning real entities.
+
+        entry.title can be an email (borje@malmgrens.me) which is NOT
+        a valid entity_id component. Instead, find a _status sensor.
+        """
+        for state in self.hass.states.async_all("sensor"):
+            eid = state.entity_id
+            if domain in eid and "_status" in eid:
+                # e.g. sensor.easee_home_12840_status → easee_home_12840
+                prefix = eid.replace("sensor.", "").replace("_status", "")
+                return prefix
+        # Fallback: scan for any entity with domain prefix
+        for state in self.hass.states.async_all("sensor"):
+            if state.entity_id.startswith(f"sensor.{domain}_"):
+                parts = state.entity_id.replace("sensor.", "").rsplit("_", 1)
+                if len(parts) == 2:
+                    return parts[0]
+        return domain
+
     def _detect_easee_charger_id(self, ev_prefix: str) -> str:
         """Auto-detect Easee charger ID (serial) from entity attributes.
 
@@ -858,13 +878,15 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
             elif domain in EV_DOMAINS:
                 device_ids = self._resolve_device_ids(entry.entry_id)
+                # Scan entities to find real prefix (entry.title can be email/name)
+                ev_prefix = self._detect_ev_prefix(domain)
                 detected["ev_chargers"].append(
                     {
                         "domain": domain,
                         "name": EV_DOMAINS[domain],
                         "entry_id": entry.entry_id,
                         "device_ids": device_ids,
-                        "prefix": f"{domain}_{entry.title}" if entry.title else domain,
+                        "prefix": ev_prefix,
                     }
                 )
 
