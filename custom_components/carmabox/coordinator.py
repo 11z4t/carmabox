@@ -234,6 +234,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Daily energy per category (Wh), reset at midnight
         self.appliance_energy_wh: dict[str, float] = {}
 
+        # PLAT-992: Miner entity (Shelly switch)
+        self._miner_entity: str = str(self._cfg.get("miner_entity", ""))
+        self._miner_on: bool = False
+
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
             adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
@@ -242,6 +246,36 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if not self.executor_enabled:
             _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
+
+    @property
+    def cable_locked_entity(self) -> str:
+        """Entity ID for EV cable locked sensor (for state change listener)."""
+        ev_prefix = self._cfg.get("ev_prefix", "")
+        if ev_prefix:
+            return f"binary_sensor.{ev_prefix}_cable_locked"
+        return ""
+
+    async def on_ev_cable_connected(self) -> None:
+        """PLAT-992: Instant EV trigger when cable is plugged in.
+
+        Called from state change listener — no 30s wait.
+        Checks PV surplus and starts charging immediately if available.
+        """
+        if not self.ev_adapter or not self.executor_enabled:
+            return
+
+        state = self._collect_state()
+        pv_kw = state.pv_power_w / 1000
+
+        # If PV is producing and we have surplus → start EV immediately
+        if pv_kw > 1.0:
+            _LOGGER.info(
+                "CARMA: Cable connected + PV %.1f kW → starting EV at 6A",
+                pv_kw,
+            )
+            await self._cmd_ev_start(6)
+        else:
+            _LOGGER.info("CARMA: Cable connected, no PV surplus — waiting for next cycle")
 
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
@@ -995,8 +1029,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             reasoning_chain=chain,
         )
 
-        # ── EV CONTROL (runs AFTER battery rules) ────────────
+        # ── SURPLUS PRIORITY: Battery → EV → Miner → Export ──
         await self._execute_ev(state)
+        await self._execute_miner(state)
 
     async def _execute_ev(self, state: CarmaboxState) -> None:
         """Execute EV charging decisions (PLAT-949).
@@ -1067,9 +1102,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self._cmd_ev_stop()
             return
 
-        # ── EV-4: Day → PV surplus only ──────────────────────
-        if state.is_exporting and state.total_battery_soc >= 95:
-            surplus_kw = abs(state.grid_power_w) / 1000
+        # ── EV-4: Day → PV surplus (PLAT-992: lowered threshold) ──
+        # Charge EV from PV when:
+        # - Exporting (grid < 0) = obvious surplus
+        # - OR PV > 1.5 kW and battery already charging = share the surplus
+        has_surplus = state.is_exporting or (
+            state.pv_power_w > 1500 and state.total_battery_soc >= 80
+        )
+        if has_surplus:
+            if state.is_exporting:
+                surplus_kw = abs(state.grid_power_w) / 1000
+            else:
+                # Battery charging from PV — estimate shareable surplus
+                surplus_kw = max(0, state.pv_power_w / 1000 - 2.0)
             solar_amps = max(0, int(surplus_kw * 1000 / DEFAULT_VOLTAGE))
             solar_amps = min(solar_amps, DEFAULT_EV_MAX_AMPS)
             if solar_amps >= 6:
@@ -1082,6 +1127,55 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Default: not charging → ensure disabled
         if self._ev_enabled and not is_night:
             await self._cmd_ev_stop()
+
+    async def _execute_miner(self, state: CarmaboxState) -> None:
+        """PLAT-992: Control miner based on PV surplus.
+
+        Priority chain: Battery → EV → Miner → Export.
+        Miner turns ON when we're still exporting after battery + EV.
+        Miner turns OFF when grid import > 0 (no surplus left).
+        """
+        if not self._miner_entity:
+            return
+
+        hour = datetime.now().hour
+        is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+
+        # Night: miner OFF (save grid power)
+        if is_night and self._miner_on:
+            await self._cmd_miner(False)
+            return
+
+        # Day: mine if exporting (surplus after battery + EV)
+        if state.is_exporting and abs(state.grid_power_w) > 200:
+            if not self._miner_on:
+                _LOGGER.info(
+                    "CARMA: PV surplus %.0fW after battery+EV → miner ON",
+                    abs(state.grid_power_w),
+                )
+                await self._cmd_miner(True)
+        elif not state.is_exporting and state.grid_power_w > 500 and self._miner_on:
+            _LOGGER.info(
+                "CARMA: Grid import %.0fW → miner OFF",
+                state.grid_power_w,
+            )
+            await self._cmd_miner(False)
+
+    async def _cmd_miner(self, on: bool) -> None:
+        """Turn miner switch on/off."""
+        if not self._miner_entity:
+            return
+        service = "turn_on" if on else "turn_off"
+        _LOGGER.info("CARMA: miner %s → %s", self._miner_entity, service)
+        try:
+            await self.hass.services.async_call(
+                "switch",
+                service,
+                {"entity_id": self._miner_entity},
+            )
+            self._miner_on = on
+        except Exception:
+            _LOGGER.warning("CARMA: miner control failed", exc_info=True)
 
     async def _cmd_ev_start(self, amps: int = 6) -> None:
         """Start EV: set current FIRST, then enable (prevent 16A burst)."""

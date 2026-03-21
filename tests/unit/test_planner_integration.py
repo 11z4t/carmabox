@@ -57,7 +57,9 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord.inverter_adapters = []
     coord.ev_adapter = None
     coord.last_decision = Decision()
-    coord.decision_log = []
+    from collections import deque as _deque
+
+    coord.decision_log = _deque(maxlen=48)
     coord.consumption_profile = ConsumptionProfile()
     coord.hourly_actuals = []
     coord._last_tracked_hour = -1
@@ -68,6 +70,8 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._ev_current_amps = 0
     coord._ev_last_ramp_time = 0.0
     coord._ev_initialized = True
+    coord._miner_entity = ""
+    coord._miner_on = False
 
     # PLAT-965: Predictor
     coord.predictor = ConsumptionPredictor()

@@ -93,6 +93,8 @@ def _make_coordinator(
     coord._ev_current_amps = 0
     coord._ev_last_ramp_time = 0.0
     coord._ev_initialized = True
+    coord._miner_entity = ""
+    coord._miner_on = False
     coord.executor_enabled = True  # Tests need executor active
     coord._savings_loaded = True  # Skip restore in tests
     coord._savings_last_save = 0.0

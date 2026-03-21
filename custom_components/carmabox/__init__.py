@@ -11,7 +11,11 @@ import logging
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.event import (
+    EventStateChangedData,
+    async_track_state_change_event,
+)
 
 from .const import PLATFORMS
 from .coordinator import CarmaboxCoordinator
@@ -32,6 +36,31 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
+    # PLAT-992: Instant EV reaction when cable is plugged in
+    cable_entity = coordinator.cable_locked_entity
+    if cable_entity:
+        _LOGGER.info("CARMA Box: watching %s for instant EV trigger", cable_entity)
+
+        from homeassistant.core import Event
+
+        @callback
+        def _on_cable_change(event: Event[EventStateChangedData]) -> None:
+            new = event.data.get("new_state")
+            old = event.data.get("old_state")
+            if new is None:
+                return
+            was_locked = old is not None and old.state == "on"
+            now_locked = new.state == "on"
+            if now_locked and not was_locked:
+                _LOGGER.info("CARMA Box: cable plugged in — triggering EV check")
+                hass.async_create_task(
+                    coordinator.on_ev_cable_connected(),
+                    "carmabox_ev_cable_trigger",
+                )
+
+        unsub = async_track_state_change_event(hass, cable_entity, _on_cable_change)
+        entry.async_on_unload(unsub)
 
     # Register Lovelace card (may not be available during tests/reload)
     if hass.http is not None:
