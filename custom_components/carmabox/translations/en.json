@@ -101,6 +101,9 @@
       },
       "daily_insight": {
         "name": "Daily Insight"
+      },
+      "rule_flow": {
+        "name": "Rule Flow"
       }
     }
   },

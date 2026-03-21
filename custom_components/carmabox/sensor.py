@@ -609,6 +609,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         value_fn=_daily_insight_value,
         extra_attrs_fn=_daily_insight_attrs,
     ),
+    CarmaboxSensorDescription(
+        key="rule_flow",
+        translation_key="rule_flow",
+        icon="mdi:sitemap",
+        value_fn=lambda c: c.rule_flow.get("active_rule", "idle"),
+        extra_attrs_fn=lambda c: c.rule_flow,
+    ),
 )
 
 

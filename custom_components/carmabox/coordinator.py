@@ -1822,6 +1822,140 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         return ", ".join(parts) if parts else "Normal drift"
 
+    @property
+    def rule_flow(self) -> dict[str, Any]:
+        """Visual rule flow — how CARMA Box thinks, for dashboard display.
+
+        Returns a structured representation of the decision tree
+        that 901 can render as a visual flowchart.
+        Each node has: id, label (Swedish), status (active/inactive/blocked),
+        and connections to next nodes.
+        """
+        d = self.last_decision
+        action = d.action if d else "idle"
+        pv_active = d.pv_kw > 0.5 if d else False
+        is_exporting = d.grid_kw <= 0 if d else False
+        bat_full = d.battery_soc >= 99 if d else False
+        price = d.price_ore if d else 0
+        price_cheap = float(self._cfg.get("price_cheap_ore", DEFAULT_PRICE_CHEAP_ORE))
+        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+
+        nodes = [
+            {
+                "id": "pv_check",
+                "label": "Sol producerar?",
+                "icon": "mdi:weather-sunny",
+                "status": "active" if pv_active else "inactive",
+                "value": f"{d.pv_kw:.1f} kW" if d else "0 kW",
+            },
+            {
+                "id": "charge_battery",
+                "label": "Ladda batteri",
+                "icon": "mdi:battery-charging",
+                "status": "active" if action == "charge_pv" else "inactive",
+                "condition": "PV > 0.5 kW + batteri ej fullt",
+            },
+            {
+                "id": "charge_ev",
+                "label": "Ladda EV",
+                "icon": "mdi:car-electric",
+                "status": "active" if self._ev_enabled else "inactive",
+                "condition": "Exporterar + kabel inkopplad",
+            },
+            {
+                "id": "miner",
+                "label": "Miner",
+                "icon": "mdi:pickaxe",
+                "status": "active" if self._miner_on else "inactive",
+                "condition": (
+                    "Export > "
+                    f"{self._cfg.get('miner_start_export_w', DEFAULT_MINER_START_EXPORT_W)}W"
+                ),
+            },
+            {
+                "id": "export",
+                "label": "Exportera",
+                "icon": "mdi:transmission-tower-export",
+                "status": "active" if is_exporting and bat_full else "inactive",
+                "condition": "Allt fullt, inget att göra med elen",
+            },
+            {
+                "id": "price_check",
+                "label": "Priskontroll",
+                "icon": "mdi:currency-usd",
+                "status": "active",
+                "value": f"{price:.0f} öre" if price else "?",
+                "tier": (
+                    "billigt"
+                    if price < price_cheap
+                    else "dyrt"
+                    if price > price_expensive
+                    else "normalt"
+                ),
+            },
+            {
+                "id": "discharge",
+                "label": "Ladda ur batteri",
+                "icon": "mdi:battery-arrow-down",
+                "status": "active" if action == "discharge" else "inactive",
+                "condition": f"Grid > mål {self.target_kw:.1f} kW",
+            },
+            {
+                "id": "idle",
+                "label": "Vila",
+                "icon": "mdi:sleep",
+                "status": "active" if action == "idle" else "inactive",
+                "condition": "Grid under mål — batteriet vilar",
+            },
+        ]
+
+        # Safety guards
+        guards = [
+            {
+                "id": "guard_crosscharge",
+                "label": "Korsladdningsskydd",
+                "icon": "mdi:shield-check",
+                "status": "ok",
+            },
+            {
+                "id": "guard_min_soc",
+                "label": f"Min batteri {self.min_soc:.0f}%",
+                "icon": "mdi:battery-alert",
+                "status": "ok" if (d and d.battery_soc > self.min_soc) else "warning",
+            },
+            {
+                "id": "guard_ev_max",
+                "label": f"EV max {DEFAULT_EV_MAX_AMPS}A",
+                "icon": "mdi:flash-alert",
+                "status": "ok",
+            },
+        ]
+
+        # Active rule path
+        active_path: list[str] = []
+        if pv_active:
+            active_path.append("pv_check")
+            if action == "charge_pv":
+                active_path.append("charge_battery")
+            if self._ev_enabled:
+                active_path.append("charge_ev")
+            if self._miner_on:
+                active_path.append("miner")
+        else:
+            active_path.append("price_check")
+            if action == "discharge":
+                active_path.append("discharge")
+            elif action == "idle":
+                active_path.append("idle")
+
+        return {
+            "nodes": nodes,
+            "guards": guards,
+            "active_path": active_path,
+            "active_rule": action,
+            "summary_sv": d.reason if d else "Startar...",
+        }
+
     def _check_repair_issues(self) -> None:
         """Check conditions and raise/clear HA repair issues."""
         try:
@@ -2019,8 +2153,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             battery_discharge_kw += abs(state.battery_power_2) / 1000
         baseline_kw = (grid_kw + battery_discharge_kw) * weight
 
-        # Record peak sample
-        record_peak(self.savings, weighted_kw, baseline_kw)
+        # Record peak sample — accumulate for hourly average
+        # Ellevio measures HOURLY averages, not instantaneous peaks.
+        # We collect 30s samples and record the hourly avg at hour change.
+        if not hasattr(self, "_peak_hour_samples"):
+            self._peak_hour_samples: list[tuple[float, float]] = []  # (actual, baseline)
+            self._peak_last_hour: int = -1
+        if hour != self._peak_last_hour:
+            if self._peak_hour_samples and self._peak_last_hour >= 0:
+                n = len(self._peak_hour_samples)
+                avg_actual = sum(s[0] for s in self._peak_hour_samples) / n
+                avg_baseline = sum(s[1] for s in self._peak_hour_samples) / n
+                record_peak(self.savings, avg_actual, avg_baseline)
+            self._peak_hour_samples = []
+            self._peak_last_hour = hour
+        self._peak_hour_samples.append((weighted_kw, baseline_kw))
 
         # Record discharge savings (30s interval → /120 for kWh)
         interval_hours = SCAN_INTERVAL_SECONDS / 3600

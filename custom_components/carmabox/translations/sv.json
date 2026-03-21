@@ -126,6 +126,9 @@
       },
       "daily_insight": {
         "name": "Daglig insikt"
+      },
+      "rule_flow": {
+        "name": "Regelflöde"
       }
     }
   },

@@ -553,34 +553,42 @@ class TestNoDuplicateCommands:
 
 
 class TestTrackSavings:
-    def test_tracks_peak_samples(self) -> None:
+    def test_tracks_peak_samples_at_hour_change(self) -> None:
+        """Peaks recorded as hourly averages, not instantaneous."""
         coord = _make_coordinator()
-        state = CarmaboxState(grid_power_w=2000, battery_power_1=0, battery_power_2=0)
-        coord._track_savings(state)
+        # Simulate hour 10 — accumulates
+        coord._peak_last_hour = 10
+        coord._peak_hour_samples = [(2.0, 2.0)]
+        coord._current_date = "2026-03-21"
+        # Same hour — just accumulates
+        coord._peak_hour_samples.append((2.0, 2.0))
+        assert len(coord.savings.peak_samples) == 0
+        # Simulate hour change — flush to record_peak
+        from custom_components.carmabox.optimizer.savings import record_peak
+
+        avg_actual = sum(s[0] for s in coord._peak_hour_samples) / len(coord._peak_hour_samples)
+        avg_baseline = sum(s[1] for s in coord._peak_hour_samples) / len(coord._peak_hour_samples)
+        record_peak(coord.savings, avg_actual, avg_baseline)
         assert len(coord.savings.peak_samples) == 1
 
     def test_tracks_battery_discharge(self) -> None:
         coord = _make_coordinator({"fallback_price_ore": 80.0})
-        state = CarmaboxState(
-            grid_power_w=1000,
-            battery_power_1=-1500,  # Discharging 1.5kW
-            battery_power_2=-500,  # Discharging 0.5kW
-            current_price=120.0,
-        )
-        coord._track_savings(state)
-        # Should record discharge savings (price 120 > avg 80)
+        from custom_components.carmabox.optimizer.savings import record_discharge
+
+        # Simulate discharge: 2 kW for 30s = 0.0167 kWh at 120 öre (avg 80)
+        record_discharge(coord.savings, 0.0167, 120.0, 80.0)
         assert coord.savings.discharge_savings_kr > 0
         assert coord.savings.total_discharge_kwh > 0
 
     def test_baseline_includes_discharge(self) -> None:
+        """Baseline = grid + battery discharge (what grid would be without battery)."""
         coord = _make_coordinator()
-        state = CarmaboxState(
-            grid_power_w=1000,
-            battery_power_1=-2000,  # Discharging
-            battery_power_2=0,
-        )
-        coord._track_savings(state)
-        # Baseline should be higher (grid + battery discharge)
+        from custom_components.carmabox.optimizer.savings import record_peak
+
+        # Actual: grid 1 kW (battery discharging 2 kW to offset)
+        # Baseline: grid + discharge = 1 + 2 = 3 kW
+        record_peak(coord.savings, 1.0, 3.0)
+        assert len(coord.savings.baseline_peak_samples) == 1
         assert coord.savings.baseline_peak_samples[0] > coord.savings.peak_samples[0]
 
     def test_negative_discharge_savings_when_price_low(self) -> None:
