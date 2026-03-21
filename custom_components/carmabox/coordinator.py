@@ -969,23 +969,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 return
 
-        # ── RULE 2: SoC 100% → standby ──────────────────────
-        if state.all_batteries_full:
-            step5 = f"Standby — alla batterier fulla, Ellevio ser {weighted_net / 1000:.1f} kW"
-            reasoning.append("Alla batterier 100% → standby, spara för kväll/natt")
-            reasoning.append(step5)
-            chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
-            await self._cmd_standby(state)
-            self._record_decision(
-                state,
-                "standby",
-                "Standby — alla batterier 100%",
-                reasoning=reasoning,
-                reasoning_chain=chain,
-            )
-            return
-
-        # ── RULE 3: Load > target → discharge ────────────────
+        # ── RULE 2: Load > target → discharge (even at 100%) ──
+        # Moved BEFORE full-battery standby: 100% batteries should
+        # discharge when grid exceeds target, not sit idle!
         if weighted_net > target_w and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
             reasoning.append(
