@@ -146,7 +146,7 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
             "ev_soc": e.ev_soc,
             "pv_kw": e.pv_kw,
         }
-        for e in coord.decision_log[-48:]
+        for e in list(coord.decision_log)
     ]
     return attrs
 
@@ -559,15 +559,10 @@ def _appliance_attrs_factory(category: str) -> Callable[[CarmaboxCoordinator], d
     def _attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         energy_wh = coord.appliance_energy_wh.get(category, 0.0)
         # List individual appliances in this category
-        members = [
-            app for app in coord._appliances if app.get("category") == category
-        ]
+        members = [app for app in coord._appliances if app.get("category") == category]
         return {
             "energy_today_kwh": round(energy_wh / 1000, 2),
-            "appliances": [
-                {"entity_id": m["entity_id"], "name": m["name"]}
-                for m in members
-            ],
+            "appliances": [{"entity_id": m["entity_id"], "name": m["name"]} for m in members],
         }
 
     return _attrs

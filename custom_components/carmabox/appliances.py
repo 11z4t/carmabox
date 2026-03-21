@@ -7,7 +7,7 @@ Tracks running state, energy usage, and provides recommendations.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -81,7 +81,9 @@ def detect_appliances(hass: HomeAssistant) -> list[Appliance]:
 
         # Skip sensors with 0 total energy (never used)
         name = state.attributes.get("friendly_name", eid)
-        name_lower = name.lower().replace("\u00e4", "a").replace("\u00f6", "o").replace("\u00e5", "a")
+        name_lower = (
+            name.lower().replace("\u00e4", "a").replace("\u00f6", "o").replace("\u00e5", "a")
+        )
         eid_lower = eid.lower()
 
         # Guess category
@@ -91,11 +93,13 @@ def detect_appliances(hass: HomeAssistant) -> list[Appliance]:
                 category = cat
                 break
 
-        appliances.append(Appliance(
-            entity_id=eid,
-            name=name,
-            category=category,
-        ))
+        appliances.append(
+            Appliance(
+                entity_id=eid,
+                name=name,
+                category=category,
+            )
+        )
 
     _LOGGER.info("Detected %d appliances", len(appliances))
     return appliances

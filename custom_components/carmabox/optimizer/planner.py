@@ -67,6 +67,10 @@ def generate_plan(
     3. If weighted load > target: discharge battery
     4. Otherwise: idle
     """
+    # S1: Input validation — clamp num_hours to sane range
+    num_hours = max(1, min(num_hours, 168))  # Max 7 days
+    battery_cap_kwh = max(0.1, battery_cap_kwh)  # Prevent division by zero
+
     plan = []
     soc_kwh = battery_soc / 100 * battery_cap_kwh
     ev_soc_kwh = ev_soc / 100 * ev_cap_kwh if ev_soc >= 0 else 0.0
@@ -105,7 +109,7 @@ def generate_plan(
                 # Grid charge: battery_kw already accounts for the charge load
                 # net stays unchanged — grid = net + battery_kw handles it
 
-        elif net * w > target_weighted_kw:
+        elif w > 0 and net * w > target_weighted_kw:
             # Load above target — discharge battery
             need = (net * w - target_weighted_kw) / w
             available = soc_kwh - min_soc_kwh

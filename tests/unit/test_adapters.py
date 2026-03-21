@@ -144,7 +144,7 @@ class TestEaseeAdapter:
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.set_current(50)
         call = hass.services.async_call.call_args
-        assert call[0][2]["value"] == 32  # Clamped to max
+        assert call[0][2]["value"] == 10  # S5: Hard cap at 10A (safety)
 
     @pytest.mark.asyncio
     async def test_enable(self) -> None:

@@ -11,7 +11,12 @@ from custom_components.carmabox.coordinator import (
     CarmaboxCoordinator,
 )
 from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
-from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourActual, ShadowComparison
+from custom_components.carmabox.optimizer.models import (
+    CarmaboxState,
+    Decision,
+    HourActual,
+    ShadowComparison,
+)
 from custom_components.carmabox.optimizer.predictor import ConsumptionPredictor
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
@@ -69,7 +74,9 @@ def _make_coordinator(
     coord.inverter_adapters = []
     coord.ev_adapter = None
     coord.last_decision = Decision()
-    coord.decision_log = []
+    from collections import deque as _deque
+
+    coord.decision_log = _deque(maxlen=48)
     coord.consumption_profile = ConsumptionProfile()
     coord.hourly_actuals = []
     coord._last_tracked_hour = -1
@@ -526,9 +533,7 @@ class TestNoDuplicateCommands:
         )
         coord._last_command = BatteryCommand.DISCHARGE
         coord._last_discharge_w = 3000
-        await coord._cmd_discharge(
-            CarmaboxState(battery_soc_1=50, grid_power_w=5000), 3200
-        )
+        await coord._cmd_discharge(CarmaboxState(battery_soc_1=50, grid_power_w=5000), 3200)
         coord.hass.services.async_call.assert_called()
 
     @pytest.mark.asyncio
@@ -1328,7 +1333,6 @@ class TestR3RollbackPartialFailure:
         a2.set_ems_mode = AsyncMock(return_value=False)
         coord.inverter_adapters = [a1, a2]
 
-        blocks_before = coord._daily_safety_blocks
         state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
         await coord._cmd_charge_pv(state)
 
@@ -1381,8 +1385,18 @@ class TestApplianceTracking:
         """_track_appliances reads power from configured appliance entities."""
         coord = _make_coordinator()
         coord._appliances = [
-            {"entity_id": "sensor.tvatt_power", "name": "Tvättmaskin", "category": "laundry", "threshold_w": 10},
-            {"entity_id": "sensor.miner_power", "name": "Miner", "category": "miner", "threshold_w": 10},
+            {
+                "entity_id": "sensor.tvatt_power",
+                "name": "Tvättmaskin",
+                "category": "laundry",
+                "threshold_w": 10,
+            },
+            {
+                "entity_id": "sensor.miner_power",
+                "name": "Miner",
+                "category": "miner",
+                "threshold_w": 10,
+            },
         ]
         _set_state(coord, "sensor.tvatt_power", "250", {"unit_of_measurement": "W"})
         _set_state(coord, "sensor.miner_power", "800", {"unit_of_measurement": "W"})
@@ -1396,7 +1410,12 @@ class TestApplianceTracking:
         """kW sensors should be converted to W."""
         coord = _make_coordinator()
         coord._appliances = [
-            {"entity_id": "sensor.vp_power", "name": "VP", "category": "heating", "threshold_w": 10},
+            {
+                "entity_id": "sensor.vp_power",
+                "name": "VP",
+                "category": "heating",
+                "threshold_w": 10,
+            },
         ]
         _set_state(coord, "sensor.vp_power", "1.5", {"unit_of_measurement": "kW"})
 
@@ -1435,8 +1454,18 @@ class TestApplianceTracking:
         """Multiple appliances in same category should sum."""
         coord = _make_coordinator()
         coord._appliances = [
-            {"entity_id": "sensor.tvatt", "name": "Tvättmaskin", "category": "laundry", "threshold_w": 10},
-            {"entity_id": "sensor.tork", "name": "Torktumlare", "category": "laundry", "threshold_w": 10},
+            {
+                "entity_id": "sensor.tvatt",
+                "name": "Tvättmaskin",
+                "category": "laundry",
+                "threshold_w": 10,
+            },
+            {
+                "entity_id": "sensor.tork",
+                "name": "Torktumlare",
+                "category": "laundry",
+                "threshold_w": 10,
+            },
         ]
         _set_state(coord, "sensor.tvatt", "200", {"unit_of_measurement": "W"})
         _set_state(coord, "sensor.tork", "800", {"unit_of_measurement": "W"})
@@ -1570,6 +1599,7 @@ class TestSelfHealing:
     async def test_goodwe_self_heal_pauses_after_max_failures(self) -> None:
         """After MAX_FAILURES consecutive, pause for 5 min."""
         import time
+
         from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
 
         coord = _make_coordinator()
@@ -1679,8 +1709,7 @@ class TestPlanScore:
         """Perfect match → score 100."""
         coord = _make_coordinator()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
-            for h in range(5)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(5)
         ]
         scores = coord.plan_score()
         assert scores["score_today"] == 100.0
@@ -1689,8 +1718,7 @@ class TestPlanScore:
         """Partial match → score < 100."""
         coord = _make_coordinator()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=3.0)
-            for h in range(5)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=3.0) for h in range(5)
         ]
         scores = coord.plan_score()
         assert scores["score_today"] is not None
@@ -1701,8 +1729,7 @@ class TestPlanScore:
         """With insufficient daily data, trend is stable."""
         coord = _make_coordinator()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
-            for h in range(3)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(3)
         ]
         scores = coord.plan_score()
         assert scores["trend"] == "stable"

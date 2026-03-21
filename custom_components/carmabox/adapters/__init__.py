@@ -13,6 +13,8 @@ from abc import ABC, abstractmethod
 class InverterAdapter(ABC):
     """Contract for battery inverter adapters (GoodWe, Huawei, SolarEdge)."""
 
+    prefix: str = ""
+
     @property
     @abstractmethod
     def soc(self) -> float:
@@ -65,6 +67,11 @@ class EVAdapter(ABC):
     def is_charging(self) -> bool:
         """True if actively charging."""
 
+    @property
+    def cable_locked(self) -> bool:
+        """True if cable is locked (car connected). Override per adapter."""
+        return False
+
     @abstractmethod
     async def enable(self) -> bool:
         """Enable charger. Returns True on success."""
@@ -76,6 +83,10 @@ class EVAdapter(ABC):
     @abstractmethod
     async def set_current(self, amps: int) -> bool:
         """Set charge current (A). Returns True on success."""
+
+    async def reset_to_default(self) -> bool:
+        """Reset charger to safe default. Override per adapter."""
+        return await self.set_current(6)
 
 
 class PriceAdapter(ABC):

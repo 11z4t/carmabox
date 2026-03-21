@@ -282,13 +282,11 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         schema_dict: dict[Any, Any] = {}
         for entity_id, info in self._detected_appliances.items():
             # Checkbox to include/exclude
-            schema_dict[
-                vol.Optional(f"enable_{entity_id}", default=True)
-            ] = bool
+            schema_dict[vol.Optional(f"enable_{entity_id}", default=True)] = bool
             # Category selector
-            schema_dict[
-                vol.Optional(f"category_{entity_id}", default=info["category"])
-            ] = vol.In(category_options)
+            schema_dict[vol.Optional(f"category_{entity_id}", default=info["category"])] = vol.In(
+                category_options
+            )
 
         return self.async_show_form(
             step_id="appliances",
@@ -296,7 +294,8 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             description_placeholders={
                 "detected_count": str(len(self._detected_appliances)),
                 "sensor_list": "\n".join(
-                    f"⚡ {info['name']} ({APPLIANCE_CATEGORIES.get(info['category'], info['category'])})"
+                    f"⚡ {info['name']}"
+                    f" ({APPLIANCE_CATEGORIES.get(info['category'], info['category'])})"
                     for info in self._detected_appliances.values()
                 ),
             },
@@ -324,9 +323,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 continue
 
             # Friendly name from attributes, or cleaned entity_id
-            friendly_name = state.attributes.get("friendly_name") or name_part.replace(
-                "_", " "
-            ).title()
+            friendly_name = (
+                state.attributes.get("friendly_name") or name_part.replace("_", " ").title()
+            )
 
             # Guess category from name hints
             category = "other"
@@ -429,9 +428,8 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         if state and state.state not in ("unknown", "unavailable"):
             try:
                 price = float(state.state)
-                # Nordpool reports in SEK/kWh — convert to öre
-                if price < 20:
-                    price = price * 100
+                # S2: Don't auto-convert — Nordpool already reports in öre
+                # (the old < 20 heuristic corrupted prices like 19.5 öre → 1950)
                 return f"{int(round(price))} öre"
             except (ValueError, TypeError):
                 pass

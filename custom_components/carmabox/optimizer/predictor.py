@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from typing import Any
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -49,10 +49,22 @@ class ConsumptionPredictor:
     total_samples: int = 0
 
     # Seasonal multipliers (learned)
-    seasonal_factor: dict[int, float] = field(default_factory=lambda: {
-        1: 1.4, 2: 1.3, 3: 1.1, 4: 0.9, 5: 0.8, 6: 0.7,
-        7: 0.7, 8: 0.8, 9: 0.9, 10: 1.0, 11: 1.2, 12: 1.4,
-    })
+    seasonal_factor: dict[int, float] = field(
+        default_factory=lambda: {
+            1: 1.4,
+            2: 1.3,
+            3: 1.1,
+            4: 0.9,
+            5: 0.8,
+            6: 0.7,
+            7: 0.7,
+            8: 0.8,
+            9: 0.9,
+            10: 1.0,
+            11: 1.2,
+            12: 1.4,
+        }
+    )
 
     def add_sample(self, sample: HourSample) -> None:
         """Add a consumption sample for training."""
@@ -100,7 +112,7 @@ class ConsumptionPredictor:
         # Weighted average: recent samples weigh more
         weights = [math.exp(i * 0.1) for i in range(len(samples))]
         total_w = sum(weights)
-        avg = sum(s * w for s, w in zip(samples, weights)) / total_w
+        avg = sum(s * w for s, w in zip(samples, weights, strict=False)) / total_w
 
         # Apply seasonal adjustment
         base_month = 9  # September = baseline (factor 0.9)
@@ -152,7 +164,7 @@ class ConsumptionPredictor:
         total_slots = 7 * 24  # 168
         return round(filled / total_slots * 100, 0)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize for persistent storage."""
         return {
             "history": self.history,
@@ -161,12 +173,14 @@ class ConsumptionPredictor:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> ConsumptionPredictor:
+    def from_dict(cls, data: dict[str, Any]) -> ConsumptionPredictor:
         """Deserialize from storage."""
         pred = cls()
-        pred.history = data.get("history", {})
-        pred.total_samples = data.get("total_samples", 0)
-        sf = data.get("seasonal_factor", {})
-        if sf:
+        hist = data.get("history")
+        if isinstance(hist, dict):
+            pred.history = hist
+        pred.total_samples = int(data.get("total_samples", 0))
+        sf = data.get("seasonal_factor")
+        if isinstance(sf, dict):
             pred.seasonal_factor = {int(k): float(v) for k, v in sf.items()}
         return pred

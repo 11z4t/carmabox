@@ -970,8 +970,13 @@ async def test_appliance_step_stores_selections(hass: HomeAssistant) -> None:
     assert result["type"] == FlowResultType.CREATE_ENTRY
     appliances = result["options"]["appliances"]
     assert len(appliances) == 2
-    assert any(a["entity_id"] == "sensor.tvattmaskin_power" and a["category"] == "laundry" for a in appliances)
-    assert any(a["entity_id"] == "sensor.miner_power" and a["category"] == "miner" for a in appliances)
+    assert any(
+        a["entity_id"] == "sensor.tvattmaskin_power" and a["category"] == "laundry"
+        for a in appliances
+    )
+    assert any(
+        a["entity_id"] == "sensor.miner_power" and a["category"] == "miner" for a in appliances
+    )
 
 
 async def test_appliance_step_disable_sensor(hass: HomeAssistant) -> None:

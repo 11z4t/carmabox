@@ -12,8 +12,8 @@ No YAML automations. No shell_commands. No cron.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
+from collections import deque
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
@@ -39,11 +39,11 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_DAILY_BATTERY_NEED_KWH,
     DEFAULT_DAILY_CONSUMPTION_KWH,
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_FALLBACK_PRICE_ORE,
     DEFAULT_GRID_CHARGE_MAX_SOC,
     DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
-    DEFAULT_EV_MAX_AMPS,
-    DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_MAX_DISCHARGE_KW,
     DEFAULT_MAX_GRID_CHARGE_KW,
     DEFAULT_NIGHT_END,
@@ -57,11 +57,11 @@ from .const import (
     SCAN_INTERVAL_SECONDS,
 )
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
-from .optimizer.predictor import ConsumptionPredictor, HourSample
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
 from .optimizer.planner import generate_plan
+from .optimizer.predictor import ConsumptionPredictor, HourSample
 from .optimizer.report import (
     DailySample,
     ReportCollector,
@@ -182,7 +182,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._daily_safety_blocks = 0
         self._daily_plans = 0
         self.last_decision = Decision()
-        self.decision_log: list[Decision] = []
+        # S4: Bounded deque prevents unbounded memory growth
+        self.decision_log: deque[Decision] = deque(maxlen=48)
 
         # Plan accuracy tracking
         self.hourly_actuals: list[HourActual] = []
@@ -470,12 +471,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # At HA start, sensors report unknown/unavailable → _read_float returns 0.0
         # which masks potential crosscharge. Track validity separately.
         bp1_entity = (
-            f"sensor.goodwe_battery_power_{a1.prefix}" if a1
-            else opts.get("battery_power_1", "")
+            f"sensor.goodwe_battery_power_{a1.prefix}" if a1 else opts.get("battery_power_1", "")
         )
         bp2_entity = (
-            f"sensor.goodwe_battery_power_{a2.prefix}" if a2
-            else opts.get("battery_power_2", "")
+            f"sensor.goodwe_battery_power_{a2.prefix}" if a2 else opts.get("battery_power_2", "")
         )
         bp1_valid = self._read_float_or_none(bp1_entity) is not None
         bp2_valid = self._read_float_or_none(bp2_entity) is not None if bp2_entity else True
@@ -699,7 +698,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Crosscharge check every cycle (PLAT-946: pass validity flags)
         crosscharge = self.safety.check_crosscharge(
-            state.battery_power_1, state.battery_power_2,
+            state.battery_power_1,
+            state.battery_power_2,
             power_1_valid=state.battery_power_1_valid,
             power_2_valid=state.battery_power_2_valid,
         )
@@ -811,9 +811,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
             if charge_result.ok:
-                reasoning.append(
-                    f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda"
-                )
+                reasoning.append(f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda")
                 await self._cmd_charge_pv(state)
                 self._record_decision(
                     state,
@@ -877,10 +875,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── RULE 1.5: Grid charge at very cheap price ────────
-        grid_charge_threshold = float(self._cfg.get(
-            "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
-        ))
-        grid_charge_max_soc = float(self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC))
+        grid_charge_threshold = float(
+            self._cfg.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
+        )
+        grid_charge_max_soc = float(
+            self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
+        )
         if (
             state.current_price > 0
             and state.current_price < grid_charge_threshold
@@ -888,7 +888,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             and not state.is_exporting
         ):
             reasoning.append(
-                f"Pris {state.current_price:.0f} öre < {grid_charge_threshold:.0f} → nätladda batteri"
+                f"Pris {state.current_price:.0f} öre "
+                f"< {grid_charge_threshold:.0f} → nätladda batteri"
             )
             charge_result = self.safety.check_charge(
                 state.battery_soc_1, state.battery_soc_2, temp_c
@@ -1022,7 +1023,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ev_target = float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
         if state.ev_soc >= ev_target:
             if self._ev_enabled:
-                _LOGGER.info("CARMA: EV SoC %.0f%% >= target %.0f%% — stop", state.ev_soc, ev_target)
+                _LOGGER.info(
+                    "CARMA: EV SoC %.0f%% >= target %.0f%% — stop",
+                    state.ev_soc,
+                    ev_target,
+                )
                 await self._cmd_ev_stop()
             return
 
@@ -1153,10 +1158,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self.last_decision = decision
 
-        # Keep last 48 decisions (24h at 30min intervals)
+        # Keep last 48 decisions (24h at 30min intervals) — deque auto-evicts
         self.decision_log.append(decision)
-        if len(self.decision_log) > 48:
-            self.decision_log = self.decision_log[-48:]
 
         _LOGGER.info("CARMA decision: %s — %s", action, reason)
 
@@ -1167,7 +1170,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
     async def _log_decision(self, reason: str) -> None:
-        """Log decision to system_log (best-effort, silently ignores missing service)."""
+        """Log decision to system_log (best-effort, ignores missing service)."""
+        import contextlib
+
         with contextlib.suppress(Exception):
             await self.hass.services.async_call(
                 "system_log",
@@ -1201,7 +1206,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Inverter adapters
         for i, adapter in enumerate(self.inverter_adapters, 1):
             name = getattr(adapter, "prefix", f"inverter_{i}")
-            ems_entity = f"select.goodwe_{name}_ems_mode" if isinstance(adapter, GoodWeAdapter) else ""
+            is_gw = isinstance(adapter, GoodWeAdapter)
+            ems_entity = f"select.goodwe_{name}_ems_mode" if is_gw else ""
             ems_state = self.hass.states.get(ems_entity) if ems_entity else None
             if ems_state is None or ems_state.state in ("unavailable", "unknown"):
                 health[name] = "offline"
@@ -1226,7 +1232,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 health["ev"] = "ok"
 
         # Safety guard
-        blocks = self.safety.recent_block_count(3600) if hasattr(self.safety, "recent_block_count") else 0
+        has_rbc = hasattr(self.safety, "recent_block_count")
+        blocks = self.safety.recent_block_count(3600) if has_rbc else 0
         if isinstance(blocks, int) and blocks >= SAFETY_BLOCK_THRESHOLD:
             health["sakerhet"] = "varning"
         else:
@@ -1234,6 +1241,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Self-healing pause
         import time as _time
+
         if _time.monotonic() < self._ems_pause_until:
             health["styrning"] = "pausad"
         else:
@@ -1283,21 +1291,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 lo, hi = min(p, r), max(p, r)
                 scores.append((lo / hi) * 100 if hi > 0 else 100.0)
 
-        score_today = round(sum(scores) / len(scores), 1) if scores else None
+        score_today: float | None = round(sum(scores) / len(scores), 1) if scores else None
 
         # 7d and 30d: use daily_savings trend as proxy for consistency
         daily = self.savings.daily_savings
+        score_7d: float | None
         if len(daily) >= 7:
             recent_7 = daily[-7:]
             # Score based on consistency: low variance = good
-            avg_7 = sum(d.get("savings_kr", 0) for d in recent_7) / 7
+            avg_7 = sum(d.total_kr for d in recent_7) / 7
             score_7d = round(min(100, max(0, 50 + avg_7 * 2)), 1)
         else:
             score_7d = score_today
 
+        score_30d: float | None
         if len(daily) >= 30:
             recent_30 = daily[-30:]
-            avg_30 = sum(d.get("savings_kr", 0) for d in recent_30) / 30
+            avg_30 = sum(d.total_kr for d in recent_30) / 30
             score_30d = round(min(100, max(0, 50 + avg_30 * 2)), 1)
         else:
             score_30d = score_7d
@@ -1305,8 +1315,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Trend: compare last 7d vs previous 7d
         trend = "stable"
         if len(daily) >= 14:
-            recent = sum(d.get("savings_kr", 0) for d in daily[-7:])
-            previous = sum(d.get("savings_kr", 0) for d in daily[-14:-7])
+            recent = sum(d.total_kr for d in daily[-7:])
+            previous = sum(d.total_kr for d in daily[-14:-7])
             if recent > previous * 1.1:
                 trend = "improving"
             elif recent < previous * 0.9:
@@ -1697,7 +1707,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 _LOGGER.info("CARMA self-heal: triggered reload for GoodWe %s", adapter.prefix)
             except Exception:
-                _LOGGER.debug("CARMA self-heal: reload failed for %s", adapter.prefix, exc_info=True)
+                _LOGGER.debug(
+                    "CARMA self-heal: reload failed for %s",
+                    adapter.prefix,
+                    exc_info=True,
+                )
 
     def _self_heal_ev_tamper(self) -> None:
         """PLAT-972: Detect if Easee is_enabled changed externally and log it."""
@@ -1879,7 +1893,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     entity = self._get_entity(ems_key)
                     if entity:
                         await self._safe_service_call(
-                            "select", "select_option",
+                            "select",
+                            "select_option",
                             {"entity_id": entity, "option": "battery_standby"},
                         )
                 self._daily_safety_blocks += 1
@@ -2080,7 +2095,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     entity = self._get_entity(ems_key)
                     if entity:
                         await self._safe_service_call(
-                            "select", "select_option",
+                            "select",
+                            "select_option",
                             {"entity_id": entity, "option": "battery_standby"},
                         )
                 self._daily_safety_blocks += 1

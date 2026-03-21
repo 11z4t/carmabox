@@ -123,11 +123,10 @@ class TestCrosscharge:
         assert not result.ok
         assert "unreliable" in result.reason
 
-    def test_block_power_2_unavailable(self, guard: SafetyGuard) -> None:
-        """PLAT-946: power_2 unavailable at HA start → block."""
+    def test_pass_power_2_unavailable_single_battery_mode(self, guard: SafetyGuard) -> None:
+        """PLAT-946: power_2 unavailable but power_1 valid → single-battery mode (OK)."""
         result = guard.check_crosscharge(power_1_w=1000, power_2_w=0, power_2_valid=False)
-        assert not result.ok
-        assert "unreliable" in result.reason
+        assert result.ok  # Single-battery mode — can't crosscharge with one battery
 
     def test_block_both_unavailable(self, guard: SafetyGuard) -> None:
         """PLAT-946: Both unavailable at HA start → block."""
@@ -139,7 +138,9 @@ class TestCrosscharge:
 
     def test_pass_valid_zero_readings(self, guard: SafetyGuard) -> None:
         """Both batteries at 0W with valid readings = idle, not crosscharge."""
-        result = guard.check_crosscharge(power_1_w=0, power_2_w=0, power_1_valid=True, power_2_valid=True)
+        result = guard.check_crosscharge(
+            power_1_w=0, power_2_w=0, power_1_valid=True, power_2_valid=True
+        )
         assert result.ok
 
 

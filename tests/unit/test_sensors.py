@@ -13,10 +13,6 @@ from custom_components.carmabox.sensor import (
     _appliance_attrs_factory,
     _appliance_value_factory,
     _build_appliance_descriptions,
-    _status_value,
-    _status_attrs,
-    _plan_score_value,
-    _plan_score_attrs,
 )
 
 
@@ -37,9 +33,14 @@ def _make_sensor_deps(
     coord.executor_enabled = True
     coord.status_text = "Allt fungerar"
     coord.system_health = {"kontor": "ok", "forrad": "ok", "sakerhet": "ok", "styrning": "ok"}
-    coord.plan_score = MagicMock(return_value={
-        "score_today": None, "score_7d": None, "score_30d": None, "trend": "stable",
-    })
+    coord.plan_score = MagicMock(
+        return_value={
+            "score_today": None,
+            "score_7d": None,
+            "score_30d": None,
+            "trend": "stable",
+        }
+    )
 
     entry = MagicMock()
     entry.entry_id = "test_entry"
@@ -548,17 +549,27 @@ class TestPlanScoreSensor:
 
     def test_plan_score_with_data(self) -> None:
         coord, entry = _make_sensor_deps()
-        coord.plan_score = MagicMock(return_value={
-            "score_today": 85.0, "score_7d": 80.0, "score_30d": 78.0, "trend": "improving",
-        })
+        coord.plan_score = MagicMock(
+            return_value={
+                "score_today": 85.0,
+                "score_7d": 80.0,
+                "score_30d": 78.0,
+                "trend": "improving",
+            }
+        )
         sensor = _get_sensor("plan_score", coord, entry)
         assert sensor.native_value == 85.0
 
     def test_plan_score_attrs(self) -> None:
         coord, entry = _make_sensor_deps()
-        coord.plan_score = MagicMock(return_value={
-            "score_today": 85.0, "score_7d": 80.0, "score_30d": 78.0, "trend": "improving",
-        })
+        coord.plan_score = MagicMock(
+            return_value={
+                "score_today": 85.0,
+                "score_7d": 80.0,
+                "score_30d": 78.0,
+                "trend": "improving",
+            }
+        )
         sensor = _get_sensor("plan_score", coord, entry)
         attrs = sensor.extra_state_attributes
         assert attrs is not None

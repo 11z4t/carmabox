@@ -169,7 +169,8 @@ class EaseeAdapter(EVAdapter):
         limits charging current — set_charger_dynamic_limit does NOT work).
         Default/minimum is 6A to avoid runaway 16A charging.
         """
-        amps = max(6, min(32, amps))
+        # S5: Hard cap at 10A — 16A+ blows the fuse, 32A circuit damage risk
+        amps = max(6, min(10, amps))
         _LOGGER.info("Easee: set max limit → %dA", amps)
 
         if self.charger_id:

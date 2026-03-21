@@ -134,8 +134,22 @@ class GoodWeAdapter(InverterAdapter):
 
     # ── Write ─────────────────────────────────────────────────
 
+    # S7: Valid EMS modes — reject unknown values
+    VALID_EMS_MODES = frozenset(
+        {
+            "charge_pv",
+            "charge_battery",
+            "discharge_battery",
+            "battery_standby",
+            "auto",
+        }
+    )
+
     async def set_ems_mode(self, mode: str) -> bool:
         """Set EMS mode (charge_pv, charge_battery, discharge_battery, battery_standby)."""
+        if mode not in self.VALID_EMS_MODES:
+            _LOGGER.error("GoodWe %s: REJECTED invalid EMS mode '%s'", self.prefix, mode)
+            return False
         _LOGGER.info("GoodWe %s: set EMS → %s", self.prefix, mode)
         return await self._safe_call(
             "select",

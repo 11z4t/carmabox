@@ -62,8 +62,8 @@ class SafetyGuard:
         self.temp_max = temperature_max_c
         self.max_mode_changes = max_mode_changes_per_hour
 
-        # #7 Rate guard — track mode changes
-        self._mode_change_timestamps: list[float] = []
+        # #7 Rate guard — track mode changes (S3: bounded deque)
+        self._mode_change_timestamps: deque[float] = deque(maxlen=max_mode_changes_per_hour * 2)
 
         # #8 Heartbeat — track last successful update
         self._last_heartbeat: float = time.monotonic()
@@ -260,14 +260,11 @@ class SafetyGuard:
         now = time.monotonic()
         cutoff = now - 3600  # 1 hour window
 
-        # Prune old timestamps
-        self._mode_change_timestamps = [t for t in self._mode_change_timestamps if t > cutoff]
+        # Count recent timestamps (deque is already bounded)
+        recent_count = sum(1 for t in self._mode_change_timestamps if t > cutoff)
 
-        if len(self._mode_change_timestamps) >= self.max_mode_changes:
-            reason = (
-                f"rate limit: {len(self._mode_change_timestamps)} "
-                f"changes in 1h (max {self.max_mode_changes})"
-            )
+        if recent_count >= self.max_mode_changes:
+            reason = f"rate limit: {recent_count} changes in 1h (max {self.max_mode_changes})"
             _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("rate_limit", r)
