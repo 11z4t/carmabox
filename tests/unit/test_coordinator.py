@@ -643,7 +643,7 @@ class TestSafetyBlockingPaths:
 
     @pytest.mark.asyncio
     async def test_charge_blocked_during_export(self) -> None:
-        """Export + charge blocked → no charge_pv."""
+        """Export + charge blocked → self-heal to standby (not user-facing block)."""
         coord = _make_coordinator({"battery_ems_1": "select.ems1"})
         coord.safety.check_charge = MagicMock(
             return_value=MagicMock(ok=False, reason="temp too low")
@@ -652,8 +652,9 @@ class TestSafetyBlockingPaths:
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value.hour = 12
             await coord._execute(state)
-        assert coord._last_command == BatteryCommand.IDLE
-        assert coord.last_decision.safety_blocked is True
+        assert coord._last_command == BatteryCommand.STANDBY
+        # Self-healing: no safety_blocked flag — handled internally
+        assert coord.last_decision.safety_blocked is False
 
 
 class TestDecisionRecording:

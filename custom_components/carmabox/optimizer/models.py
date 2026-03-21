@@ -172,3 +172,72 @@ class CarmaboxState:
                 ) / total_cap
             return (self.battery_soc_1 + self.battery_soc_2) / 2
         return self.battery_soc_1
+
+
+@dataclass
+class HouseholdProfile:
+    """Household metadata for benchmarking and energy advisory.
+
+    Collected during config flow. Anonymized before hub sync.
+    """
+
+    # House
+    house_size_m2: int = 0
+    heating_type: str = ""  # fjv, vp, direct, other
+    has_hot_water_heater: bool = False
+
+    # Solar
+    solar_kwp: float = 0.0
+    solar_direction: str = ""  # S, SO, SV, O, V, N
+    solar_tilt: int = 0  # degrees
+
+    # Battery
+    battery_brand: str = ""
+    battery_count: int = 0
+    battery_total_kwh: float = 0.0
+
+    # EV
+    ev_brand: str = ""
+    ev_capacity_kwh: float = 0.0
+    ev_charge_speed_kw: float = 0.0
+
+    # Location (anonymized — no street address)
+    postal_code: str = ""  # 5-digit Swedish
+    municipality: str = ""
+    price_area: str = ""  # SE1-SE4
+    grid_operator: str = ""
+
+    # Electricity contract
+    contract_type: str = ""  # fixed, variable
+    electricity_retailer: str = ""
+    grid_fee_kr_per_kw: float = 0.0
+
+
+@dataclass
+class BenchmarkData:
+    """Benchmarking comparison data from hub."""
+
+    # Population
+    similar_households: int = 0
+    comparison_group: str = ""  # e.g. "Villa 120-160m², VP, SE3"
+
+    # Consumption comparison
+    your_monthly_kwh: float = 0.0
+    avg_monthly_kwh: float = 0.0
+    diff_pct: float = 0.0  # Positive = you use more than average
+    trend_3m: str = ""  # "improving", "stable", "increasing"
+
+    # Savings comparison
+    your_savings_kr: float = 0.0
+    avg_savings_kr: float = 0.0
+    savings_rank_pct: float = 0.0  # Percentile (top 10% = 90)
+
+    # Tips
+    tips: list[str] = field(default_factory=list)
+
+    # ROI
+    battery_roi_months: int = 0
+    solar_roi_months: int = 0
+
+    # Timestamp
+    updated: str = ""

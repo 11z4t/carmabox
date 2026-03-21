@@ -122,6 +122,51 @@ APPLIANCE_EXCLUDE_PREFIXES = (
 # Default appliance power threshold (W) — below this is considered off/standby
 DEFAULT_APPLIANCE_THRESHOLD_W = 10
 
+# Household profile — heating types
+HEATING_TYPES = {
+    "fjv": "Fjärrvärme",
+    "vp": "Värmepump",
+    "direct": "Direktverkande el",
+    "other": "Övrigt",
+}
+
+# Household profile — solar directions
+SOLAR_DIRECTIONS = {
+    "S": "Söder",
+    "SO": "Sydost",
+    "SV": "Sydväst",
+    "O": "Öster",
+    "V": "Väster",
+    "N": "Norr",
+}
+
+# Household profile — contract types
+CONTRACT_TYPES = {
+    "variable": "Rörligt",
+    "fixed": "Fast",
+}
+
+# Household profile — electricity retailers
+ELECTRICITY_RETAILERS = {
+    "tibber": "Tibber",
+    "vattenfall": "Vattenfall",
+    "fortum": "Fortum",
+    "eon": "E.ON",
+    "greenely": "Greenely",
+    "bixia": "Bixia",
+    "other": "Annan",
+}
+
+# Household profile — battery brands
+BATTERY_BRANDS = {
+    "goodwe": "GoodWe",
+    "huawei": "Huawei",
+    "solaredge": "SolarEdge",
+    "byd": "BYD",
+    "tesla": "Tesla Powerwall",
+    "other": "Annan",
+}
+
 # Config keys
 CONF_BATTERIES = "batteries"
 CONF_EV = "ev"

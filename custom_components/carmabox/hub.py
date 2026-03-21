@@ -293,6 +293,49 @@ class HubSyncClient:
         """Last successful sync timestamp."""
         return self._last_sync
 
+    async def fetch_benchmarking(self, config_snapshot: dict[str, Any]) -> dict[str, Any] | None:
+        """Fetch benchmarking data from hub for this box.
+
+        Sends anonymized profile, receives comparison against similar households.
+        Returns None if hub unreachable or <10 similar households.
+        """
+        try:
+            profile = self._anonymize_config(config_snapshot)
+            session = async_get_clientsession(self.hass)
+            url = f"{self.hub_url}/benchmarking/{self.instance_id}"
+
+            async with session.post(
+                url,
+                json={"profile": profile},
+                timeout=aiohttp.ClientTimeout(total=SYNC_TIMEOUT),
+            ) as resp:
+                if resp.status == 200:
+                    data: dict[str, Any] = await resp.json()
+                    if data.get("similar_households", 0) >= 10:
+                        return data
+                    _LOGGER.debug(
+                        "Benchmarking: only %d similar households (need 10+)",
+                        data.get("similar_households", 0),
+                    )
+                    return data
+                return None
+        except Exception:
+            _LOGGER.debug("Hub benchmarking fetch failed", exc_info=True)
+            return None
+
+    def publish_household_profile(self, config_snapshot: dict[str, Any]) -> bool:
+        """Publish anonymized household profile via MQTT for benchmarking."""
+        if not self._mqtt_connected or not self._mqtt_client:
+            return False
+        try:
+            profile = self._anonymize_config(config_snapshot)
+            payload = json.dumps(profile)
+            self._mqtt_client.publish(f"{self.topic_prefix}/profile", payload, qos=1, retain=True)
+            return True
+        except Exception:
+            _LOGGER.debug("MQTT profile publish failed", exc_info=True)
+            return False
+
     @staticmethod
     def _anonymize_config(config: dict[str, Any]) -> dict[str, Any]:
         """Remove personally identifiable data from config."""
@@ -312,5 +355,22 @@ class HubSyncClient:
             "fallback_price_ore",
             "grid_charge_price_threshold",
             "grid_charge_max_soc",
+            # PLAT-962: Household profile (anonymized)
+            "house_size_m2",
+            "heating_type",
+            "has_hot_water_heater",
+            "solar_kwp",
+            "solar_direction",
+            "solar_tilt",
+            "battery_brand",
+            "battery_count",
+            "contract_type",
+            "electricity_retailer",
+            # postal_code: only first 3 digits for privacy
         }
-        return {k: v for k, v in config.items() if k in safe_keys}
+        result = {k: v for k, v in config.items() if k in safe_keys}
+        # Anonymize postal code — keep only first 3 digits (area, not street)
+        postal = str(config.get("postal_code", ""))
+        if len(postal) >= 3:
+            result["postal_area"] = postal[:3]
+        return result

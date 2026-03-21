@@ -238,6 +238,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._miner_entity: str = str(self._cfg.get("miner_entity", ""))
         self._miner_on: bool = False
 
+        # PLAT-962: Household benchmarking data (from hub)
+        self.benchmark_data: dict[str, Any] | None = None
+        self._benchmark_last_fetch: float = 0.0
+
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
             adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
@@ -417,6 +421,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Failed to save predictor", exc_info=True)
 
+    async def _async_fetch_benchmarking(self) -> None:
+        """PLAT-962: Fetch benchmarking data from hub (rate-limited to every hour)."""
+        import time
+
+        now = time.monotonic()
+        last_fetch = getattr(self, "_benchmark_last_fetch", 0.0)
+        if now - last_fetch < 3600:  # Once per hour
+            return
+        self._benchmark_last_fetch = now
+
+        hub = getattr(self, "_hub", None)
+        if hub is None:
+            return
+        try:
+            cfg = getattr(self, "_cfg", {})
+            data = await hub.fetch_benchmarking(cfg)
+            if data is not None:
+                self.benchmark_data = data
+        except Exception:
+            _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
+
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
         try:
@@ -475,6 +500,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
+            await self._async_fetch_benchmarking()
             return state
 
         except Exception as err:
@@ -564,10 +590,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             tomorrow_prices = price_adapter.tomorrow_prices
             prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
 
-            # Collect PV forecast
+            # Collect PV forecast — today remaining + tomorrow hourly
             solcast = SolcastAdapter(self.hass)
-            pv_hourly = solcast.today_hourly_kw
-            pv_forecast = pv_hourly[start_hour:] + [0.0] * 24  # Pad tomorrow
+            pv_today = solcast.today_hourly_kw
+            pv_tomorrow = solcast.tomorrow_hourly_kw
+            pv_forecast = pv_today[start_hour:] + pv_tomorrow
 
             # PLAT-965: Use predictor if trained, else fallback to profile
             base = self.consumption_profile.get_profile_for_date(now)
@@ -606,7 +633,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
             # PV forecast for tomorrow (used by EV strategy)
-            pv_tomorrow = solcast.tomorrow_kwh
+            pv_tomorrow_kwh = solcast.tomorrow_kwh
 
             daily_consumption = float(
                 opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH)
@@ -624,7 +651,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     morning_target_soc=ev_morning_target,
                     full_charge_interval_days=ev_full_days,
                     battery_kwh_available=battery_kwh_available,
-                    pv_tomorrow_kwh=pv_tomorrow,
+                    pv_tomorrow_kwh=pv_tomorrow_kwh,
                     daily_consumption_kwh=daily_consumption,
                 )
             else:
@@ -855,7 +882,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
 
                 await self._execute_ev(state)
+                await self._execute_miner(state)
                 return
+            # Charge blocked (e.g. temperature) — not a user-facing issue,
+            # just fall through to next rule. Self-healing handles it.
+            reasoning.append(f"Laddning blockerad: {charge_result.reason}")
 
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
@@ -879,20 +910,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         reasoning_chain=chain,
                     )
                 else:
-                    step5 = f"Blockerad: {charge_result.reason}"
-                    reasoning.append(f"Laddning blockerad: {charge_result.reason}")
+                    # Charge blocked during export (e.g. temperature) —
+                    # fall through to standby. NOT a user-facing safety issue.
+                    step5 = "Standby — laddning ej möjlig, exporterar överskott"
                     reasoning.append(step5)
                     chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+                    await self._cmd_standby(state)
                     self._record_decision(
                         state,
-                        "blocked",
-                        f"Laddning blockerad — {charge_result.reason}",
-                        safety_blocked=True,
-                        safety_reason=charge_result.reason,
+                        "standby",
+                        f"Standby — {charge_result.reason}, exporterar",
                         reasoning=reasoning,
                         reasoning_chain=chain,
                     )
-                    self._daily_safety_blocks += 1
             else:
                 step5 = "Standby — batterier 100%, exporterar överskott, Ellevio-påverkan: 0 kW"
                 reasoning.append("Batterier 100% → standby, exporterar överskott")
@@ -990,19 +1020,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning_chain=chain,
                 )
             else:
-                step5 = f"Urladdning blockerad: {result.reason}"
+                # Discharge not possible (SoC low, temp, etc.) — NOT a user issue.
+                # Self-heal: fall through to standby instead of blocking.
+                step5 = f"Vila — urladdning ej möjlig ({result.reason})"
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+                await self._cmd_standby(state)
                 self._record_decision(
                     state,
-                    "blocked",
-                    f"Urladdning blockerad — {result.reason}",
-                    safety_blocked=True,
-                    safety_reason=result.reason,
+                    "idle",
+                    f"Vila — {result.reason}",
                     reasoning=reasoning,
                     reasoning_chain=chain,
                 )
-                self._daily_safety_blocks += 1
             return
 
         # ── RULE 4: Under target → idle ──────────────────────

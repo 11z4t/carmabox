@@ -43,6 +43,23 @@
           "executor_enabled": "Aktivera styrning (av = enbart analys)"
         }
       },
+      "household_profile": {
+        "title": "Hushållsprofil",
+        "description": "Detaljerad profil för benchmarking och energirådgivning.\nNär vi har 10+ kunder kan vi jämföra mot liknande hushåll.",
+        "data": {
+          "house_size_m2": "Boyta (m²)",
+          "heating_type": "Uppvärmning",
+          "has_hot_water_heater": "Elvarmvattenberedare",
+          "solar_kwp": "Solpaneler totaleffekt (kWp)",
+          "solar_direction": "Solpanelernas riktning",
+          "solar_tilt": "Solpanelernas lutning (grader)",
+          "battery_brand": "Batteriinverter",
+          "battery_count": "Antal batterier",
+          "postal_code": "Postnummer",
+          "contract_type": "Elavtal",
+          "electricity_retailer": "Elhandlare"
+        }
+      },
       "appliances": {
         "title": "Energisensorer ({detected_count} hittade)",
         "description": "Vi hittade dessa effektsensorer:\n{sensor_list}\n\nVälj kategori för varje sensor och avmarkera de du inte vill spåra."
@@ -103,6 +120,9 @@
       },
       "appliance_other": {
         "name": "Förbrukning Övrigt"
+      },
+      "household_insights": {
+        "name": "Hushållsinsikt"
       }
     }
   },
@@ -143,7 +163,15 @@
           "grid_charge_max_soc": "Max SoC vid nätladdning (%)",
           "household_size": "Antal personer",
           "has_pool_pump": "Pool med värmepump",
-          "executor_enabled": "Aktivera styrning (av = enbart analys)"
+          "executor_enabled": "Aktivera styrning (av = enbart analys)",
+          "house_size_m2": "Boyta (m²)",
+          "heating_type": "Uppvärmning",
+          "has_hot_water_heater": "Elvarmvattenberedare",
+          "solar_kwp": "Solpaneler totaleffekt (kWp)",
+          "solar_direction": "Solpanelernas riktning",
+          "postal_code": "Postnummer",
+          "contract_type": "Elavtal",
+          "electricity_retailer": "Elhandlare"
         }
       }
     }

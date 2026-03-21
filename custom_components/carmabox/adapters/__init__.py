@@ -130,3 +130,8 @@ class PVAdapter(ABC):
     @abstractmethod
     def today_hourly_kw(self) -> list[float]:
         """24 hourly PV forecast for today (kW)."""
+
+    @property
+    @abstractmethod
+    def tomorrow_hourly_kw(self) -> list[float]:
+        """24 hourly PV forecast for tomorrow (kW)."""

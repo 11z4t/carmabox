@@ -18,6 +18,8 @@ from .const import (
     APPLIANCE_CATEGORIES,
     APPLIANCE_EXCLUDE_PREFIXES,
     APPLIANCE_HINTS,
+    BATTERY_BRANDS,
+    CONTRACT_TYPES,
     DEFAULT_APPLIANCE_THRESHOLD_W,
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
@@ -32,6 +34,9 @@ from .const import (
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
     DOMAIN,
+    ELECTRICITY_RETAILERS,
+    HEATING_TYPES,
+    SOLAR_DIRECTIONS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -232,7 +237,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5: Household info + mode."""
         if user_input is not None:
             self._user_input.update(user_input)
-            return await self.async_step_appliances()
+            return await self.async_step_household_profile()
 
         return self.async_show_form(
             step_id="household",
@@ -243,6 +248,62 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     ),
                     vol.Optional("has_pool_pump", default=False): bool,
                     vol.Optional("executor_enabled", default=False): bool,
+                }
+            ),
+        )
+
+    async def async_step_household_profile(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 5b: Detailed household profile for benchmarking."""
+        if user_input is not None:
+            self._user_input.update(user_input)
+            return await self.async_step_appliances()
+
+        # Auto-detect battery brand from inverter domains
+        detected_brand = "other"
+        for inv in self._detected.get("inverters", []):
+            domain = inv.get("domain", "")
+            if domain in BATTERY_BRANDS:
+                detected_brand = domain
+                break
+
+        # Count detected batteries
+        battery_count = len(self._detected.get("inverters", []))
+
+        return self.async_show_form(
+            step_id="household_profile",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("house_size_m2", default=130): vol.All(
+                        vol.Coerce(int), vol.Range(min=20, max=500)
+                    ),
+                    vol.Optional("heating_type", default="vp"): vol.In(
+                        {k: v for k, v in HEATING_TYPES.items()}
+                    ),
+                    vol.Optional("has_hot_water_heater", default=False): bool,
+                    vol.Optional("solar_kwp", default=0.0): vol.All(
+                        vol.Coerce(float), vol.Range(min=0, max=50)
+                    ),
+                    vol.Optional("solar_direction", default="S"): vol.In(
+                        {k: v for k, v in SOLAR_DIRECTIONS.items()}
+                    ),
+                    vol.Optional("solar_tilt", default=30): vol.All(
+                        vol.Coerce(int), vol.Range(min=0, max=90)
+                    ),
+                    vol.Optional("battery_brand", default=detected_brand): vol.In(
+                        {k: v for k, v in BATTERY_BRANDS.items()}
+                    ),
+                    vol.Optional("battery_count", default=battery_count): vol.All(
+                        vol.Coerce(int), vol.Range(min=1, max=10)
+                    ),
+                    vol.Optional("postal_code", default=""): str,
+                    vol.Optional("contract_type", default="variable"): vol.In(
+                        {k: v for k, v in CONTRACT_TYPES.items()}
+                    ),
+                    vol.Optional("electricity_retailer", default="other"): vol.In(
+                        {k: v for k, v in ELECTRICITY_RETAILERS.items()}
+                    ),
                 }
             ),
         )
@@ -481,6 +542,18 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             # Household
             "household_size": self._user_input.get("household_size", 4),
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
+            # Household profile (PLAT-962)
+            "house_size_m2": self._user_input.get("house_size_m2", 0),
+            "heating_type": self._user_input.get("heating_type", ""),
+            "has_hot_water_heater": self._user_input.get("has_hot_water_heater", False),
+            "solar_kwp": self._user_input.get("solar_kwp", 0.0),
+            "solar_direction": self._user_input.get("solar_direction", ""),
+            "solar_tilt": self._user_input.get("solar_tilt", 0),
+            "battery_brand": self._user_input.get("battery_brand", ""),
+            "battery_count": self._user_input.get("battery_count", 0),
+            "postal_code": self._user_input.get("postal_code", ""),
+            "contract_type": self._user_input.get("contract_type", ""),
+            "electricity_retailer": self._user_input.get("electricity_retailer", ""),
             # Mode — analyzer only by default (no battery commands sent)
             "executor_enabled": self._user_input.get("executor_enabled", False),
             # Appliances (from auto-detect + user categorization)
@@ -919,6 +992,39 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "executor_enabled",
                         default=opts.get("executor_enabled", False),
                     ): bool,
+                    # Household profile (PLAT-962)
+                    vol.Optional(
+                        "house_size_m2",
+                        default=opts.get("house_size_m2", 0),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=500)),
+                    vol.Optional(
+                        "heating_type",
+                        default=opts.get("heating_type", ""),
+                    ): vol.In({**HEATING_TYPES, "": "Ej valt"}),
+                    vol.Optional(
+                        "has_hot_water_heater",
+                        default=opts.get("has_hot_water_heater", False),
+                    ): bool,
+                    vol.Optional(
+                        "solar_kwp",
+                        default=opts.get("solar_kwp", 0.0),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0, max=50)),
+                    vol.Optional(
+                        "solar_direction",
+                        default=opts.get("solar_direction", ""),
+                    ): vol.In({**SOLAR_DIRECTIONS, "": "Ej valt"}),
+                    vol.Optional(
+                        "postal_code",
+                        default=opts.get("postal_code", ""),
+                    ): str,
+                    vol.Optional(
+                        "contract_type",
+                        default=opts.get("contract_type", ""),
+                    ): vol.In({**CONTRACT_TYPES, "": "Ej valt"}),
+                    vol.Optional(
+                        "electricity_retailer",
+                        default=opts.get("electricity_retailer", ""),
+                    ): vol.In({**ELECTRICITY_RETAILERS, "": "Ej valt"}),
                 }
             ),
         )

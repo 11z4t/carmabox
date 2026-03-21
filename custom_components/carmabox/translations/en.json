@@ -43,6 +43,23 @@
           "executor_enabled": "Enable control (off = analyze only)"
         }
       },
+      "household_profile": {
+        "title": "Household Profile",
+        "description": "Detailed profile for benchmarking and energy advisory.\nWith 10+ customers we can compare against similar households.",
+        "data": {
+          "house_size_m2": "Living area (m²)",
+          "heating_type": "Heating type",
+          "has_hot_water_heater": "Electric hot water heater",
+          "solar_kwp": "Solar panels total capacity (kWp)",
+          "solar_direction": "Solar panel direction",
+          "solar_tilt": "Solar panel tilt (degrees)",
+          "battery_brand": "Battery inverter",
+          "battery_count": "Number of batteries",
+          "postal_code": "Postal code",
+          "contract_type": "Electricity contract",
+          "electricity_retailer": "Electricity retailer"
+        }
+      },
       "summary": {
         "title": "CARMA Box found your equipment",
         "description": "**Found:**\n{equipment}\n\n**Your strategy:** {strategy}\n\nFirst plan will be generated in 5 minutes.\n\n**Tip:** Open the CARMA Box card in your dashboard to follow optimization in real time."
@@ -78,6 +95,9 @@
       },
       "ev_soc": {
         "name": "EV SoC"
+      },
+      "household_insights": {
+        "name": "Household Insights"
       }
     }
   },
@@ -118,7 +138,15 @@
           "grid_charge_max_soc": "Max SoC for grid charging (%)",
           "household_size": "Number of people",
           "has_pool_pump": "Pool with heat pump",
-          "executor_enabled": "Enable control (off = analyze only)"
+          "executor_enabled": "Enable control (off = analyze only)",
+          "house_size_m2": "Living area (m²)",
+          "heating_type": "Heating type",
+          "has_hot_water_heater": "Electric hot water heater",
+          "solar_kwp": "Solar panels total capacity (kWp)",
+          "solar_direction": "Solar panel direction",
+          "postal_code": "Postal code",
+          "contract_type": "Electricity contract",
+          "electricity_retailer": "Electricity retailer"
         }
       }
     }

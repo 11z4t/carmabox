@@ -153,3 +153,132 @@ class TestSolcastEdgeCases:
         result = adapter.today_hourly_kw
         assert len(result) == 24
         assert all(v == 0.0 for v in result)
+
+
+class TestSolcastTomorrowHourly:
+    """Tests for tomorrow_hourly_kw — PLAT-958."""
+
+    def test_tomorrow_hourly_sunny_day(self) -> None:
+        """Sunny day: significant PV forecast across daylight hours."""
+        hourly_data = [
+            {"period_start": "2026-03-22T07:00:00", "pv_estimate10": 500, "pv_estimate": 800},
+            {"period_start": "2026-03-22T08:00:00", "pv_estimate10": 1500, "pv_estimate": 2000},
+            {"period_start": "2026-03-22T09:00:00", "pv_estimate10": 3000, "pv_estimate": 4000},
+            {"period_start": "2026-03-22T10:00:00", "pv_estimate10": 4500, "pv_estimate": 5500},
+            {"period_start": "2026-03-22T11:00:00", "pv_estimate10": 5000, "pv_estimate": 6000},
+            {"period_start": "2026-03-22T12:00:00", "pv_estimate10": 5200, "pv_estimate": 6200},
+            {"period_start": "2026-03-22T13:00:00", "pv_estimate10": 4800, "pv_estimate": 5800},
+            {"period_start": "2026-03-22T14:00:00", "pv_estimate10": 3500, "pv_estimate": 4500},
+            {"period_start": "2026-03-22T15:00:00", "pv_estimate10": 2000, "pv_estimate": 3000},
+            {"period_start": "2026-03-22T16:00:00", "pv_estimate10": 800, "pv_estimate": 1200},
+            {"period_start": "2026-03-22T17:00:00", "pv_estimate10": 200, "pv_estimate": 400},
+        ]
+        tomorrow_state = MagicMock()
+        tomorrow_state.state = "25.0"
+        tomorrow_state.attributes = {"detailedHourly": hourly_data}
+
+        hass = MagicMock()
+        hass.states.get = lambda eid: tomorrow_state if "tomorrow" in eid else None
+
+        adapter = SolcastAdapter(hass)
+        result = adapter.tomorrow_hourly_kw
+
+        assert len(result) == 24
+        assert result[12] == 5.2  # Peak at noon
+        assert result[0] == 0.0  # Night
+        assert result[23] == 0.0  # Night
+        assert sum(result) > 20  # Significant total
+
+    def test_tomorrow_hourly_cloudy_day(self) -> None:
+        """Cloudy day: low PV forecast."""
+        hourly_data = [
+            {"period_start": "2026-03-22T09:00:00", "pv_estimate10": 200, "pv_estimate": 400},
+            {"period_start": "2026-03-22T10:00:00", "pv_estimate10": 500, "pv_estimate": 800},
+            {"period_start": "2026-03-22T11:00:00", "pv_estimate10": 600, "pv_estimate": 900},
+            {"period_start": "2026-03-22T12:00:00", "pv_estimate10": 700, "pv_estimate": 1000},
+            {"period_start": "2026-03-22T13:00:00", "pv_estimate10": 500, "pv_estimate": 700},
+            {"period_start": "2026-03-22T14:00:00", "pv_estimate10": 300, "pv_estimate": 500},
+        ]
+        tomorrow_state = MagicMock()
+        tomorrow_state.state = "3.0"
+        tomorrow_state.attributes = {"detailedHourly": hourly_data}
+
+        hass = MagicMock()
+        hass.states.get = lambda eid: tomorrow_state if "tomorrow" in eid else None
+
+        adapter = SolcastAdapter(hass)
+        result = adapter.tomorrow_hourly_kw
+
+        assert len(result) == 24
+        assert result[12] == 0.7  # Low peak
+        assert sum(result) < 5  # Low total
+
+    def test_tomorrow_hourly_unavailable(self) -> None:
+        """Tomorrow sensor unavailable → all zeros."""
+        hass = MagicMock()
+        hass.states.get = MagicMock(return_value=None)
+        adapter = SolcastAdapter(hass)
+        result = adapter.tomorrow_hourly_kw
+        assert len(result) == 24
+        assert all(v == 0.0 for v in result)
+
+    def test_tomorrow_hourly_no_detailed_attribute(self) -> None:
+        """Tomorrow sensor exists but has no detailedHourly → all zeros."""
+        tomorrow_state = MagicMock()
+        tomorrow_state.state = "15.0"
+        tomorrow_state.attributes = {}
+
+        hass = MagicMock()
+        hass.states.get = lambda eid: tomorrow_state if "tomorrow" in eid else None
+
+        adapter = SolcastAdapter(hass)
+        result = adapter.tomorrow_hourly_kw
+        assert len(result) == 24
+        assert all(v == 0.0 for v in result)
+
+    def test_planner_receives_real_forecast(self) -> None:
+        """Verify generate_plan gets real PV data, not zeros — core PLAT-958 test."""
+        from custom_components.carmabox.optimizer.planner import generate_plan
+
+        # Sunny tomorrow: significant solar 8-16h
+        sunny_pv = [0.0] * 24
+        for h in range(8, 17):
+            sunny_pv[h] = 3.0  # 3 kW per hour
+
+        # Starting at 20:00 today → 4 hours today (zeros) + 24 hours tomorrow
+        pv_today_remaining = [0.0] * 4
+        pv_forecast = pv_today_remaining + sunny_pv
+
+        plan = generate_plan(
+            num_hours=28,
+            start_hour=20,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.5] * 28,
+            hourly_pv=pv_forecast,
+            hourly_prices=[50.0] * 28,
+            hourly_ev=[0.0] * 28,
+            battery_soc=50.0,
+            ev_soc=-1,
+        )
+
+        # Tomorrow's solar hours should show charge actions (pv surplus)
+        # Hours 8-16 tomorrow = indices 12-20 in plan (offset by 4 today hours)
+        solar_hours = [p for p in plan[12:21]]
+        charge_actions = [p for p in solar_hours if p.action == "c"]
+        assert len(charge_actions) > 0, "Planner should charge from PV on sunny hours"
+        assert all(p.pv_kw == 3.0 for p in solar_hours), "PV forecast should be 3.0 kW"
+
+        # Compare with zero-PV plan (old behavior)
+        zero_plan = generate_plan(
+            num_hours=28,
+            start_hour=20,
+            target_weighted_kw=2.0,
+            hourly_loads=[1.5] * 28,
+            hourly_pv=[0.0] * 28,
+            hourly_prices=[50.0] * 28,
+            hourly_ev=[0.0] * 28,
+            battery_soc=50.0,
+            ev_soc=-1,
+        )
+        zero_charge = [p for p in zero_plan[12:21] if p.action == "c"]
+        assert len(zero_charge) == 0, "Zero PV should not trigger charge"

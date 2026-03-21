@@ -66,16 +66,11 @@ class SolcastAdapter(PVAdapter):
 
         return result
 
-    @property
-    def today_hourly_kw(self) -> list[float]:
-        """Hourly PV forecast for today (kW per hour, 24 entries).
-
-        Uses detailedHourly attribute from solcast_solar.
-        Returns conservative estimate (pv_estimate10).
-        """
+    def _parse_hourly(self, entity_id: str) -> list[float]:
+        """Parse detailedHourly attribute into 24-entry kW list."""
         hourly: list[float] = [0.0] * 24
 
-        state = self.hass.states.get(_TODAY)
+        state = self.hass.states.get(entity_id)
         if state is None:
             return hourly
 
@@ -96,3 +91,13 @@ class SolcastAdapter(PVAdapter):
             hourly[hour] = round(w / 1000, 2) if w > 0 else 0.0
 
         return hourly
+
+    @property
+    def today_hourly_kw(self) -> list[float]:
+        """Hourly PV forecast for today (kW per hour, 24 entries)."""
+        return self._parse_hourly(_TODAY)
+
+    @property
+    def tomorrow_hourly_kw(self) -> list[float]:
+        """Hourly PV forecast for tomorrow (kW per hour, 24 entries)."""
+        return self._parse_hourly(_TOMORROW)

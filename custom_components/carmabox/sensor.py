@@ -398,6 +398,44 @@ def _plan_score_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return coord.plan_score()
 
 
+def _household_insights_value(coord: CarmaboxCoordinator) -> str:
+    """PLAT-962: Monthly household insight — comparison vs similar households."""
+    bench = coord.benchmark_data
+    if not bench or bench.get("similar_households", 0) < 10:
+        return "Samlar data"
+    diff = bench.get("diff_pct", 0.0)
+    if diff < -5:
+        return f"{abs(diff):.0f}% under snittet"
+    if diff > 5:
+        return f"{diff:.0f}% över snittet"
+    return "Nära snittet"
+
+
+def _household_insights_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """PLAT-962: Household insights details — benchmarking, tips, ROI."""
+    bench = coord.benchmark_data
+    if not bench:
+        return {
+            "status": "waiting",
+            "message": "Samlar in data. Benchmarking kräver minst 10 liknande hushåll.",
+        }
+    return {
+        "similar_households": bench.get("similar_households", 0),
+        "comparison_group": bench.get("comparison_group", ""),
+        "your_monthly_kwh": bench.get("your_monthly_kwh", 0),
+        "avg_monthly_kwh": bench.get("avg_monthly_kwh", 0),
+        "diff_pct": bench.get("diff_pct", 0),
+        "trend_3m": bench.get("trend_3m", ""),
+        "your_savings_kr": bench.get("your_savings_kr", 0),
+        "avg_savings_kr": bench.get("avg_savings_kr", 0),
+        "savings_rank_pct": bench.get("savings_rank_pct", 0),
+        "tips": bench.get("tips", []),
+        "battery_roi_months": bench.get("battery_roi_months", 0),
+        "solar_roi_months": bench.get("solar_roi_months", 0),
+        "updated": bench.get("updated", ""),
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -540,6 +578,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         suggested_display_precision=0,
         value_fn=_plan_score_value,
         extra_attrs_fn=_plan_score_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="household_insights",
+        translation_key="household_insights",
+        icon="mdi:home-analytics",
+        value_fn=_household_insights_value,
+        extra_attrs_fn=_household_insights_attrs,
     ),
 )
 
