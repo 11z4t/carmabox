@@ -234,8 +234,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Daily energy per category (Wh), reset at midnight
         self.appliance_energy_wh: dict[str, float] = {}
 
-        # PLAT-992: Miner entity (Shelly switch)
+        # PLAT-992: Miner entity (Shelly switch) — config or auto-detect
         self._miner_entity: str = str(self._cfg.get("miner_entity", ""))
+        if not self._miner_entity:
+            self._miner_entity = self._detect_miner_entity()
         self._miner_on: bool = False
 
         # PLAT-962: Household benchmarking data (from hub)
@@ -280,6 +282,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._cmd_ev_start(6)
         else:
             _LOGGER.info("CARMA: Cable connected, no PV surplus — waiting for next cycle")
+
+    def _detect_miner_entity(self) -> str:
+        """Auto-detect miner switch from appliances config."""
+        for app in self._appliances:
+            if app.get("category") == "miner":
+                eid = app.get("entity_id", "")
+                # Convert power sensor to switch entity
+                # sensor.shelly1pmg4_xxx_power → switch.shelly1pmg4_xxx
+                if eid.startswith("sensor.") and "_power" in eid:
+                    switch_id = eid.replace("sensor.", "switch.").replace("_power", "")
+                    state = self.hass.states.get(switch_id)
+                    if state is not None:
+                        _LOGGER.info("CARMA: auto-detected miner switch %s", switch_id)
+                        return str(switch_id)
+        # Fallback: scan for known miner switches
+        for state in self.hass.states.async_all("switch"):
+            name = state.entity_id.lower()
+            if "miner" in name or "mining" in name:
+                _LOGGER.info("CARMA: found miner switch %s", state.entity_id)
+                return str(state.entity_id)
+        return ""
 
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
