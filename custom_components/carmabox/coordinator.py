@@ -40,18 +40,27 @@ from .const import (
     DEFAULT_DAILY_BATTERY_NEED_KWH,
     DEFAULT_DAILY_CONSUMPTION_KWH,
     DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_NIGHT_HEADROOM_KW,
     DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_FALLBACK_PRICE_ORE,
     DEFAULT_GRID_CHARGE_MAX_SOC,
     DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
     DEFAULT_MAX_DISCHARGE_KW,
     DEFAULT_MAX_GRID_CHARGE_KW,
+    DEFAULT_MINER_START_EXPORT_W,
+    DEFAULT_MINER_STOP_IMPORT_W,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_PEAK_COST_PER_KW,
+    DEFAULT_PRICE_CHEAP_ORE,
+    DEFAULT_PRICE_EXPENSIVE_ORE,
     DEFAULT_TARGET_WEIGHTED_KW,
     DEFAULT_VOLTAGE,
+    DEFAULT_WATCHDOG_DISCHARGE_MIN_W,
+    DEFAULT_WATCHDOG_EV_IMPORT_W,
+    DEFAULT_WATCHDOG_EXPORT_W,
+    DEFAULT_WATCHDOG_MIN_SOC_PCT,
     EV_RAMP_INTERVAL_S,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
@@ -851,10 +860,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
         # Step 3: Pris-tier = vald intensitet
-        if state.current_price < 30:
+        price_cheap = float(self._cfg.get("price_cheap_ore", DEFAULT_PRICE_CHEAP_ORE))
+        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        if state.current_price < price_cheap:
             tier = "billigt"
             intensity = "passiv — spara batteri"
-        elif state.current_price < 80:
+        elif state.current_price < price_expensive:
             tier = "normalt"
             intensity = "balanserad peak shaving"
         else:
@@ -1010,7 +1021,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 temp_c,
             )
             if result.ok:
-                ellevio_saving = (weighted_net / 1000 - self.target_kw) * 80
+                peak_kr = float(self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
+                ellevio_saving = (weighted_net / 1000 - self.target_kw) * peak_kr
                 step5 = (
                     f"Urladdning {discharge_w}W → Ellevio ser {self.target_kw:.1f} kW "
                     f"istf {weighted_net / 1000:.1f} kW, sparar ~{ellevio_saving:.0f} kr/mån"
@@ -1103,9 +1115,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         target_w = self.target_kw * 1000
 
         # W1: Exporting + battery not full + not charging
+        wd_export_w = float(self._cfg.get("watchdog_export_w", DEFAULT_WATCHDOG_EXPORT_W))
+        wd_discharge_min = float(
+            self._cfg.get("watchdog_discharge_min_w", DEFAULT_WATCHDOG_DISCHARGE_MIN_W)
+        )
+        wd_ev_import_w = float(self._cfg.get("watchdog_ev_import_w", DEFAULT_WATCHDOG_EV_IMPORT_W))
+        wd_min_soc = float(self._cfg.get("watchdog_min_soc_pct", DEFAULT_WATCHDOG_MIN_SOC_PCT))
+        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
         if (
             state.is_exporting
-            and abs(state.grid_power_w) > 500
+            and abs(state.grid_power_w) > wd_export_w
             and not state.all_batteries_full
             and action not in ("charge_pv", "grid_charge")
         ):
@@ -1131,7 +1150,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             and action not in ("discharge",)
         ):
             discharge_w = int((weighted_net - target_w) / weight)
-            if discharge_w > 200:
+            if discharge_w > wd_discharge_min:
                 _LOGGER.warning(
                     "WATCHDOG W2: grid %.0fW > target %.0fW, bat %s%%, "
                     "action=%s → correcting to discharge %dW",
@@ -1164,7 +1183,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             not is_night
             and self._ev_enabled
             and not state.is_exporting
-            and state.grid_power_w > 500
+            and state.grid_power_w > wd_ev_import_w
         ):
             _LOGGER.warning(
                 "WATCHDOG W4: EV charging but grid importing %.0fW → stopping EV",
@@ -1174,8 +1193,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # W5: High price + battery capacity + idle
         if (
-            state.current_price > 80
-            and state.total_battery_soc > 50
+            state.current_price > price_expensive
+            and state.total_battery_soc > wd_min_soc
             and action == "idle"
             and weighted_net > target_w * 0.8
         ):
@@ -1237,7 +1256,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_load_kw = state.ev_power_w / 1000
             house_only_kw = max(0, max(0, state.grid_power_w) / 1000 - ev_load_kw)
             weight = night_weight if is_night else 1.0
-            headroom_kw = (self.target_kw / weight - house_only_kw) if weight > 0 else 4.0
+            ev_max_hw = float(self._cfg.get("ev_night_headroom_kw", DEFAULT_EV_NIGHT_HEADROOM_KW))
+            headroom_kw = (self.target_kw / weight - house_only_kw) if weight > 0 else ev_max_hw
             optimal_amps = max(0, int(headroom_kw * 1000 / DEFAULT_VOLTAGE))
             optimal_amps = min(optimal_amps, DEFAULT_EV_MAX_AMPS)
 
@@ -1306,14 +1326,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # Day: mine if exporting (surplus after battery + EV)
-        if state.is_exporting and abs(state.grid_power_w) > 200:
+        miner_start_w = float(self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W))
+        miner_stop_w = float(self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W))
+        if state.is_exporting and abs(state.grid_power_w) > miner_start_w:
             if not self._miner_on:
                 _LOGGER.info(
                     "CARMA: PV surplus %.0fW after battery+EV → miner ON",
                     abs(state.grid_power_w),
                 )
                 await self._cmd_miner(True)
-        elif not state.is_exporting and state.grid_power_w > 500 and self._miner_on:
+        elif not state.is_exporting and state.grid_power_w > miner_stop_w and self._miner_on:
             _LOGGER.info(
                 "CARMA: Grid import %.0fW → miner OFF",
                 state.grid_power_w,

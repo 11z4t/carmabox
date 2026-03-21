@@ -55,6 +55,23 @@ DEFAULT_SPIKE_THRESHOLD_KW = 1.0
 DEFAULT_BATTERY_FULL_FOR_EV_PCT = 95.0
 DEFAULT_BATTERY_USABLE_RATIO = 0.85
 
+# Price tiers (öre/kWh) — used for intensity decisions
+DEFAULT_PRICE_CHEAP_ORE = 30.0
+DEFAULT_PRICE_EXPENSIVE_ORE = 80.0
+
+# Miner control thresholds (W)
+DEFAULT_MINER_START_EXPORT_W = 200  # Start miner when exporting > this
+DEFAULT_MINER_STOP_IMPORT_W = 500  # Stop miner when importing > this
+
+# Watchdog thresholds
+DEFAULT_WATCHDOG_EXPORT_W = 500  # W1: export threshold for charge correction
+DEFAULT_WATCHDOG_DISCHARGE_MIN_W = 200  # W2: minimum discharge to correct
+DEFAULT_WATCHDOG_EV_IMPORT_W = 500  # W4: grid import threshold to stop EV
+DEFAULT_WATCHDOG_MIN_SOC_PCT = 50.0  # W5: min battery for expensive-hour alert
+
+# EV night headroom fallback (kW)
+DEFAULT_EV_NIGHT_HEADROOM_KW = 4.0
+
 # Safety
 CROSSCHARGE_THRESHOLD_W = 500
 EXPORT_GUARD_THRESHOLD_W = -1000
