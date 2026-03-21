@@ -1132,23 +1132,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self._cmd_ev_stop()
             return
 
-        # ── EV-4: Day → PV surplus → EV (alongside battery charging) ──
-        # CARMA is greedy on solar: battery charges via charge_pv (RULE 0.5),
-        # EV gets whatever PV surplus remains. Both charge simultaneously.
-        # No battery SoC threshold — if PV produces, EV should benefit.
-        pv_surplus_kw = 0.0
+        # ── EV-4: Day → PV surplus ONLY (never cause grid import) ──
+        # EV dagtid laddar ENBART från export — aldrig nätimport.
+        # Grid < 0 = vi exporterar = EV kan ta den effekten.
+        # Grid ≥ 0 = vi importerar redan = EV får INTE starta/öka.
         if state.is_exporting:
-            # Grid negative = clear surplus
-            pv_surplus_kw = abs(state.grid_power_w) / 1000
-        elif state.pv_power_w > 1500:
-            # PV producing but grid ≥ 0: house + battery consuming PV.
-            # Surplus = PV - house consumption (grid shows net import after PV+battery)
-            # EV can take what's left without increasing grid import
-            house_kw = max(0, state.grid_power_w) / 1000
-            pv_surplus_kw = max(0, state.pv_power_w / 1000 - house_kw - 0.5)
-
-        if pv_surplus_kw > 0:
-            solar_amps = max(0, int(pv_surplus_kw * 1000 / DEFAULT_VOLTAGE))
+            export_kw = abs(state.grid_power_w) / 1000
+            # If EV already charging, available = export + current EV load
+            # (stopping EV would increase export by that amount)
+            if self._ev_enabled:
+                export_kw += state.ev_power_w / 1000
+            solar_amps = max(0, int(export_kw * 1000 / DEFAULT_VOLTAGE))
             solar_amps = min(solar_amps, DEFAULT_EV_MAX_AMPS)
             if solar_amps >= 6:
                 if not self._ev_enabled:
@@ -1156,6 +1150,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 else:
                     await self._cmd_ev_adjust(solar_amps)
                 return
+            # Export < 6A worth → stop EV to avoid grid import
+            if self._ev_enabled and export_kw < 1.0:
+                await self._cmd_ev_stop()
+                return
+        elif self._ev_enabled:
+            # Grid ≥ 0 (importing) + EV charging → EV causes grid import → stop
+            await self._cmd_ev_stop()
+            return
 
         # Default: not charging → ensure disabled
         if self._ev_enabled and not is_night:
