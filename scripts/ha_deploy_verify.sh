@@ -216,6 +216,20 @@ if [[ "$STEP" == "grid" ]]; then
     log "Grid configured (step: $STEP)"
 fi
 
+# Step 4d2: Household profile (config_flow step — added after grid, before household)
+if [[ "$STEP" == "household_profile" ]]; then
+    FLOW=$(ha_api POST "/config/config_entries/flow/${FLOW_ID}" '{
+        "profile_type": "standard",
+        "daily_consumption_kwh": 25,
+        "has_washing_machine": true,
+        "has_dryer": true,
+        "has_dishwasher": true,
+        "heating_type": "district_heat"
+    }')
+    STEP=$(echo "$FLOW" | python3 -c "import sys,json; print(json.load(sys.stdin).get('step_id',''))" 2>/dev/null)
+    log "Household profile configured (step: $STEP)"
+fi
+
 # Step 4e: Household config (final step)
 if [[ "$STEP" == "household" ]]; then
     FLOW=$(ha_api POST "/config/config_entries/flow/${FLOW_ID}" '{
