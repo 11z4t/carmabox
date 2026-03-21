@@ -737,6 +737,28 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             }
         )
 
+        # ── RULE 0.5: PV producing + battery not full → charge_pv ──
+        # This catches the case where PV > 500W but house consumes more
+        # than PV (grid > 0). Battery should still charge from PV.
+        if pv_kw > 0.5 and not state.all_batteries_full:
+            charge_result = self.safety.check_charge(
+                state.battery_soc_1, state.battery_soc_2, temp_c
+            )
+            if charge_result.ok:
+                reasoning.append(
+                    f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda"
+                )
+                await self._cmd_charge_pv(state)
+                self._record_decision(
+                    state,
+                    "charge_pv",
+                    f"Solladdar — PV {pv_kw:.1f} kW, batteri {state.total_battery_soc:.0f}%",
+                    reasoning=reasoning,
+                )
+
+                await self._execute_ev(state)
+                return
+
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
             reasoning.append(f"Exporterar {abs(state.grid_power_w):.0f}W → sol driver allt")
