@@ -494,6 +494,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._check_repair_issues()
 
             await self._execute(state)
+            await self._watchdog(state)
             self._track_shadow(state)
             self._track_savings(state)
             self._track_appliances()
@@ -1048,6 +1049,120 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # ── SURPLUS PRIORITY: Battery → EV → Miner → Export ──
         await self._execute_ev(state)
         await self._execute_miner(state)
+
+    async def _watchdog(self, state: CarmaboxState) -> None:
+        """Self-correction watchdog — catches obvious decision errors.
+
+        Runs AFTER _execute(). Checks if the decision makes sense
+        given the current state. If not, overrides with correct action.
+
+        This is a safety net — if rule ordering or logic has a bug,
+        the watchdog catches it within the same 30s cycle.
+
+        Anomaly checks (priority order):
+        W1: Exporting > 500W + battery not full + not charging → charge
+        W2: Grid > target + battery has capacity + not discharging → discharge
+        W3: Battery 100% + grid > target + standby → should discharge
+        W4: EV charging + grid importing (day) → stop EV
+        W5: High price (>80 öre) + battery >50% + idle → should discharge
+        """
+        if not self.executor_enabled:
+            return
+
+        decision = self.last_decision
+        action = decision.action if decision else "idle"
+        hour = datetime.now().hour
+        is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+        night_wt = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        weight = ellevio_weight(hour, night_weight=night_wt)
+        net_w = max(0, state.grid_power_w)
+        weighted_net = net_w * weight
+        target_w = self.target_kw * 1000
+
+        # W1: Exporting + battery not full + not charging
+        if (
+            state.is_exporting
+            and abs(state.grid_power_w) > 500
+            and not state.all_batteries_full
+            and action not in ("charge_pv", "grid_charge")
+        ):
+            _LOGGER.warning(
+                "WATCHDOG W1: exporting %.0fW, bat %s%%, action=%s → correcting to charge_pv",
+                abs(state.grid_power_w),
+                state.total_battery_soc,
+                action,
+            )
+            await self._cmd_charge_pv(state)
+            self._record_decision(
+                state,
+                "charge_pv",
+                f"Watchdog: exporterar {abs(state.grid_power_w):.0f}W men var {action} → solladdar",
+            )
+            return
+
+        # W2/W3: Grid > target + not discharging (battery has capacity)
+        if (
+            weighted_net > target_w
+            and weight > 0
+            and state.total_battery_soc > self.min_soc
+            and action not in ("discharge",)
+        ):
+            discharge_w = int((weighted_net - target_w) / weight)
+            if discharge_w > 200:
+                _LOGGER.warning(
+                    "WATCHDOG W2: grid %.0fW > target %.0fW, bat %s%%, "
+                    "action=%s → correcting to discharge %dW",
+                    weighted_net,
+                    target_w,
+                    state.total_battery_soc,
+                    action,
+                    discharge_w,
+                )
+                result = self.safety.check_discharge(
+                    state.battery_soc_1,
+                    state.battery_soc_2,
+                    self.min_soc,
+                    state.grid_power_w,
+                )
+                if result.ok:
+                    await self._cmd_discharge(state, discharge_w)
+                    self._record_decision(
+                        state,
+                        "discharge",
+                        f"Watchdog: grid {weighted_net / 1000:.1f} kW "
+                        f"> target {self.target_kw:.1f} kW "
+                        f"men var {action} → urladdning {discharge_w}W",
+                        discharge_w=discharge_w,
+                    )
+                    return
+
+        # W4: EV charging + grid importing during day
+        if (
+            not is_night
+            and self._ev_enabled
+            and not state.is_exporting
+            and state.grid_power_w > 500
+        ):
+            _LOGGER.warning(
+                "WATCHDOG W4: EV charging but grid importing %.0fW → stopping EV",
+                state.grid_power_w,
+            )
+            await self._cmd_ev_stop()
+
+        # W5: High price + battery capacity + idle
+        if (
+            state.current_price > 80
+            and state.total_battery_soc > 50
+            and action == "idle"
+            and weighted_net > target_w * 0.8
+        ):
+            _LOGGER.info(
+                "WATCHDOG W5: price %.0f öre, bat %s%%, idle → "
+                "grid %.1f kW near target, monitoring",
+                state.current_price,
+                state.total_battery_soc,
+                weighted_net / 1000,
+            )
 
     async def _execute_ev(self, state: CarmaboxState) -> None:
         """Execute EV charging decisions (PLAT-949).
