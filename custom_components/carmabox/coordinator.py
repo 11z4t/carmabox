@@ -1132,20 +1132,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self._cmd_ev_stop()
             return
 
-        # ── EV-4: Day → PV surplus (PLAT-992: lowered threshold) ──
-        # Charge EV from PV when:
-        # - Exporting (grid < 0) = obvious surplus
-        # - OR PV > 1.5 kW and battery already charging = share the surplus
-        has_surplus = state.is_exporting or (
-            state.pv_power_w > 1500 and state.total_battery_soc >= 80
-        )
-        if has_surplus:
-            if state.is_exporting:
-                surplus_kw = abs(state.grid_power_w) / 1000
-            else:
-                # Battery charging from PV — estimate shareable surplus
-                surplus_kw = max(0, state.pv_power_w / 1000 - 2.0)
-            solar_amps = max(0, int(surplus_kw * 1000 / DEFAULT_VOLTAGE))
+        # ── EV-4: Day → PV surplus → EV (alongside battery charging) ──
+        # CARMA is greedy on solar: battery charges via charge_pv (RULE 0.5),
+        # EV gets whatever PV surplus remains. Both charge simultaneously.
+        # No battery SoC threshold — if PV produces, EV should benefit.
+        pv_surplus_kw = 0.0
+        if state.is_exporting:
+            # Grid negative = clear surplus
+            pv_surplus_kw = abs(state.grid_power_w) / 1000
+        elif state.pv_power_w > 1500:
+            # PV producing but grid ≥ 0: house + battery consuming PV.
+            # Surplus = PV - house consumption (grid shows net import after PV+battery)
+            # EV can take what's left without increasing grid import
+            house_kw = max(0, state.grid_power_w) / 1000
+            pv_surplus_kw = max(0, state.pv_power_w / 1000 - house_kw - 0.5)
+
+        if pv_surplus_kw > 0:
+            solar_amps = max(0, int(pv_surplus_kw * 1000 / DEFAULT_VOLTAGE))
             solar_amps = min(solar_amps, DEFAULT_EV_MAX_AMPS)
             if solar_amps >= 6:
                 if not self._ev_enabled:
