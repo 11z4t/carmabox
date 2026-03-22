@@ -2495,8 +2495,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if self.inverter_adapters:
             for adapter in self.inverter_adapters:
-                mode = "battery_standby" if adapter.soc >= 100 else "charge_pv"
-                ok = await adapter.set_ems_mode(mode)
+                if adapter.soc >= 100:
+                    ok = await adapter.set_ems_mode("battery_standby")
+                else:
+                    ok = await adapter.set_ems_mode("charge_pv")
+                    # Enable fast charging for max PV absorption
+                    if ok and isinstance(adapter, GoodWeAdapter):
+                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
                 if ok:
                     success = True
                 else:
@@ -2576,12 +2581,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 ok = await adapter.set_ems_mode("battery_standby")
                 if ok:
                     success = True
+                    # Turn off fast charging — don't charge from grid
+                    if isinstance(adapter, GoodWeAdapter):
+                        await adapter.set_fast_charging(on=False)
         else:
             # Legacy: raw entity-based control
             for ems_key in ("battery_ems_1", "battery_ems_2"):
                 entity = self._get_entity(ems_key)
                 if entity and await self._safe_service_call(
-                    "select", "select_option", {"entity_id": entity, "option": "battery_standby"}
+                    "select",
+                    "select_option",
+                    {"entity_id": entity, "option": "battery_standby"},
                 ):
                     if self.executor_enabled:
                         self._check_write_verify(entity, "battery_standby")
