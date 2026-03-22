@@ -43,6 +43,9 @@ class HourEntry:
     ev_charge_grid_kwh: float = 0.0  # EV from grid (costs money)
     ev_charge_pv_kwh: float = 0.0  # EV from solar (free)
 
+    # Appliances — kWh per category this hour
+    appliance_kwh: dict[str, float] = field(default_factory=dict)
+
     # Ellevio
     weighted_avg_kw: float = 0.0  # Hourly weighted average (Ellevio definition)
 
@@ -86,9 +89,18 @@ class HourEntry:
             2,
         )
 
+    @property
+    def appliance_cost_kr(self) -> dict[str, float]:
+        """Cost per appliance category this hour (kr)."""
+        return {
+            cat: round(kwh * self.price_ore / 100, 2)
+            for cat, kwh in self.appliance_kwh.items()
+            if kwh > 0.001
+        }
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize for sensor attributes / mail table."""
-        return {
+        result: dict[str, Any] = {
             "hour": self.hour,
             "date": self.date,
             "price_ore": round(self.price_ore, 1),
@@ -105,6 +117,13 @@ class HourEntry:
             "without_battery_kr": self.cost_without_battery_kr,
             "weighted_kw": round(self.weighted_avg_kw, 2),
         }
+        if self.appliance_kwh:
+            result["appliances"] = {
+                cat: {"kwh": round(kwh, 3), "cost_kr": round(kwh * self.price_ore / 100, 2)}
+                for cat, kwh in self.appliance_kwh.items()
+                if kwh > 0.001
+            }
+        return result
 
 
 @dataclass
@@ -128,6 +147,7 @@ class EnergyLedger:
     _acc_price_ore: float = 0.0
     _acc_weighted_kw_sum: float = 0.0
     _acc_samples: int = 0
+    _acc_appliances: dict[str, float] = field(default_factory=dict)
 
     def record_sample(
         self,
@@ -141,6 +161,7 @@ class EnergyLedger:
         weighted_kw: float,
         is_exporting: bool,
         interval_s: float = 30.0,
+        appliance_power: dict[str, float] | None = None,
     ) -> None:
         """Record a 30-second sample.
 
@@ -187,6 +208,12 @@ class EnergyLedger:
             else:
                 self._acc_ev_w += ev_w * wh_factor
 
+        # Appliances (W → Wh per category)
+        if appliance_power:
+            for cat, w in appliance_power.items():
+                if w > 0:
+                    self._acc_appliances[cat] = self._acc_appliances.get(cat, 0.0) + w * wh_factor
+
         # Price + weighted average
         self._acc_price_ore += price_ore
         self._acc_weighted_kw_sum += weighted_kw
@@ -200,6 +227,9 @@ class EnergyLedger:
         avg_price = self._acc_price_ore / self._acc_samples
         avg_weighted = self._acc_weighted_kw_sum / self._acc_samples
 
+        # Convert appliance Wh → kWh
+        app_kwh = {cat: wh / 1000 for cat, wh in self._acc_appliances.items() if wh > 0}
+
         entry = HourEntry(
             hour=self._current_hour,
             date=self._current_date,
@@ -211,6 +241,7 @@ class EnergyLedger:
             battery_charge_grid_kwh=self._acc_bat_charge_w / 1000,
             ev_charge_grid_kwh=self._acc_ev_w / 1000,
             weighted_avg_kw=avg_weighted,
+            appliance_kwh=app_kwh,
         )
         self.entries.append(entry)
 
@@ -228,6 +259,7 @@ class EnergyLedger:
         self._acc_price_ore = 0.0
         self._acc_weighted_kw_sum = 0.0
         self._acc_samples = 0
+        self._acc_appliances = {}
 
     def today(self, date_str: str) -> list[HourEntry]:
         """Get today's entries."""

@@ -2252,6 +2252,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             weighted_kw=weighted_kw,
             is_exporting=state.is_exporting,
             interval_s=SCAN_INTERVAL_SECONDS,
+            appliance_power=self.appliance_power,
         )
 
         # PLAT-927: Ellevio realtime — rolling hourly weighted average
