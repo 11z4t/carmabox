@@ -77,7 +77,7 @@ CROSSCHARGE_THRESHOLD_W = 500
 EXPORT_GUARD_THRESHOLD_W = -1000
 TEMPERATURE_MIN_C = 0
 TEMPERATURE_MAX_C = 45
-MAX_MODE_CHANGES_PER_HOUR = 60  # 1/min — standby counts, so 10 was too low
+MAX_MODE_CHANGES_PER_HOUR = 120  # 2/min — with hysteresis should stay well under
 
 # Appliance categories
 APPLIANCE_CATEGORIES = {

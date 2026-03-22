@@ -1005,9 +1005,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 return
 
         # ── RULE 2: Load > target → discharge (even at 100%) ──
-        # Moved BEFORE full-battery standby: 100% batteries should
-        # discharge when grid exceeds target, not sit idle!
-        if weighted_net > target_w and weight > 0:
+        # Hysteresis: if already discharging, keep going until grid drops
+        # 10% BELOW target (prevents oscillation at boundary).
+        hysteresis = 0.9 if self._last_command == BatteryCommand.DISCHARGE else 1.0
+        if weighted_net > target_w * hysteresis and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
             reasoning.append(
                 f"Grid {weighted_net / 1000:.1f} kW viktat > target {self.target_kw:.1f} kW "
