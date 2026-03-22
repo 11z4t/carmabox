@@ -98,6 +98,20 @@ def _make_coordinator(
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
+    coord._license_tier = "premium"
+    coord._license_features = [
+        "analyzer",
+        "executor",
+        "dashboard",
+        "ev_control",
+        "miner_control",
+        "watchdog",
+        "self_healing",
+    ]
+    coord._license_last_check = 0.0
+    coord._license_check_interval = 99999999
+    coord._license_valid_until = ""
+    coord._license_offline_grace_days = 7
     coord.executor_enabled = True  # Tests need executor active
     coord._savings_loaded = True  # Skip restore in tests
     coord._savings_last_save = 0.0

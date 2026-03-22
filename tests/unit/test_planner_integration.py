@@ -75,6 +75,12 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
+    coord._license_tier = "premium"
+    coord._license_features = ["analyzer", "executor", "dashboard"]
+    coord._license_last_check = 0.0
+    coord._license_check_interval = 99999999
+    coord._license_valid_until = ""
+    coord._license_offline_grace_days = 7
 
     # PLAT-965: Predictor
     coord.predictor = ConsumptionPredictor()

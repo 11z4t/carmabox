@@ -235,7 +235,45 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
         )
         self._avg_price_initialized = False
-        self.executor_enabled: bool = bool(self._cfg.get("executor_enabled", False))
+
+        # License enforcement — Hub handshake controls ALL features
+        # No free tier — all features require active subscription via Hub.
+        # At startup: use cached license. Every 6h: re-validate with Hub.
+        # Offline grace: 7 days with cached license, then disable all.
+        self._license_tier: str = self._cfg.get("license_tier", "none")
+        self._license_features: list[str] = list(self._cfg.get("license_features", []))
+        self._license_valid_until: str = self._cfg.get("license_valid_until", "")
+        self._license_last_check: float = 0.0
+        self._license_check_interval: float = 6 * 3600  # 6 hours
+        self._license_offline_grace_days: int = 7
+
+        # TEMPORARY: If no hub configured yet, enable all (dev/owner mode)
+        hub_url = self._cfg.get("hub_url", "")
+        if not hub_url:
+            # No hub = development/owner install — all features enabled
+            self._license_tier = "premium"
+            self._license_features = [
+                "analyzer",
+                "executor",
+                "dashboard",
+                "ev_control",
+                "miner_control",
+                "watchdog",
+                "self_healing",
+                "morning_email",
+                "hourly_ledger",
+                "rule_flow",
+            ]
+
+        # Features only active if licensed
+        config_executor = bool(self._cfg.get("executor_enabled", False))
+        self.executor_enabled = config_executor and self._has_feature("executor")
+        if config_executor and not self._has_feature("executor"):
+            _LOGGER.warning(
+                "CARMA Box: Executor kräver aktiv licens (tier=%s). "
+                "Kontakta support för att aktivera.",
+                self._license_tier,
+            )
 
         # PLAT-998: Hourly energy ledger — actual cost tracking
         self.ledger = EnergyLedger()
@@ -265,6 +303,66 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if not self.executor_enabled:
             _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
+
+    def _has_feature(self, feature: str) -> bool:
+        """Check if a feature is enabled by current license."""
+        return feature in self._license_features
+
+    async def _check_license(self) -> None:
+        """Validate license with Hub. Called every 6 hours.
+
+        Hub handshake:
+        1. CARMA Box sends: box_id + API key (HMAC-signed)
+        2. Hub validates: customer active + subscription valid
+        3. Hub returns: signed JWT with tier + features + expiry
+        4. CARMA Box stores license locally (offline grace 7 days)
+        """
+        import time as _time
+
+        now = _time.monotonic()
+        if now - self._license_last_check < self._license_check_interval:
+            return
+        self._license_last_check = now
+
+        hub_url = self._cfg.get("hub_url", "")
+        api_key = self._cfg.get("hub_api_key", "")
+        box_id = self._cfg.get("hub_box_id", "")
+
+        if not hub_url or not api_key:
+            return  # No hub configured — dev mode
+
+        try:
+            import aiohttp
+
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    f"{hub_url}/api/v1/license/{box_id}",
+                    headers={"X-API-Key": api_key},
+                    timeout=aiohttp.ClientTimeout(total=15),
+                    ssl=True,
+                ) as resp,
+            ):
+                if resp.status == 200:
+                    data = await resp.json()
+                    self._license_tier = data.get("tier", "none")
+                    self._license_features = data.get("features", [])
+                    self._license_valid_until = data.get("valid_until", "")
+
+                    # Update executor based on new license
+                    config_exec = bool(self._cfg.get("executor_enabled", False))
+                    self.executor_enabled = config_exec and self._has_feature("executor")
+
+                    _LOGGER.info(
+                        "License validated: tier=%s, features=%d, valid_until=%s",
+                        self._license_tier,
+                        len(self._license_features),
+                        self._license_valid_until,
+                    )
+                else:
+                    _LOGGER.warning("License check failed: HTTP %d", resp.status)
+        except Exception:
+            _LOGGER.debug("License check failed — using cached license", exc_info=True)
 
     @property
     def cable_locked_entity(self) -> str:
@@ -511,6 +609,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._cmd_ev_stop()
 
             self.safety.update_heartbeat()
+
+            # License check (every 6h — Hub handshake)
+            await self._check_license()
 
             # PLAT-972: Self-healing — check GoodWe config entries
             await self._self_heal_goodwe_entries()
