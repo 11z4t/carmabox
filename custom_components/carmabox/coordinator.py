@@ -68,6 +68,7 @@ from .const import (
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
+from .optimizer.hourly_ledger import EnergyLedger
 from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
 from .optimizer.planner import generate_plan
 from .optimizer.predictor import ConsumptionPredictor, HourSample
@@ -235,6 +236,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self._avg_price_initialized = False
         self.executor_enabled: bool = bool(self._cfg.get("executor_enabled", False))
+
+        # PLAT-998: Hourly energy ledger — actual cost tracking
+        self.ledger = EnergyLedger()
 
         # PLAT-943: Appliance tracking
         self._appliances: list[dict[str, Any]] = list(self._cfg.get("appliances") or [])
@@ -2232,6 +2236,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             plans_generated=self._daily_plans,
         )
         record_daily_sample(self.report_collector, sample)
+
+        # PLAT-998: Record to hourly energy ledger (actual cost tracking)
+        total_battery_w = state.battery_power_1 + (
+            state.battery_power_2 if state.has_battery_2 else 0
+        )
+        self.ledger.record_sample(
+            hour=hour,
+            date_str=today,
+            grid_w=state.grid_power_w,
+            battery_w=total_battery_w,
+            pv_w=state.pv_power_w,
+            ev_w=state.ev_power_w,
+            price_ore=state.current_price,
+            weighted_kw=weighted_kw,
+            is_exporting=state.is_exporting,
+            interval_s=SCAN_INTERVAL_SECONDS,
+        )
 
         # PLAT-927: Ellevio realtime — rolling hourly weighted average
         now_hour = datetime.now().hour

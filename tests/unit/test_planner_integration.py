@@ -72,6 +72,9 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._ev_initialized = True
     coord._miner_entity = ""
     coord._miner_on = False
+    from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
+
+    coord.ledger = EnergyLedger()
 
     # PLAT-965: Predictor
     coord.predictor = ConsumptionPredictor()
