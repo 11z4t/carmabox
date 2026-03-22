@@ -104,6 +104,9 @@
       },
       "rule_flow": {
         "name": "Rule Flow"
+      },
+      "energy_ledger": {
+        "name": "Energy Ledger"
       }
     }
   },

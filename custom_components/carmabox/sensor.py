@@ -398,6 +398,26 @@ def _plan_score_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return coord.plan_score()
 
 
+def _energy_ledger_value(coord: CarmaboxCoordinator) -> str:
+    """Energy ledger summary — today's battery saving."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    summary = coord.ledger.daily_summary(today)
+    saving = summary.get("battery_net_saving_kr", 0)
+    cost = summary.get("total_cost_kr", 0)
+    hours = summary.get("hours", 0)
+    return f"{saving:.1f} kr sparat, {cost:.1f} kr total ({hours}h)"
+
+
+def _energy_ledger_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Energy ledger full data — hourly table + daily summary."""
+    from datetime import datetime
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    return coord.ledger.daily_summary(today)
+
+
 def _daily_insight_value(coord: CarmaboxCoordinator) -> str:
     """Daily insight summary — one-liner for the sensor state."""
     insight = coord.daily_insight
@@ -615,6 +635,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         icon="mdi:sitemap",
         value_fn=lambda c: c.rule_flow.get("active_rule", "idle"),
         extra_attrs_fn=lambda c: c.rule_flow,
+    ),
+    CarmaboxSensorDescription(
+        key="energy_ledger",
+        translation_key="energy_ledger",
+        icon="mdi:book-open-page-variant",
+        value_fn=_energy_ledger_value,
+        extra_attrs_fn=_energy_ledger_attrs,
     ),
 )
 

@@ -129,6 +129,9 @@
       },
       "rule_flow": {
         "name": "Regelflöde"
+      },
+      "energy_ledger": {
+        "name": "Energibok"
       }
     }
   },
