@@ -1192,6 +1192,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         await self._execute_ev(state)
         await self._execute_miner(state)
         await self._execute_climate(state)
+        await self._execute_pool(state)
 
     async def _execute_climate(self, state: CarmaboxState) -> None:
         """Control VP/AC based on surplus and price.
@@ -1282,6 +1283,66 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
         except Exception:
             _LOGGER.warning("CARMA: VP control failed for %s", entity_id, exc_info=True)
+
+    async def _execute_pool(self, state: CarmaboxState) -> None:
+        """Control pool pump/heater based on surplus and temperature.
+
+        Surplus chain: Battery → EV → Miner → VP → Pool → Export.
+        """
+        if not self._has_feature("executor"):
+            return
+
+        pool_entity = str(self._cfg.get("pool_entity", ""))
+        pool_temp_entity = str(self._cfg.get("pool_temp_entity", ""))
+        if not pool_entity:
+            return
+
+        pool_state = self.hass.states.get(pool_entity)
+        if pool_state is None:
+            return
+
+        pool_on = pool_state.state == "on"
+
+        # Read pool temperature
+        pool_temp: float | None = None
+        if pool_temp_entity:
+            ts = self.hass.states.get(pool_temp_entity)
+            if ts and ts.state not in ("unknown", "unavailable"):
+                import contextlib
+
+                with contextlib.suppress(ValueError, TypeError):
+                    pool_temp = float(ts.state)
+
+        pool_max = float(self._cfg.get("pool_max_temp_c", 28.0))
+
+        # Too hot → always off
+        if pool_temp is not None and pool_temp >= pool_max and pool_on:
+            await self._pool_switch(pool_entity, False)
+            _LOGGER.info("CARMA: Pool OFF (%.1f°C >= max %.1f°C)", pool_temp, pool_max)
+            return
+
+        # Surplus → heat pool if temp allows
+        if state.is_exporting and abs(state.grid_power_w) > 300:
+            if (pool_temp is None or pool_temp < pool_max) and not pool_on:
+                await self._pool_switch(pool_entity, True)
+                temp_str = f"{pool_temp:.1f}°C" if pool_temp else "okänd"
+                _LOGGER.info(
+                    "CARMA: Pool ON (surplus %.0fW, temp %s)", abs(state.grid_power_w), temp_str
+                )
+            return
+
+        # Importing → stop pool
+        if not state.is_exporting and state.grid_power_w > 500 and pool_on:
+            _LOGGER.info("CARMA: Pool OFF (importing %.0fW)", state.grid_power_w)
+            await self._pool_switch(pool_entity, False)
+
+    async def _pool_switch(self, entity_id: str, on: bool) -> None:
+        """Turn pool switch on/off."""
+        try:
+            service = "turn_on" if on else "turn_off"
+            await self.hass.services.async_call("switch", service, {"entity_id": entity_id})
+        except Exception:
+            _LOGGER.warning("CARMA: pool switch failed: %s", entity_id, exc_info=True)
 
     async def _watchdog(self, state: CarmaboxState) -> None:
         """Self-correction watchdog — catches obvious decision errors.
@@ -1508,32 +1569,42 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _execute_miner(self, state: CarmaboxState) -> None:
         """PLAT-992: Control miner based on PV surplus.
 
-        Priority chain: Battery → EV → Miner → Export.
-        Miner turns ON when we're still exporting after battery + EV.
-        Miner turns OFF when grid import > 0 (no surplus left).
+        Priority chain: Battery → EV → Miner → VP → Pool → Export.
+        Miner turns ON when exporting (surplus after battery + EV).
+        Miner turns OFF when importing — UNLESS it's winter and the
+        miner heat is useful (configurable via miner_heat_useful).
         """
         if not self._miner_entity:
             return
 
         hour = datetime.now().hour
         is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+        is_winter = datetime.now().month in (10, 11, 12, 1, 2, 3)
+        miner_heat_useful = bool(self._cfg.get("miner_heat_useful", False)) and is_winter
 
-        # Night: miner OFF (save grid power)
-        if is_night and self._miner_on:
+        miner_start_w = float(self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W))
+        miner_stop_w = float(self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W))
+
+        # Night: miner OFF (save grid power) — unless heat is needed
+        if is_night and self._miner_on and not miner_heat_useful:
             await self._cmd_miner(False)
             return
 
-        # Day: mine if exporting (surplus after battery + EV)
-        miner_start_w = float(self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W))
-        miner_stop_w = float(self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W))
+        # Exporting surplus → mine
         if state.is_exporting and abs(state.grid_power_w) > miner_start_w:
             if not self._miner_on:
                 _LOGGER.info(
-                    "CARMA: PV surplus %.0fW after battery+EV → miner ON",
+                    "CARMA: PV surplus %.0fW → miner ON",
                     abs(state.grid_power_w),
                 )
                 await self._cmd_miner(True)
-        elif not state.is_exporting and state.grid_power_w > miner_stop_w and self._miner_on:
+        elif (
+            not state.is_exporting
+            and state.grid_power_w > miner_stop_w
+            and self._miner_on
+            and not miner_heat_useful
+        ):
+            # Importing → stop (unless miner heat is useful in winter)
             _LOGGER.info(
                 "CARMA: Grid import %.0fW → miner OFF",
                 state.grid_power_w,
