@@ -1023,6 +1023,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
                 await self._execute_ev(state)
                 await self._execute_miner(state)
+                await self._execute_climate(state)
                 return
             # Charge blocked (e.g. temperature) — not a user-facing issue,
             # just fall through to next rule. Self-healing handles it.
@@ -1190,6 +1191,97 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # ── SURPLUS PRIORITY: Battery → EV → Miner → Export ──
         await self._execute_ev(state)
         await self._execute_miner(state)
+        await self._execute_climate(state)
+
+    async def _execute_climate(self, state: CarmaboxState) -> None:
+        """Control VP/AC based on surplus and price.
+
+        Surplus priority chain position: Battery → EV → Miner → VP → Pool → Export.
+        VP as thermal storage: pre-cool/heat with surplus, pause during expensive import.
+        """
+        if not self._has_feature("executor"):
+            return
+
+        climate_entity = str(self._cfg.get("climate_entity", ""))
+        if not climate_entity:
+            # Auto-detect: look for climate.* entities
+            for s in self.hass.states.async_all("climate"):
+                if "ac" in s.entity_id or "vp" in s.entity_id or "heat" in s.entity_id:
+                    climate_entity = s.entity_id
+                    break
+            if not climate_entity:
+                return
+
+        climate_state = self.hass.states.get(climate_entity)
+        if climate_state is None:
+            return
+
+        current_mode = climate_state.state  # off, cool, heat, auto
+        current_temp = climate_state.attributes.get("current_temperature")
+        if current_temp is None:
+            return
+
+        hour = datetime.now().hour
+        is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+        is_summer = 5 <= datetime.now().month <= 9
+        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+
+        # Comfort thresholds
+        cool_target = float(self._cfg.get("climate_cool_target_c", 23.0))
+        heat_target = float(self._cfg.get("climate_heat_target_c", 21.0))
+
+        # ── VP-1: Night → don't touch (user comfort) ──
+        if is_night:
+            return
+
+        # ── VP-2: Exporting surplus → thermal storage ──
+        if state.is_exporting and abs(state.grid_power_w) > 500:
+            if is_summer and current_temp > cool_target:
+                # Pre-cool with free surplus
+                if current_mode == "off":
+                    await self._climate_call(climate_entity, "cool", cool_target - 1)
+                    _LOGGER.info("CARMA: VP pre-cool (surplus %.0fW)", abs(state.grid_power_w))
+            elif not is_summer and current_temp < heat_target + 2 and current_mode == "off":
+                # Pre-heat with free surplus
+                await self._climate_call(climate_entity, "heat", heat_target + 1)
+                _LOGGER.info("CARMA: VP pre-heat (surplus %.0fW)", abs(state.grid_power_w))
+            return
+
+        # ── VP-3: Expensive + importing → pause if temp OK ──
+        if (
+            state.current_price > price_expensive
+            and not state.is_exporting
+            and current_mode != "off"
+        ):
+            temp_ok = (is_summer and current_temp < cool_target + 2) or (
+                not is_summer and current_temp > heat_target - 1
+            )
+            if temp_ok:
+                await self._climate_call(climate_entity, "off")
+                _LOGGER.info(
+                    "CARMA: VP pausad (pris %.0f öre, temp %.1f°C OK)",
+                    state.current_price,
+                    current_temp,
+                )
+
+    async def _climate_call(self, entity_id: str, mode: str, temp: float | None = None) -> None:
+        """Set climate mode + temperature."""
+        try:
+            if mode == "off":
+                await self.hass.services.async_call("climate", "turn_off", {"entity_id": entity_id})
+            else:
+                data: dict[str, Any] = {"entity_id": entity_id, "hvac_mode": mode}
+                if temp is not None:
+                    data["temperature"] = temp
+                await self.hass.services.async_call("climate", "set_hvac_mode", data)
+                if temp is not None:
+                    await self.hass.services.async_call(
+                        "climate",
+                        "set_temperature",
+                        {"entity_id": entity_id, "temperature": temp},
+                    )
+        except Exception:
+            _LOGGER.warning("CARMA: VP control failed for %s", entity_id, exc_info=True)
 
     async def _watchdog(self, state: CarmaboxState) -> None:
         """Self-correction watchdog — catches obvious decision errors.

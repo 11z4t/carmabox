@@ -72,6 +72,14 @@ DEFAULT_WATCHDOG_MIN_SOC_PCT = 50.0  # W5: min battery for expensive-hour alert
 # EV night headroom fallback (kW)
 DEFAULT_EV_NIGHT_HEADROOM_KW = 4.0
 
+# Climate / VP control
+DEFAULT_CLIMATE_COOL_TARGET_C = 23.0
+DEFAULT_CLIMATE_HEAT_TARGET_C = 21.0
+
+# Pool control
+DEFAULT_POOL_MIN_TEMP_C = 24.0  # Below this → heat if surplus
+DEFAULT_POOL_MAX_TEMP_C = 28.0  # Above this → stop heating
+
 # Safety
 CROSSCHARGE_THRESHOLD_W = 500
 EXPORT_GUARD_THRESHOLD_W = -1000
