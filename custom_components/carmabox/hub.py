@@ -10,8 +10,12 @@ no energy readings, only aggregated performance metrics.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
+import time
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -29,6 +33,36 @@ from .optimizer.savings import SavingsState, savings_breakdown
 _LOGGER = logging.getLogger(__name__)
 
 DEFAULT_HUB_URL = "https://hub.carmabox.se/api/v1"
+
+
+def sign_request(
+    body_json: str,
+    api_key: str,
+    box_id: str,
+) -> dict[str, str]:
+    """Sign a request with HMAC-SHA256.
+
+    Returns headers: X-Box-ID, X-Timestamp, X-Nonce, X-Signature.
+    Hub verifies: HMAC(body_json + timestamp + nonce, api_key) == signature.
+    Replay protection via timestamp (±5 min) + nonce (single-use).
+    """
+    timestamp = str(int(time.time()))
+    nonce = uuid.uuid4().hex[:16]
+    message = f"{body_json}.{timestamp}.{nonce}"
+    signature = hmac.new(
+        api_key.encode("utf-8"),
+        message.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return {
+        "X-Box-ID": box_id,
+        "X-Timestamp": timestamp,
+        "X-Nonce": nonce,
+        "X-Signature": signature,
+        "Content-Type": "application/json",
+    }
+
+
 DEFAULT_WSS_URL = "wss://hub.carmabox.se/mqtt"
 SYNC_TIMEOUT = 30
 
