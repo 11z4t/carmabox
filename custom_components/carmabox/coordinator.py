@@ -222,6 +222,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Plan self-correction — track consecutive deviations >50%
         self._plan_deviation_count: int = 0
+
+        # IT-1937: Rule tracking for sensor.carma_box_rules
+        self._active_rule_id: str | None = None
+        self._rule_triggers: dict[str, dict[str, Any]] = {}
         self._plan_last_correction_time: float = 0.0
 
         # PLAT-940: Shadow mode — CARMA vs v6 comparison
@@ -1258,6 +1262,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning.append(
                         f"BMS taper detekterad — {export_w:.0f}W export vid {state.total_battery_soc:.0f}% SoC"
                     )
+                    self._track_rule("RULE_0_5", "charge_pv_taper")
                     self._record_decision(
                         state,
                         "charge_pv_taper",
@@ -1274,6 +1279,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self.target_kw = saved_target
                     return
 
+                self._track_rule("RULE_0_5", "charge_pv")
                 self._record_decision(
                     state,
                     "charge_pv",
@@ -1313,6 +1319,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         reasoning.append(
                             f"BMS taper — {export_w:.0f}W export vid {state.total_battery_soc:.0f}%"
                         )
+                        self._track_rule("RULE_1", "charge_pv_taper")
                         self._record_decision(
                             state,
                             "charge_pv_taper",
@@ -1329,6 +1336,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         self.target_kw = saved_target
                         return
 
+                    self._track_rule("RULE_1", "charge_pv")
                     self._record_decision(
                         state,
                         "charge_pv",
@@ -1346,6 +1354,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         {"step": "resultat", "label": "Resultat", "detail": step5}
                     )
                     await self._cmd_standby(state)
+                    self._track_rule("RULE_1", "standby")
                     self._record_decision(
                         state,
                         "standby",
@@ -1359,6 +1368,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_standby(state)
+                self._track_rule("RULE_1", "standby")
                 self._record_decision(
                     state,
                     "standby",
@@ -1394,6 +1404,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._cmd_grid_charge(
                     state
                 )  # CARMA-P0-FIXES Task 2: Use dedicated grid charge
+                self._track_rule("RULE_1_5", "grid_charge")
                 self._record_decision(
                     state,
                     "grid_charge",
@@ -1464,6 +1475,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     net_w,
                     pv_kw,
                 )
+                self._track_rule("RULE_1_8", "proactive_discharge")
                 self._record_decision(
                     state,
                     "discharge",
@@ -1506,6 +1518,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_discharge(state, discharge_w)
+                self._track_rule("RULE_2", "discharge")
                 self._record_decision(
                     state,
                     "discharge",
@@ -1524,6 +1537,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_standby(state)
+                self._track_rule("RULE_2", "idle_blocked")
                 self._record_decision(
                     state,
                     "idle",
@@ -1551,6 +1565,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
         # R5: Actively set standby so batteries don't stay in previous mode
         await self._cmd_standby(state)
+        self._track_rule("RULE_4", "idle")
         self._record_decision(
             state,
             "idle",
@@ -2245,6 +2260,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._ev_current_amps = amps
             # CARMA-P0-FIXES Task 4: Save runtime after EV amps change
             await self._async_save_runtime()
+
+    def _track_rule(self, rule_id: str, result: str) -> None:
+        """IT-1937: Track active rule and last triggered timestamp for sensor.carma_box_rules."""
+        self._active_rule_id = rule_id
+        self._rule_triggers[rule_id] = {
+            "timestamp": datetime.now().isoformat(),
+            "result": result,
+        }
 
     def _record_decision(
         self,

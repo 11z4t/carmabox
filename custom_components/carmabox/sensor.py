@@ -474,6 +474,119 @@ def _household_insights_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+def _rules_value(coord: CarmaboxCoordinator) -> str:
+    """IT-1937: Current active rule name."""
+    active_rule_id = getattr(coord, "_active_rule_id", None)
+    if not active_rule_id:
+        return "Ingen aktiv regel"
+
+    # Map rule_id to human-readable name
+    rule_names = {
+        "RULE_0": "Safety guard",
+        "RULE_0_5": "Solar charge",
+        "RULE_1": "Export guard",
+        "RULE_1_5": "Cheap grid charge",
+        "RULE_1_8": "Proactive discharge",
+        "RULE_2": "Peak shaving",
+        "RULE_4": "Idle / standby",
+    }
+    return rule_names.get(active_rule_id, active_rule_id)
+
+
+def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """IT-1937: Rules table with all rules, active state, parameters, and history."""
+    from datetime import datetime
+
+    if not coord.data:
+        return {"status": "no_data"}
+
+    state = coord.data
+
+    # Define all rules with metadata
+    all_rules = [
+        {
+            "id": "RULE_0",
+            "name": "Safety guard",
+            "priority": 1,
+            "condition": f"SoC < {coord.min_soc}% → nödstopp",
+            "parameters": {
+                "min_soc": coord.min_soc,
+            },
+        },
+        {
+            "id": "RULE_0_5",
+            "name": "Solar charge",
+            "priority": 2,
+            "condition": "PV > 500W + batteri ej fullt + export → charge_pv",
+            "parameters": {
+                "min_pv_kw": 0.5,
+            },
+        },
+        {
+            "id": "RULE_1",
+            "name": "Export guard",
+            "priority": 3,
+            "condition": "Exporterar (grid < 0) → charge_pv / standby",
+            "parameters": {},
+        },
+        {
+            "id": "RULE_1_5",
+            "name": "Cheap grid charge",
+            "priority": 4,
+            "condition": f"Pris < {coord._cfg.get('grid_charge_price_threshold', 15):.0f} öre + SoC < 90% → grid_charge",
+            "parameters": {
+                "price_threshold_ore": float(coord._cfg.get("grid_charge_price_threshold", 15)),
+                "max_soc": float(coord._cfg.get("grid_charge_max_soc", 90)),
+            },
+        },
+        {
+            "id": "RULE_1_8",
+            "name": "Proactive discharge",
+            "priority": 5,
+            "condition": "SoC hög + grid import + dagtid → eliminera import",
+            "parameters": {
+                "min_soc_threshold": "40-90% (beroende på väder)",
+                "min_grid_w": "50-300W (beroende på sol/natt)",
+            },
+        },
+        {
+            "id": "RULE_2",
+            "name": "Peak shaving",
+            "priority": 6,
+            "condition": f"Grid viktat > {coord.target_kw:.1f} kW → discharge",
+            "parameters": {
+                "target_kw": coord.target_kw,
+                "hysteresis": 0.9,
+            },
+        },
+        {
+            "id": "RULE_4",
+            "name": "Idle / standby",
+            "priority": 7,
+            "condition": f"Grid viktat < {coord.target_kw:.1f} kW → vila",
+            "parameters": {
+                "target_kw": coord.target_kw,
+            },
+        },
+    ]
+
+    # Mark active rule
+    active_rule_id = getattr(coord, "_active_rule_id", None)
+    rule_triggers = getattr(coord, "_rule_triggers", {})
+
+    for rule in all_rules:
+        rule["active"] = rule["id"] == active_rule_id
+        trigger_data = rule_triggers.get(rule["id"], {})
+        rule["last_triggered"] = trigger_data.get("timestamp", None)
+        rule["result"] = trigger_data.get("result", None)
+
+    return {
+        "rules": all_rules,
+        "active_rule": active_rule_id,
+        "rule_count": len(all_rules),
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -498,6 +611,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         icon="mdi:calendar-check",
         value_fn=_plan_status_value,
         extra_attrs_fn=_plan_status_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="rules",
+        translation_key="rules",
+        icon="mdi:table-settings",
+        value_fn=_rules_value,
+        extra_attrs_fn=_rules_attrs,
     ),
     CarmaboxSensorDescription(
         key="target_kw",
