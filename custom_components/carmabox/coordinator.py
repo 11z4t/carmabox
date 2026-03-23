@@ -2073,14 +2073,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
 
         # ── EV-1: Not connected → stop ───────────────────────
-        if not self.ev_adapter.cable_locked or state.ev_soc < 0:
+        if not self.ev_adapter.cable_locked:
             if self._ev_enabled:
                 await self._cmd_ev_stop()
             return
 
+        # EV SoC: use actual if available, else last_known - derating
+        ev_soc = state.ev_soc
+        if ev_soc < 0:
+            derating = float(self._cfg.get("ev_soc_derating", 10.0))
+            if self._last_known_ev_soc > 0:
+                ev_soc = max(0, self._last_known_ev_soc - derating)
+                _LOGGER.debug("CARMA EV: using last_known %.0f%% - %.0f%% = %.0f%%",
+                              self._last_known_ev_soc, derating, ev_soc)
+            else:
+                # Ultimate fallback: assume 50% (conservative)
+                ev_soc = 50.0
+                _LOGGER.warning("CARMA EV: no SoC data at all — assuming 50%%")
+        elif ev_soc > 0:
+            self._last_known_ev_soc = ev_soc
+
         # ── EV-2: Target SoC reached → stop ──────────────────
         ev_target = self._calculate_ev_target()
-        if state.ev_soc >= ev_target:
+        if ev_soc >= ev_target:
             if self._ev_enabled:
                 _LOGGER.info(
                     "CARMA: EV SoC %.0f%% >= target %.0f%% — stop",
@@ -2110,15 +2125,28 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if (
                     self.ev_adapter
                     and self.ev_adapter.cable_locked
-                    and state.ev_soc >= 0
-                    and state.ev_soc < ev_target
+                    and ev_soc >= 0
+                    and ev_soc < ev_target
                     and current_price < price_expensive
                 ):
-                    # Charge at 6A minimum — better than doing nothing
-                    if not self._ev_enabled:
-                        await self._cmd_ev_start(6)
-                    elif self._ev_current_amps != 6:
-                        await self._cmd_ev_adjust(6)
+                    # Check Ellevio headroom before starting
+                    ev_kw = 6 * 230 / 1000  # 1.38 kW at 6A
+                    grid_now_kw = max(0, state.grid_power_w) / 1000
+                    weight = self._ellevio_weight(hour)
+                    headroom_kw = self.target_kw / weight - grid_now_kw
+                    if headroom_kw >= ev_kw * 0.5:
+                        # Enough headroom — charge at 6A
+                        if not self._ev_enabled:
+                            await self._cmd_ev_start(6)
+                        elif self._ev_current_amps != 6:
+                            await self._cmd_ev_adjust(6)
+                    else:
+                        _LOGGER.info(
+                            "CARMA EV: skipping — headroom %.1f kW < EV %.1f kW",
+                            headroom_kw, ev_kw,
+                        )
+                        if self._ev_enabled:
+                            await self._cmd_ev_stop()
                     return
                 # No fallback applicable — stop EV
                 if self._ev_enabled:
@@ -2295,6 +2323,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ok = await self.ev_adapter.set_current(amps)
         if not ok:
             return
+        # FIX D: Also enforce dynamic_charger_limit (Easee Cloud may override)
+        try:
+            await self.hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": f"number.{self.ev_adapter.prefix}_dynamic_charger_limit", "value": amps},
+            )
+        except Exception:
+            pass
         if not self._ev_enabled:
             ok = await self.ev_adapter.enable()
             if not ok:
@@ -2312,6 +2348,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         _LOGGER.info("CARMA: EV stop")
         await self.ev_adapter.disable()
         await self.ev_adapter.reset_to_default()
+        # FIX D: Reset dynamic_charger_limit to 6A
+        try:
+            await self.hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": f"number.{self.ev_adapter.prefix}_dynamic_charger_limit", "value": 6},
+            )
+        except Exception:
+            pass
         self._ev_enabled = False
         self._ev_current_amps = 0
         # CARMA-P0-FIXES Task 4: Save runtime after EV state change
@@ -2326,6 +2370,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
         _LOGGER.info("CARMA: EV adjust %dA → %dA", self._ev_current_amps, amps)
         ok = await self.ev_adapter.set_current(amps)
+        # FIX D: Enforce dynamic_charger_limit
+        try:
+            await self.hass.services.async_call(
+                "number", "set_value",
+                {"entity_id": f"number.{self.ev_adapter.prefix}_dynamic_charger_limit", "value": amps},
+            )
+        except Exception:
+            pass
         if ok:
             self._ev_current_amps = amps
             # CARMA-P0-FIXES Task 4: Save runtime after EV amps change
