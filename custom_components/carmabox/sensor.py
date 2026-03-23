@@ -54,6 +54,8 @@ def _plan_status_value(coord: CarmaboxCoordinator) -> str:
     last = coord._last_command
     if last == BatteryCommand.DISCHARGE:
         return "discharging"
+    if last == BatteryCommand.BMS_COLD_LOCK:
+        return "cold_lock"  # IT-1948: BMS cold lock (cell temp < 10°C)
     if last == BatteryCommand.CHARGE_PV_TAPER:
         return "charging_taper"  # IT-1939: BMS taper state
     if last == BatteryCommand.CHARGE_PV:

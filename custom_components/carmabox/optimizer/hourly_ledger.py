@@ -67,6 +67,10 @@ class HourEntry:
     vp_pool_kwh: float = 0.0  # VP pool consumption this hour
     cirk_pool_kwh: float = 0.0  # Cirkulationspump pool consumption this hour
 
+    # IT-1948: BMS cold lock tracking
+    cell_temp_kontor_c: float | None = None  # Battery 1 (kontor) min cell temp at hour end
+    cell_temp_forrad_c: float | None = None  # Battery 2 (förråd) min cell temp at hour end
+
     @property
     def grid_cost_kr(self) -> float:
         """What grid import cost this hour (kr)."""
@@ -202,6 +206,10 @@ class EnergyLedger:
     _acc_vp_pool_w: float = 0.0
     _acc_cirk_pool_w: float = 0.0
 
+    # IT-1948: BMS cell temperature snapshots (hour end)
+    _last_cell_temp_kontor: float | None = None
+    _last_cell_temp_forrad: float | None = None
+
     def record_sample(
         self,
         hour: int,
@@ -229,6 +237,9 @@ class EnergyLedger:
         vp_kontor_w: float = 0.0,
         vp_pool_w: float = 0.0,
         cirk_pool_w: float = 0.0,
+        # IT-1948: BMS cell temperature tracking
+        cell_temp_kontor_c: float | None = None,
+        cell_temp_forrad_c: float | None = None,
     ) -> None:
         """Record a 30-second sample.
 
@@ -305,6 +316,10 @@ class EnergyLedger:
         self._acc_vp_pool_w += vp_pool_w * wh_factor
         self._acc_cirk_pool_w += cirk_pool_w * wh_factor
 
+        # IT-1948: Snapshot cell temperatures at hour end
+        self._last_cell_temp_kontor = cell_temp_kontor_c
+        self._last_cell_temp_forrad = cell_temp_forrad_c
+
     def _flush_hour(self) -> None:
         """Flush accumulated samples into an HourEntry."""
         if self._acc_samples == 0:
@@ -344,6 +359,9 @@ class EnergyLedger:
             vp_kontor_kwh=self._acc_vp_kontor_w / 1000,
             vp_pool_kwh=self._acc_vp_pool_w / 1000,
             cirk_pool_kwh=self._acc_cirk_pool_w / 1000,
+            # IT-1948: BMS cell temperature snapshots
+            cell_temp_kontor_c=self._last_cell_temp_kontor,
+            cell_temp_forrad_c=self._last_cell_temp_forrad,
         )
         self.entries.append(entry)
 
@@ -379,6 +397,10 @@ class EnergyLedger:
         self._acc_vp_kontor_w = 0.0
         self._acc_vp_pool_w = 0.0
         self._acc_cirk_pool_w = 0.0
+
+        # IT-1948: Reset cell temperature snapshots
+        self._last_cell_temp_kontor = None
+        self._last_cell_temp_forrad = None
 
     def today(self, date_str: str) -> list[HourEntry]:
         """Get today's entries."""

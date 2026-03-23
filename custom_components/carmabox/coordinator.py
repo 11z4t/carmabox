@@ -135,6 +135,7 @@ class BatteryCommand(Enum):
     IDLE = "idle"
     CHARGE_PV = "charge_pv"
     CHARGE_PV_TAPER = "charge_pv_taper"  # IT-1939: BMS taper detection
+    BMS_COLD_LOCK = "bms_cold_lock"  # IT-1948: BMS cold lock (cell temp < 10°C)
     STANDBY = "standby"
     DISCHARGE = "discharge"
 
@@ -897,6 +898,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_current_a=ev_current_a,
             ev_status=ev_status,
             battery_temp_c=self._read_battery_temp(),
+            battery_min_cell_temp_1=a1.temperature_c if a1 else None,
+            battery_min_cell_temp_2=a2.temperature_c if a2 else None,
             # Weather (Tempest — prefer local MQTT, fallback to cloud)
             outdoor_temp_c=self._read_float(
                 opts.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
@@ -1255,6 +1258,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda"
                 )
                 await self._cmd_charge_pv(state)
+
+                # IT-1948: Cold lock detection — BMS blocks ALL charging when cells < 10°C
+                if self._is_cold_locked(state):
+                    temps = []
+                    if state.battery_min_cell_temp_1 is not None:
+                        temps.append(f"kontor {state.battery_min_cell_temp_1:.1f}°C")
+                    if state.battery_min_cell_temp_2 is not None:
+                        temps.append(f"förråd {state.battery_min_cell_temp_2:.1f}°C")
+                    temp_str = ", ".join(temps)
+                    reasoning.append(
+                        f"BMS kall-blockering — min cell {temp_str}, laddning pausad"
+                    )
+                    self._track_rule("RULE_0_5", "bms_cold_lock")
+                    self._record_decision(
+                        state,
+                        "bms_cold_lock",
+                        f"BMS cold lock — {temp_str}, överskott → surplus-kedja (MAX)",
+                        reasoning=reasoning,
+                    )
+                    self._last_command = BatteryCommand.BMS_COLD_LOCK
+                    # Force MAX surplus chain (target_kw=0) — all PV to loads
+                    saved_target = self.target_kw
+                    self.target_kw = 0.0
+                    await self._execute_ev(state)
+                    await self._execute_miner(state)
+                    await self._execute_climate(state)
+                    self.target_kw = saved_target
+                    return
 
                 # IT-1939: Taper detection — if BMS can't accept charge, surplus to loads
                 if self._is_in_taper(state):
@@ -3239,6 +3270,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             vp_kontor_w=vp_kontor_w,
             vp_pool_w=vp_pool_w,
             cirk_pool_w=cirk_pool_w,
+            # IT-1948: Pass battery cell temperatures
+            cell_temp_kontor_c=state.battery_min_cell_temp_1,
+            cell_temp_forrad_c=state.battery_min_cell_temp_2,
         )
         # CARMA-P0-FIXES Task 4: Save ledger after recording (rate-limited)
         self.hass.async_create_task(
@@ -3505,6 +3539,42 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             and abs(state.grid_power_w) > 200
             and state.total_battery_soc < 100
             and state.pv_power_w > 500
+        )
+
+    def _is_cold_locked(self, state: CarmaboxState) -> bool:
+        """IT-1948: Detect BMS cold lock (cell temp < 10°C blocks ALL charging).
+
+        Returns True if:
+        - ANY battery min cell temp < 10°C
+        - Charge command was requested (charge_pv or grid_charge)
+        - Battery power is near zero (~0W, no actual charging happening)
+        - PV > 500W OR importing (trying to charge but BMS blocks)
+
+        BMS lithium plating protection blocks ALL charging when cells are cold.
+        This is DIFFERENT from taper (which is SoC-based export at high SoC).
+        Cold lock = zero charging despite surplus. Taper = some charging + export.
+
+        Solution: Route surplus to loads immediately (MAX surplus chain).
+        """
+        # Check if any battery is below cold threshold
+        temps = []
+        if state.battery_min_cell_temp_1 is not None:
+            temps.append(state.battery_min_cell_temp_1)
+        if state.battery_min_cell_temp_2 is not None:
+            temps.append(state.battery_min_cell_temp_2)
+
+        if not temps:
+            return False  # No temp data = can't detect cold lock
+
+        min_temp = min(temps)
+
+        # Cold lock criteria
+        return (
+            min_temp < 10.0
+            and self._last_command in (BatteryCommand.CHARGE_PV, BatteryCommand.CHARGE_PV_TAPER)
+            and abs(state.battery_power_1) < 100  # Battery 1 not charging
+            and (state.battery_soc_2 < 0 or abs(state.battery_power_2) < 100)  # Battery 2 not charging (if exists)
+            and (state.pv_power_w > 500 or not state.is_exporting)
         )
 
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:

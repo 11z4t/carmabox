@@ -129,7 +129,9 @@ class CarmaboxState:
     ev_status: str = ""
 
     # Temperature
-    battery_temp_c: float | None = None
+    battery_temp_c: float | None = None  # Deprecated - use battery_min_cell_temp_1/2
+    battery_min_cell_temp_1: float | None = None  # IT-1948: Battery 1 min cell temp (°C)
+    battery_min_cell_temp_2: float | None = None  # IT-1948: Battery 2 min cell temp (°C)
 
     # Weather (Tempest)
     outdoor_temp_c: float = 0.0
