@@ -2593,6 +2593,32 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         total_battery_w = state.battery_power_1 + (
             state.battery_power_2 if state.has_battery_2 else 0
         )
+
+        # CARMA-LEDGER-FIELDS: Calculate new fields
+        solar_w = state.pv_power_w
+        miner_w = self.appliance_power.get("miner", 0.0)
+
+        # House consumption = grid + battery_discharge + pv - battery_charge - export
+        # Approximate as total power flow into house
+        battery_discharge_w = max(0, -total_battery_w)
+        battery_charge_w = max(0, total_battery_w)
+        grid_import_w = max(0, state.grid_power_w)
+        grid_export_w = max(0, -state.grid_power_w)
+        house_w = grid_import_w + battery_discharge_w + state.pv_power_w - battery_charge_w - grid_export_w
+
+        # Battery SoC average
+        battery_soc = state.total_battery_soc
+
+        # EV SoC
+        ev_soc = state.ev_soc if state.has_ev else 0.0
+
+        # Current action from last decision
+        action = self.last_decision.action if self.last_decision else "idle"
+
+        # Outdoor temperature — read from sensor
+        temp_entity = self._cfg.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
+        temperature_c = self._read_float(temp_entity, 0.0)
+
         self.ledger.record_sample(
             hour=hour,
             date_str=today,
@@ -2605,6 +2631,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             is_exporting=state.is_exporting,
             interval_s=SCAN_INTERVAL_SECONDS,
             appliance_power=self.appliance_power,
+            solar_w=solar_w,
+            house_w=house_w,
+            miner_w=miner_w,
+            battery_soc=battery_soc,
+            ev_soc=ev_soc,
+            action=action,
+            temperature_c=temperature_c,
         )
 
         # PLAT-927: Ellevio realtime — rolling hourly weighted average

@@ -49,6 +49,16 @@ class HourEntry:
     # Ellevio
     weighted_avg_kw: float = 0.0  # Hourly weighted average (Ellevio definition)
 
+    # CARMA-LEDGER-FIELDS: New tracking fields
+    solar_kwh: float = 0.0  # Total PV production this hour
+    export_kwh: float = 0.0  # Grid export this hour (alias for grid_export_kwh)
+    house_consumption_kwh: float = 0.0  # Total house consumption
+    battery_soc_pct: float = 0.0  # Battery SoC at hour end (avg of both inverters)
+    ev_soc_pct: float = 0.0  # EV SoC at hour end
+    miner_kwh: float = 0.0  # Miner consumption this hour
+    action: str = ""  # CARMA decision this hour (idle/discharge/grid_charge/etc)
+    temperature_c: float = 0.0  # Outdoor temperature
+
     @property
     def grid_cost_kr(self) -> float:
         """What grid import cost this hour (kr)."""
@@ -105,6 +115,7 @@ class HourEntry:
             "date": self.date,
             "price_ore": round(self.price_ore, 1),
             "grid_kwh": round(self.grid_import_kwh, 2),
+            "grid_export_kwh": round(self.grid_export_kwh, 2),
             "grid_cost_kr": self.grid_cost_kr,
             "bat_discharge_kwh": round(self.battery_discharge_kwh, 2),
             "bat_saved_kr": self.battery_saved_kr,
@@ -116,6 +127,15 @@ class HourEntry:
             "total_cost_kr": self.total_cost_kr,
             "without_battery_kr": self.cost_without_battery_kr,
             "weighted_kw": round(self.weighted_avg_kw, 2),
+            # CARMA-LEDGER-FIELDS: New fields
+            "solar_kwh": round(self.solar_kwh, 2),
+            "export_kwh": round(self.export_kwh, 2),
+            "house_consumption_kwh": round(self.house_consumption_kwh, 2),
+            "battery_soc_pct": round(self.battery_soc_pct, 1),
+            "ev_soc_pct": round(self.ev_soc_pct, 1),
+            "miner_kwh": round(self.miner_kwh, 3),
+            "action": self.action,
+            "temperature_c": round(self.temperature_c, 1),
         }
         if self.appliance_kwh:
             result["appliances"] = {
@@ -149,6 +169,16 @@ class EnergyLedger:
     _acc_samples: int = 0
     _acc_appliances: dict[str, float] = field(default_factory=dict)
 
+    # CARMA-LEDGER-FIELDS: New accumulators
+    _acc_solar_w: float = 0.0  # Total solar production accumulator
+    _acc_export_w: float = 0.0  # Export accumulator (same as _acc_grid_export_w)
+    _acc_house_w: float = 0.0  # House consumption accumulator
+    _acc_miner_w: float = 0.0  # Miner consumption accumulator
+    _last_battery_soc: float = 0.0  # Snapshot at hour end
+    _last_ev_soc: float = 0.0  # Snapshot at hour end
+    _last_action: str = ""  # Snapshot at hour end
+    _last_temp: float = 0.0  # Snapshot at hour end
+
     def record_sample(
         self,
         hour: int,
@@ -162,6 +192,13 @@ class EnergyLedger:
         is_exporting: bool,
         interval_s: float = 30.0,
         appliance_power: dict[str, float] | None = None,
+        solar_w: float = 0.0,
+        house_w: float = 0.0,
+        miner_w: float = 0.0,
+        battery_soc: float = 0.0,
+        ev_soc: float = 0.0,
+        action: str = "",
+        temperature_c: float = 0.0,
     ) -> None:
         """Record a 30-second sample.
 
@@ -219,6 +256,17 @@ class EnergyLedger:
         self._acc_weighted_kw_sum += weighted_kw
         self._acc_samples += 1
 
+        # CARMA-LEDGER-FIELDS: Accumulate new fields
+        self._acc_solar_w += solar_w * wh_factor
+        self._acc_house_w += house_w * wh_factor
+        self._acc_miner_w += miner_w * wh_factor
+
+        # Snapshot values at hour end (overwrite each sample)
+        self._last_battery_soc = battery_soc
+        self._last_ev_soc = ev_soc
+        self._last_action = action
+        self._last_temp = temperature_c
+
     def _flush_hour(self) -> None:
         """Flush accumulated samples into an HourEntry."""
         if self._acc_samples == 0:
@@ -242,6 +290,15 @@ class EnergyLedger:
             ev_charge_grid_kwh=self._acc_ev_w / 1000,
             weighted_avg_kw=avg_weighted,
             appliance_kwh=app_kwh,
+            # CARMA-LEDGER-FIELDS: New fields
+            solar_kwh=self._acc_solar_w / 1000,
+            export_kwh=self._acc_grid_export_w / 1000,
+            house_consumption_kwh=self._acc_house_w / 1000,
+            battery_soc_pct=self._last_battery_soc,
+            ev_soc_pct=self._last_ev_soc,
+            miner_kwh=self._acc_miner_w / 1000,
+            action=self._last_action,
+            temperature_c=self._last_temp,
         )
         self.entries.append(entry)
 
@@ -260,6 +317,15 @@ class EnergyLedger:
         self._acc_weighted_kw_sum = 0.0
         self._acc_samples = 0
         self._acc_appliances = {}
+
+        # CARMA-LEDGER-FIELDS: Reset new accumulators
+        self._acc_solar_w = 0.0
+        self._acc_house_w = 0.0
+        self._acc_miner_w = 0.0
+        self._last_battery_soc = 0.0
+        self._last_ev_soc = 0.0
+        self._last_action = ""
+        self._last_temp = 0.0
 
     def today(self, date_str: str) -> list[HourEntry]:
         """Get today's entries."""
@@ -285,6 +351,13 @@ class EnergyLedger:
 
         prices = [e.price_ore for e in day if e.price_ore > 0]
         weighted_avgs = [e.weighted_avg_kw for e in day if e.weighted_avg_kw > 0]
+
+        # CARMA-LEDGER-FIELDS: Aggregate new fields
+        total_solar = sum(e.solar_kwh for e in day)
+        total_export = sum(e.export_kwh for e in day)
+        total_house = sum(e.house_consumption_kwh for e in day)
+        total_miner = sum(e.miner_kwh for e in day)
+        temps = [e.temperature_c for e in day if e.temperature_c != 0]
 
         cheapest = min(day, key=lambda e: e.total_cost_kr) if day else None
         most_expensive = max(day, key=lambda e: e.total_cost_kr) if day else None
@@ -320,6 +393,14 @@ class EnergyLedger:
             "best_ellevio_kw": best_hour.weighted_avg_kw if best_hour else 0,
             "worst_ellevio_hour": worst_hour.hour if worst_hour else -1,
             "worst_ellevio_kw": worst_hour.weighted_avg_kw if worst_hour else 0,
+            # CARMA-LEDGER-FIELDS: New aggregates
+            "total_solar_kwh": round(total_solar, 2),
+            "total_export_kwh": round(total_export, 2),
+            "total_house_kwh": round(total_house, 2),
+            "total_miner_kwh": round(total_miner, 3),
+            "min_temp_c": round(min(temps), 1) if temps else 0,
+            "max_temp_c": round(max(temps), 1) if temps else 0,
+            "avg_temp_c": round(sum(temps) / len(temps), 1) if temps else 0,
             # Hourly table for mail
             "hourly": [e.to_dict() for e in day],
         }
@@ -371,12 +452,22 @@ class EnergyLedger:
                     hour=ed.get("hour", 0),
                     date=ed.get("date", ""),
                     grid_import_kwh=ed.get("grid_kwh", 0),
+                    grid_export_kwh=ed.get("grid_export_kwh", 0),
                     price_ore=ed.get("price_ore", 0),
                     battery_discharge_kwh=ed.get("bat_discharge_kwh", 0),
                     battery_charge_pv_kwh=ed.get("bat_charge_pv_kwh", 0),
                     battery_charge_grid_kwh=ed.get("bat_charge_grid_kwh", 0),
                     ev_charge_grid_kwh=ed.get("ev_grid_kwh", 0),
                     weighted_avg_kw=ed.get("weighted_kw", 0),
+                    # CARMA-LEDGER-FIELDS: Deserialize new fields
+                    solar_kwh=ed.get("solar_kwh", 0),
+                    export_kwh=ed.get("export_kwh", 0),
+                    house_consumption_kwh=ed.get("house_consumption_kwh", 0),
+                    battery_soc_pct=ed.get("battery_soc_pct", 0),
+                    ev_soc_pct=ed.get("ev_soc_pct", 0),
+                    miner_kwh=ed.get("miner_kwh", 0),
+                    action=ed.get("action", ""),
+                    temperature_c=ed.get("temperature_c", 0),
                 )
             )
         ledger._current_hour = data.get("current_hour", -1)
