@@ -3468,7 +3468,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """IT-1939: Detect BMS taper mode.
 
         Returns True if:
-        - Current command is charge_pv
+        - Current command is charge_pv OR charge_pv_taper (persist across cycles)
         - Exporting > 200W (BMS not accepting full charge)
         - Average SoC < 100% (batteries not yet full)
         - PV > 500W (still producing)
@@ -3476,9 +3476,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         BMS taper occurs when SoC > 95% — batteries slow charge acceptance,
         causing 2-3kW export at low prices. Solution: keep charge_pv active
         but route surplus to miner/VP/EV instead of exporting.
+
+        BUG FIX: Must also check CHARGE_PV_TAPER, not only CHARGE_PV.
+        Without this, taper mode exits on cycle 2 because _last_command is
+        already CHARGE_PV_TAPER after first detection.
         """
         return (
-            self._last_command == BatteryCommand.CHARGE_PV
+            self._last_command
+            in (BatteryCommand.CHARGE_PV, BatteryCommand.CHARGE_PV_TAPER)
             and state.is_exporting
             and abs(state.grid_power_w) > 200
             and state.total_battery_soc < 100
@@ -3490,7 +3495,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         SafetyGuard: heartbeat + rate limit + charge check.
         """
-        if self._last_command == BatteryCommand.CHARGE_PV:
+        # IT-1939 BUG FIX: also skip re-send when already in taper mode
+        if self._last_command in (
+            BatteryCommand.CHARGE_PV,
+            BatteryCommand.CHARGE_PV_TAPER,
+        ):
             return
 
         # ── SafetyGuard gates (defense-in-depth) ─────────────
