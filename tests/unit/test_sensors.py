@@ -31,6 +31,8 @@ def _make_sensor_deps(
     coord.decision_log = []
     coord.hourly_actuals = []
     coord.executor_enabled = True
+    coord._taper_active = False
+    coord._cold_lock_active = False
     coord.status_text = "Allt fungerar"
     coord.system_health = {"kontor": "ok", "forrad": "ok", "sakerhet": "ok", "styrning": "ok"}
     coord.plan_score = MagicMock(

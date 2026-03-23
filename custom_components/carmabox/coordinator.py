@@ -34,6 +34,8 @@ from .adapters.goodwe import GoodWeAdapter
 from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .const import (
+    COLD_LOCK_CELL_TEMP_C,
+    COLD_LOCK_POWER_THRESHOLD_W,
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
@@ -65,6 +67,11 @@ from .const import (
     EV_RAMP_INTERVAL_S,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
+    TAPER_EV_SURPLUS_W,
+    TAPER_EXIT_EXPORT_W,
+    TAPER_EXIT_PV_KW,
+    TAPER_EXPORT_THRESHOLD_W,
+    TAPER_VP_SURPLUS_W,
 )
 from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
@@ -318,6 +325,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not self._miner_entity:
             self._miner_entity = self._detect_miner_entity()
         self._miner_on: bool = False
+
+        # IT-1939: BMS taper detection — tracks when batteries are in charge_pv
+        # but barely accepting power due to BMS taper at high SoC
+        self._taper_active: bool = False
+
+        # IT-1948: BMS cold lock detection — tracks when BMS blocks ALL charging
+        # because min cell temperature is below lithium plating protection threshold
+        self._cold_lock_active: bool = False
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -842,6 +857,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_current_a=ev_current_a,
             ev_status=ev_status,
             battery_temp_c=self._read_battery_temp(),
+            # IT-1948: Per-battery min cell temperature for cold lock detection
+            battery_cell_temp_1=a1.temperature_c if a1 else None,
+            battery_cell_temp_2=a2.temperature_c if a2 else None,
             # Weather (Tempest — prefer local MQTT, fallback to cloud)
             outdoor_temp_c=self._read_float(
                 opts.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
@@ -1089,6 +1107,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         pv_kw = state.pv_power_w / 1000
         is_night = hour >= 22 or hour < 6
 
+        # IT-1939: Clear taper if conditions no longer met
+        if self._taper_active and (
+            not state.is_exporting or state.all_batteries_full or pv_kw < TAPER_EXIT_PV_KW
+        ):
+            self._taper_active = False
+            _LOGGER.info(
+                "CARMA: BMS taper cleared (exporting=%s, full=%s, pv=%.1f kW)",
+                state.is_exporting,
+                state.all_batteries_full,
+                pv_kw,
+            )
+
+        # IT-1948: Detect/clear BMS cold lock based on min cell temperature
+        cell_temp_1 = state.battery_cell_temp_1
+        cell_temp_2 = state.battery_cell_temp_2
+        cold_lock_threshold = float(self._cfg.get("cold_lock_temp_c", COLD_LOCK_CELL_TEMP_C))
+        # Cold lock = any battery has min cell temp below threshold
+        any_cold = (cell_temp_1 is not None and cell_temp_1 < cold_lock_threshold) or (
+            cell_temp_2 is not None and cell_temp_2 < cold_lock_threshold
+        )
+        if self._cold_lock_active and not any_cold:
+            self._cold_lock_active = False
+            _LOGGER.info(
+                "CARMA: BMS cold lock cleared — cell temps: kontor=%s°C, förråd=%s°C",
+                f"{cell_temp_1:.1f}" if cell_temp_1 is not None else "?",
+                f"{cell_temp_2:.1f}" if cell_temp_2 is not None else "?",
+            )
+
         # ── Build reasoning chain ─────────────────────────────
         reasoning: list[str] = []
         chain: list[dict[str, str]] = []
@@ -1170,6 +1216,47 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             }
         )
 
+        # ── IT-1948: RULE 0.4: BMS cold lock → skip battery, max surplus ──
+        # When min cell temp < threshold, BMS blocks ALL charging (lithium plating
+        # protection). Charging commands are ignored — battery power stays at ~0W.
+        # Different from taper: taper = battery accepts SOME power, cold lock = NONE.
+        if any_cold and pv_kw > 0.5 and not state.all_batteries_full and state.is_exporting:
+            # Confirm cold lock: battery should be accepting ~0W despite charge conditions
+            total_bat_power = abs(state.battery_power_1) + abs(
+                state.battery_power_2 if state.has_battery_2 else 0
+            )
+            if total_bat_power < COLD_LOCK_POWER_THRESHOLD_W or self._cold_lock_active:
+                self._cold_lock_active = True
+                cold_temps = []
+                if cell_temp_1 is not None:
+                    cold_temps.append(f"kontor {cell_temp_1:.1f}°C")
+                if cell_temp_2 is not None:
+                    cold_temps.append(f"förråd {cell_temp_2:.1f}°C")
+                cold_str = ", ".join(cold_temps)
+
+                reasoning.append(
+                    f"BMS kall-blockering — min cell {cold_str}, laddning pausad, surplus chain MAX"
+                )
+                _LOGGER.info(
+                    "CARMA: BMS cold lock — cell temps: %s, bat_power=%.0fW, "
+                    "routing all PV to surplus chain",
+                    cold_str,
+                    total_bat_power,
+                )
+                self._record_decision(
+                    state,
+                    "bms_cold_lock",
+                    f"BMS kall-blockering — min cell {cold_str}, "
+                    f"laddning pausad, PV {pv_kw:.1f} kW → surplus chain",
+                    reasoning=reasoning,
+                )
+                # Set standby — charging is pointless during cold lock
+                await self._cmd_standby(state)
+                # Maximize surplus chain: absorb all PV export locally
+                export_w = abs(state.grid_power_w) if state.is_exporting else 0
+                await self._execute_taper_surplus(state, export_w)
+                return
+
         # ── RULE 0.5: PV surplus + battery not full → charge_pv ──
         # ONLY charge batteries from PV if we are EXPORTING (PV > house load).
         # If grid is importing, PV doesn't cover house — don't add battery
@@ -1181,16 +1268,61 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if charge_result.ok:
                 reasoning.append(f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda")
                 await self._cmd_charge_pv(state)
-                self._record_decision(
-                    state,
-                    "charge_pv",
-                    f"Solladdar — PV {pv_kw:.1f} kW, batteri {state.total_battery_soc:.0f}%",
-                    reasoning=reasoning,
-                )
 
-                await self._execute_ev(state)
-                await self._execute_miner(state)
-                await self._execute_climate(state)
+                # ── IT-1939: BMS taper detection ──────────────────
+                # When charge_pv is set but batteries barely accept power
+                # (BMS taper at SoC > 95%), we still export to grid.
+                # INVARIANT: NEVER export when SoC < 100%.
+                # Detect taper: exporting > threshold while charging.
+                export_w = abs(state.grid_power_w)
+                taper_now = export_w > TAPER_EXPORT_THRESHOLD_W and state.total_battery_soc < 100
+
+                if taper_now:
+                    self._taper_active = True
+                    reasoning.append(
+                        f"BMS taper: export {export_w:.0f}W trots charge_pv, "
+                        f"SoC {state.total_battery_soc:.0f}% < 100% "
+                        f"→ aktiverar surplus chain aggressivt"
+                    )
+                    _LOGGER.info(
+                        "CARMA: BMS taper detected — export %.0fW, SoC %.0f%%, "
+                        "activating surplus chain",
+                        export_w,
+                        state.total_battery_soc,
+                    )
+                    self._record_decision(
+                        state,
+                        "charge_pv_taper",
+                        f"Solladdar (taper) — export {export_w:.0f}W, "
+                        f"PV {pv_kw:.1f} kW, batteri {state.total_battery_soc:.0f}%, "
+                        f"surplus chain aktiv",
+                        reasoning=reasoning,
+                    )
+                    # Aggressive surplus chain: absorb ALL export locally
+                    await self._execute_taper_surplus(state, export_w)
+                else:
+                    # Check taper exit conditions
+                    if self._taper_active and (
+                        state.total_battery_soc >= 100
+                        or export_w < TAPER_EXIT_EXPORT_W
+                        or pv_kw < TAPER_EXIT_PV_KW
+                    ):
+                        self._taper_active = False
+                        _LOGGER.info(
+                            "CARMA: BMS taper ended — SoC %.0f%%, export %.0fW, PV %.1f kW",
+                            state.total_battery_soc,
+                            export_w,
+                            pv_kw,
+                        )
+                    self._record_decision(
+                        state,
+                        "charge_pv",
+                        f"Solladdar — PV {pv_kw:.1f} kW, batteri {state.total_battery_soc:.0f}%",
+                        reasoning=reasoning,
+                    )
+                    await self._execute_ev(state)
+                    await self._execute_miner(state)
+                    await self._execute_climate(state)
                 return
             # Charge blocked (e.g. temperature) — not a user-facing issue,
             # just fall through to next rule. Self-healing handles it.
@@ -1530,6 +1662,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
         except Exception:
             _LOGGER.warning("CARMA: VP control failed for %s", entity_id, exc_info=True)
+
+    async def _execute_taper_surplus(self, state: CarmaboxState, export_w: float) -> None:
+        """IT-1939: Aggressively activate surplus chain during BMS taper.
+
+        When batteries are in charge_pv but BMS taper prevents full absorption,
+        we must consume the surplus locally. INVARIANT: never export at SoC < 100%.
+
+        Priority chain: Battery (already charging) → Miner → VP → EV → Pool → Export.
+        Lower thresholds than normal surplus — we want to absorb EVERYTHING.
+        """
+        # 1. Miner: always ON during taper (instant ~400W absorption)
+        if self._miner_entity and not self._miner_on:
+            _LOGGER.info("CARMA taper: miner ON (absorb %.0fW export)", export_w)
+            await self._cmd_miner(True)
+
+        # 2. VP: pre-heat/cool at lower threshold than normal
+        if export_w > TAPER_VP_SURPLUS_W:
+            await self._execute_climate(state)
+
+        # 3. EV: charge from surplus at lower threshold (6A min = ~1380W)
+        if export_w > TAPER_EV_SURPLUS_W:
+            await self._execute_ev(state)
+        elif self._ev_enabled:
+            # Not enough surplus for EV — let normal EV logic handle
+            await self._execute_ev(state)
+
+        # 4. Pool: activate if surplus remains
+        await self._execute_pool(state)
 
     async def _execute_pool(self, state: CarmaboxState) -> None:
         """Control pool pump/heater based on surplus and temperature.
@@ -2990,6 +3150,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_soc=ev_soc,
             action=action,
             temperature_c=temperature_c,
+            # IT-1948: Min cell temperature across both batteries
+            cell_temp_min_c=state.battery_temp_c,
         )
         # CARMA-P0-FIXES Task 4: Save ledger after recording (rate-limited)
         self.hass.async_create_task(

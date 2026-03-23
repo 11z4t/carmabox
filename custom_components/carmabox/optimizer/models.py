@@ -62,7 +62,7 @@ class Decision:
     """A single optimizer decision with reasoning."""
 
     timestamp: str = ""
-    action: str = "idle"  # charge_pv, discharge, standby, idle, grid_charge
+    action: str = "idle"  # charge_pv, charge_pv_taper, discharge, standby, idle, grid_charge
     reason: str = ""  # Human-readable Swedish
     target_kw: float = 0.0
     grid_kw: float = 0.0
@@ -130,6 +130,9 @@ class CarmaboxState:
 
     # Temperature
     battery_temp_c: float | None = None
+    # Per-battery min cell temperature (IT-1948: BMS cold lock detection)
+    battery_cell_temp_1: float | None = None
+    battery_cell_temp_2: float | None = None
 
     # Weather (Tempest)
     outdoor_temp_c: float = 0.0

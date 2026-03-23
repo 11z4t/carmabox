@@ -131,6 +131,18 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "safety_blocked": d.safety_blocked,
         "timestamp": d.timestamp,
         "analyze_only": not coord.executor_enabled,
+        "taper_active": coord._taper_active,
+        "cold_lock_active": coord._cold_lock_active,
+        "cell_temp_kontor": (
+            coord.data.battery_cell_temp_1
+            if coord.data and coord.data.battery_cell_temp_1 is not None
+            else None
+        ),
+        "cell_temp_forrad": (
+            coord.data.battery_cell_temp_2
+            if coord.data and coord.data.battery_cell_temp_2 is not None
+            else None
+        ),
     }
     # Last 24h decisions as compact list (max 48 entries)
     attrs["decisions_24h"] = [

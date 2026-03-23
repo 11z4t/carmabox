@@ -63,6 +63,19 @@ DEFAULT_PRICE_EXPENSIVE_ORE = 80.0
 DEFAULT_MINER_START_EXPORT_W = 200  # Start miner when exporting > this
 DEFAULT_MINER_STOP_IMPORT_W = 500  # Stop miner when importing > this
 
+# BMS taper detection (IT-1939)
+TAPER_EXPORT_THRESHOLD_W = 200  # Export > this while charge_pv → taper detected
+TAPER_EXIT_EXPORT_W = 100  # Export < this → exit taper
+TAPER_EXIT_PV_KW = 0.5  # PV < this → exit taper (sun going down)
+TAPER_VP_SURPLUS_W = 500  # Surplus > this → start VP pre-heat/cool
+TAPER_EV_SURPLUS_W = 1000  # Surplus > this → start EV charging
+
+# BMS cold lock detection (IT-1948)
+# When min cell temperature < threshold, BMS blocks ALL charging (lithium plating protection).
+# This is NOT taper — battery accepts ZERO power regardless of EMS mode.
+COLD_LOCK_CELL_TEMP_C = 10.0  # Min cell temp below which BMS blocks charging
+COLD_LOCK_POWER_THRESHOLD_W = 50  # |battery_power| < this confirms cold lock (≈ 0W)
+
 # Watchdog thresholds
 DEFAULT_WATCHDOG_EXPORT_W = 500  # W1: export threshold for charge correction
 DEFAULT_WATCHDOG_DISCHARGE_MIN_W = 200  # W2: minimum discharge to correct

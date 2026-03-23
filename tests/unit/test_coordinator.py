@@ -103,6 +103,8 @@ def _make_coordinator(
     coord._ev_initialized = True
     coord._miner_entity = ""
     coord._miner_on = False
+    coord._taper_active = False
+    coord._cold_lock_active = False
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
@@ -1794,3 +1796,343 @@ class TestPlanScore:
         ]
         scores = coord.plan_score()
         assert scores["score_today"] == 100.0
+
+
+class TestTaperDetection:
+    """IT-1939: BMS taper detection — never export when SoC < 100%."""
+
+    @pytest.mark.asyncio
+    async def test_taper_detected_when_exporting_during_charge_pv(self) -> None:
+        """Export > 200W while charge_pv + SoC < 100% → taper detected."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting 500W
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord.last_decision.action == "charge_pv_taper"
+
+    @pytest.mark.asyncio
+    async def test_taper_not_detected_when_export_below_threshold(self) -> None:
+        """Export < 200W → no taper (batteries absorbing well)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Exporting only 100W
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_soc_full(self) -> None:
+        """SoC reaches 100% → taper exits."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=100,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_not_exporting(self) -> None:
+        """No longer exporting → taper cleared."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+
+        state = CarmaboxState(
+            grid_power_w=500,  # Importing now
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=1000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_export_low(self) -> None:
+        """Export drops below exit threshold → taper exits."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-50,  # Below TAPER_EXIT_EXPORT_W (100)
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_pv_low(self) -> None:
+        """PV drops below exit threshold → taper exits (sun going down)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-150,  # Export above exit threshold
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=300,  # Below TAPER_EXIT_PV_KW (0.5 kW = 500W)
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_activates_miner(self) -> None:
+        """During taper, miner should be turned ON to absorb surplus."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._miner_entity = "switch.miner"
+        coord._miner_on = False
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-800,
+            battery_soc_1=97,
+            battery_soc_2=-1,
+            pv_power_w=4000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord._miner_on is True
+
+    @pytest.mark.asyncio
+    async def test_taper_decision_has_taper_info(self) -> None:
+        """Taper decision should include taper info in reasoning."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-600,
+            battery_soc_1=95,
+            battery_soc_2=-1,
+            pv_power_w=3500,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        d = coord.last_decision
+        assert d.action == "charge_pv_taper"
+        assert "taper" in d.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_taper_keeps_charge_pv_mode(self) -> None:
+        """Taper should NOT change battery mode — keep charge_pv."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-1500,
+            battery_soc_1=98,
+            battery_soc_2=-1,
+            pv_power_w=5000,
+        )
+        await coord._execute(state)
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+        assert coord._taper_active is True
+
+    @pytest.mark.asyncio
+    async def test_taper_with_dual_battery(self) -> None:
+        """Taper detection works with dual batteries."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-700,
+            battery_soc_1=97,
+            battery_soc_2=96,
+            pv_power_w=4000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord.last_decision.action == "charge_pv_taper"
+
+
+class TestColdLockDetection:
+    """IT-1948: BMS cold lock detection — charging blocked at low cell temp."""
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_detected_when_cell_temp_low(self) -> None:
+        """Cell temp < 10°C + exporting + battery ~0W → cold lock."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,  # Battery not accepting charge
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,  # Below 10°C threshold
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord.last_decision.action == "bms_cold_lock"
+        assert "kall-blockering" in coord.last_decision.reason
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_not_detected_when_cell_temp_ok(self) -> None:
+        """Cell temp > 10°C → normal charge_pv, no cold lock."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Low export (below taper threshold)
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=15.0,  # Above threshold
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_clears_when_temp_rises(self) -> None:
+        """Cold lock clears when cell temp rises above threshold."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._cold_lock_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=12.0,  # Above threshold now
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_dual_battery_one_cold(self) -> None:
+        """One battery cold + other warm → cold lock (any_cold = True)."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=50,
+            battery_power_1=0,
+            battery_power_2=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,  # Cold
+            battery_cell_temp_2=15.0,  # Warm
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord.last_decision.action == "bms_cold_lock"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_activates_surplus_chain(self) -> None:
+        """During cold lock, miner should be turned ON (surplus chain)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._miner_entity = "switch.miner"
+        coord._miner_on = False
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-800,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,
+            pv_power_w=4000,
+            battery_cell_temp_1=7.0,
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord._miner_on is True
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_no_cell_temp_no_lock(self) -> None:
+        """No cell temp data (None) → no cold lock, normal behavior."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Low export (below taper threshold)
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=None,  # No data
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_decision_shows_cell_temps(self) -> None:
+        """Cold lock decision reason includes cell temperatures."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=50,
+            battery_power_1=0,
+            battery_power_2=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,
+            battery_cell_temp_2=10.5,
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        d = coord.last_decision
+        assert "8.3" in d.reason
+        assert "kontor" in d.reason
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_not_taper(self) -> None:
+        """Cold cell temp should trigger cold_lock, NOT taper."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting > TAPER_EXPORT_THRESHOLD_W
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=5.0,  # Very cold
+        )
+        await coord._execute(state)
+        # Should be cold lock, NOT taper
+        assert coord._cold_lock_active is True
+        assert coord._taper_active is False
+        assert coord.last_decision.action == "bms_cold_lock"

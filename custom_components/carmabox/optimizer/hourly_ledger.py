@@ -58,6 +58,7 @@ class HourEntry:
     miner_kwh: float = 0.0  # Miner consumption this hour
     action: str = ""  # CARMA decision this hour (idle/discharge/grid_charge/etc)
     temperature_c: float = 0.0  # Outdoor temperature
+    cell_temp_min_c: float | None = None  # IT-1948: Min battery cell temp this hour
 
     @property
     def grid_cost_kr(self) -> float:
@@ -136,6 +137,9 @@ class HourEntry:
             "miner_kwh": round(self.miner_kwh, 3),
             "action": self.action,
             "temperature_c": round(self.temperature_c, 1),
+            "cell_temp_min_c": (
+                round(self.cell_temp_min_c, 1) if self.cell_temp_min_c is not None else None
+            ),
         }
         if self.appliance_kwh:
             result["appliances"] = {
@@ -178,6 +182,7 @@ class EnergyLedger:
     _last_ev_soc: float = 0.0  # Snapshot at hour end
     _last_action: str = ""  # Snapshot at hour end
     _last_temp: float = 0.0  # Snapshot at hour end
+    _last_cell_temp_min: float | None = None  # IT-1948: Min cell temp snapshot
 
     def record_sample(
         self,
@@ -199,6 +204,7 @@ class EnergyLedger:
         ev_soc: float = 0.0,
         action: str = "",
         temperature_c: float = 0.0,
+        cell_temp_min_c: float | None = None,
     ) -> None:
         """Record a 30-second sample.
 
@@ -266,6 +272,11 @@ class EnergyLedger:
         self._last_ev_soc = ev_soc
         self._last_action = action
         self._last_temp = temperature_c
+        # IT-1948: Track min cell temp (keep the lowest seen this hour)
+        if cell_temp_min_c is not None and (
+            self._last_cell_temp_min is None or cell_temp_min_c < self._last_cell_temp_min
+        ):
+            self._last_cell_temp_min = cell_temp_min_c
 
     def _flush_hour(self) -> None:
         """Flush accumulated samples into an HourEntry."""
@@ -299,6 +310,7 @@ class EnergyLedger:
             miner_kwh=self._acc_miner_w / 1000,
             action=self._last_action,
             temperature_c=self._last_temp,
+            cell_temp_min_c=self._last_cell_temp_min,
         )
         self.entries.append(entry)
 
@@ -326,6 +338,7 @@ class EnergyLedger:
         self._last_ev_soc = 0.0
         self._last_action = ""
         self._last_temp = 0.0
+        self._last_cell_temp_min = None
 
     def today(self, date_str: str) -> list[HourEntry]:
         """Get today's entries."""
@@ -468,6 +481,7 @@ class EnergyLedger:
                     miner_kwh=ed.get("miner_kwh", 0),
                     action=ed.get("action", ""),
                     temperature_c=ed.get("temperature_c", 0),
+                    cell_temp_min_c=ed.get("cell_temp_min_c"),
                 )
             )
         ledger._current_hour = data.get("current_hour", -1)
