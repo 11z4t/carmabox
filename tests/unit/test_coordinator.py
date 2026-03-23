@@ -1230,8 +1230,8 @@ class TestAdapterIntegration:
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=20)
         await coord._cmd_discharge(state, 1000)
 
-        a1.set_ems_mode.assert_called_once_with("discharge_battery")
-        a2.set_ems_mode.assert_called_once_with("discharge_battery")
+        a1.set_ems_mode.assert_called_once_with("peak_shaving")
+        a2.set_ems_mode.assert_called_once_with("peak_shaving")
         # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
         # Battery 1 gets 1200/1300 of 1000 = 923W
         a1.set_discharge_limit.assert_called_once_with(0)
@@ -1250,7 +1250,7 @@ class TestAdapterIntegration:
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
         await coord._cmd_discharge(state, 1000)
 
-        a1.set_ems_mode.assert_called_once_with("discharge_battery")
+        a1.set_ems_mode.assert_called_once_with("peak_shaving")
         a1.set_discharge_limit.assert_not_called()
         assert coord._last_command == BatteryCommand.IDLE
 
@@ -1426,7 +1426,7 @@ class TestR3RollbackPartialFailure:
         # No standby calls — only discharge_battery
         for adapter in [a1, a2]:
             for call in adapter.set_ems_mode.call_args_list:
-                assert call.args == ("discharge_battery",)
+                assert call.args == ("peak_shaving",)
 
 
 class TestApplianceTracking:
