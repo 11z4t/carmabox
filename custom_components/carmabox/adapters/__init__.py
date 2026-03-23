@@ -135,3 +135,27 @@ class PVAdapter(ABC):
     @abstractmethod
     def tomorrow_hourly_kw(self) -> list[float]:
         """24 hourly PV forecast for tomorrow (kW)."""
+
+
+class WeatherAdapter(ABC):
+    """Contract for weather station adapters (Tempest, Netatmo, SMHI)."""
+
+    @property
+    @abstractmethod
+    def temperature_c(self) -> float:
+        """Current outdoor temperature (°C)."""
+
+    @property
+    @abstractmethod
+    def illuminance_lux(self) -> float:
+        """Current solar illuminance (lux)."""
+
+    @property
+    @abstractmethod
+    def wind_speed_ms(self) -> float:
+        """Current wind speed (m/s)."""
+
+    @property
+    @abstractmethod
+    def wind_gust_ms(self) -> float:
+        """Maximum wind gust speed (m/s)."""

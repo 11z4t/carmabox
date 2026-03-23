@@ -198,3 +198,10 @@ CONF_EV = "ev"
 CONF_GRID_OPERATOR = "grid_operator"
 CONF_PRICE_AREA = "price_area"
 CONF_HOUSEHOLD_SIZE = "household_size"
+
+# IT-1965: EV SoC target based on 3-day solar forecast
+DEFAULT_SOLAR_GOOD_KWH = 30.0    # Above this = good sun day
+DEFAULT_SOLAR_OK_KWH = 20.0      # 20-30 = OK, below 20 = bad
+DEFAULT_EV_SOC_MIN_TARGET = 75.0  # Bad sun = conservative
+DEFAULT_EV_SOC_MAX_TARGET = 100.0 # Good sun or bad forecast ahead = charge full
+DEFAULT_EV_SOC_DERATING = 10.0    # Subtract from last known SoC (conservative)

@@ -28,11 +28,12 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .adapters import EVAdapter, InverterAdapter
+from .adapters import EVAdapter, InverterAdapter, WeatherAdapter
 from .adapters.easee import EaseeAdapter
 from .adapters.goodwe import GoodWeAdapter
 from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
+from .adapters.tempest import TempestAdapter
 from .const import (
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
@@ -195,6 +196,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self.ev_adapter = EaseeAdapter(
                     hass, ev_device_id, str(ev_prefix), charger_id=ev_charger_id
                 )
+
+        # ── Weather adapter ───────────────────────────────────
+        # IT-1585: Tempest weather station integration (optional)
+        # Provides: temperature (BMS cold lock), illuminance (PV sanity check)
+        self.weather_adapter: WeatherAdapter | None = None
+        if self._cfg.get("weather_enabled", True):  # Default enabled if Tempest exists
+            self.weather_adapter = TempestAdapter(hass)
 
         self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
@@ -1227,8 +1235,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 # IT-1939: Taper detection — if BMS can't accept charge, surplus to loads
                 if self._is_in_taper(state):
                     export_w = abs(state.grid_power_w)
+                    soc = state.total_battery_soc
                     reasoning.append(
-                        f"BMS taper detekterad — {export_w:.0f}W export vid {state.total_battery_soc:.0f}% SoC"
+                        f"BMS taper detekterad — {export_w:.0f}W export vid {soc:.0f}% SoC"
                     )
                     self._track_rule("RULE_0_5", "charge_pv_taper")
                     self._record_decision(
@@ -1953,6 +1962,78 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 weighted_net / 1000,
             )
 
+
+    def _calculate_ev_target(self) -> float:
+        """IT-1965: Dynamic EV SoC target based on 3-day solar forecast.
+
+        Rules:
+        - worst_3_days < SOLAR_OK → 100% (bad weather ahead, charge while we can!)
+        - forecast_tomorrow > SOLAR_GOOD → 100% (good sun tomorrow)
+        - forecast_tomorrow 20-30 → linear 75-100%
+        - else → 75% (conservative)
+
+        Thresholds configurable via config flow.
+        """
+        from .const import (
+            DEFAULT_SOLAR_GOOD_KWH,
+            DEFAULT_SOLAR_OK_KWH,
+            DEFAULT_EV_SOC_MIN_TARGET,
+            DEFAULT_EV_SOC_MAX_TARGET,
+        )
+
+        solar_good = float(self._cfg.get("solar_good_kwh", DEFAULT_SOLAR_GOOD_KWH))
+        solar_ok = float(self._cfg.get("solar_ok_kwh", DEFAULT_SOLAR_OK_KWH))
+        min_target = float(self._cfg.get("ev_soc_min_target", DEFAULT_EV_SOC_MIN_TARGET))
+        max_target = float(self._cfg.get("ev_soc_max_target", DEFAULT_EV_SOC_MAX_TARGET))
+
+        try:
+            from .adapters.solcast import SolcastAdapter
+            solcast = SolcastAdapter(self.hass)
+            daily = solcast.forecast_daily_3d  # [today, tomorrow, day3, day4, ...]
+        except Exception:
+            # Fallback if solcast unavailable
+            return float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
+
+        if len(daily) < 3:
+            return float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
+
+        tomorrow = daily[1] if len(daily) > 1 else 0
+        worst_3_days = min(daily[1:4]) if len(daily) >= 4 else min(daily[1:])
+
+        # Rule 1: Bad weather ahead → charge full while we can
+        if worst_3_days < solar_ok:
+            _LOGGER.info(
+                "CARMA EV: worst 3-day forecast %.1f kWh < %.0f → target 100%%",
+                worst_3_days, solar_ok,
+            )
+            return max_target
+
+        # Rule 2: Good sun tomorrow → charge full
+        if tomorrow > solar_good:
+            _LOGGER.info(
+                "CARMA EV: tomorrow %.1f kWh > %.0f → target 100%%",
+                tomorrow, solar_good,
+            )
+            return max_target
+
+        # Rule 3: OK sun → linear interpolation
+        if tomorrow > solar_ok:
+            ratio = (tomorrow - solar_ok) / (solar_good - solar_ok)
+            target = min_target + ratio * (max_target - min_target)
+            _LOGGER.info(
+                "CARMA EV: tomorrow %.1f kWh (OK) → target %.0f%%",
+                tomorrow, target,
+            )
+            return round(target, 0)
+
+        # Rule 4: Bad sun tomorrow → conservative
+        _LOGGER.info(
+            "CARMA EV: tomorrow %.1f kWh < %.0f → target %.0f%%",
+            tomorrow, solar_ok, min_target,
+        )
+        return min_target
+
+
     async def _execute_ev(self, state: CarmaboxState) -> None:
         """Execute EV charging decisions (PLAT-949).
 
@@ -1975,7 +2056,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── EV-2: Target SoC reached → stop ──────────────────
-        ev_target = float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
+        ev_target = self._calculate_ev_target()
         if state.ev_soc >= ev_target:
             if self._ev_enabled:
                 _LOGGER.info(
