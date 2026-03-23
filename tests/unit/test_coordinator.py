@@ -218,11 +218,26 @@ class TestExecute:
         assert coord._last_command == BatteryCommand.CHARGE_PV
 
     @pytest.mark.asyncio
-    async def test_full_battery_triggers_standby(self) -> None:
+    async def test_full_battery_with_grid_import_triggers_proactive_discharge(self) -> None:
+        """SoC 100% + grid importing → proactive discharge (not standby)."""
         coord = _make_coordinator({"battery_ems_1": "select.ems1"})
 
         state = CarmaboxState(
             grid_power_w=1000,
+            battery_soc_1=100,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        # Decision recorded as discharge (service call may not set _last_command in test)
+        assert coord.last_decision is not None
+        assert coord.last_decision.action == "discharge"
+
+    async def test_full_battery_exporting_triggers_standby(self) -> None:
+        """SoC 100% + exporting → standby (correct, no discharge during export)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # exporting
             battery_soc_1=100,
             battery_soc_2=-1,
         )

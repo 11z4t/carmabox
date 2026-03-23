@@ -1118,6 +1118,60 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 return
 
+        # ── RULE 1.8: Proactive discharge — SoC high + grid importing ──
+        # When batteries are near-full and grid is importing (even below target),
+        # discharge to eliminate unnecessary grid import. Solar will refill batteries.
+        # This maximises self-consumption and reduces Ellevio weighted average.
+        #
+        # Aggressiveness scales with SoC and PV availability:
+        # - SoC >= 80% + PV active (>500W) → aggressive: target nätimport = 0
+        # - SoC >= 80% + no PV → moderate: only discharge if grid > 200W
+        # - SoC < 80% → skip (let target-based RULE 2 handle it)
+        _proactive_min_grid_w = 50.0 if pv_kw > 0.5 else 200.0
+        _proactive_soc_threshold = 80.0 if pv_kw > 0.5 else 90.0
+        if (
+            state.total_battery_soc >= _proactive_soc_threshold
+            and net_w > _proactive_min_grid_w
+            and weighted_net <= target_w  # NOT already handled by RULE 2
+            and not state.is_exporting
+            and not is_night  # Night: let grid charge / EV logic handle it
+        ):
+            # With PV: aggressively target 0W grid (sol fyller tillbaka)
+            # Without PV: moderate — just reduce grid, don't drain battery
+            proactive_w = int(min(net_w, 5000))  # Match grid import fully
+            result = self.safety.check_discharge(
+                state.battery_soc_1,
+                state.battery_soc_2,
+                self.min_soc,
+                state.grid_power_w,
+                temp_c,
+            )
+            if result.ok:
+                pv_note = (
+                    f"PV {pv_kw:.1f} kW → solen fyller tillbaka"
+                    if pv_kw > 0.3
+                    else "ingen PV → moderat"
+                )
+                step5 = (
+                    f"Proaktiv urladdning {proactive_w}W — SoC {state.total_battery_soc:.0f}% "
+                    f"hög, eliminerar {net_w:.0f}W nätimport, {pv_note}"
+                )
+                reasoning.append(step5)
+                chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+                await self._cmd_discharge(state, proactive_w)
+                self._record_decision(
+                    state,
+                    "discharge",
+                    f"Proaktiv urladdning {proactive_w}W — "
+                    f"SoC {state.total_battery_soc:.0f}%, grid {net_w:.0f}W, "
+                    f"PV {pv_kw:.1f} kW "
+                    f"({state.current_price:.0f} öre/kWh)",
+                    discharge_w=proactive_w,
+                    reasoning=reasoning,
+                    reasoning_chain=chain,
+                )
+                return
+
         # ── RULE 2: Load > target → discharge (even at 100%) ──
         # Hysteresis: if already discharging, keep going until grid drops
         # 10% BELOW target (prevents oscillation at boundary).
