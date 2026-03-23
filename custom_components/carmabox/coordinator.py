@@ -169,6 +169,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # EV executor state (PLAT-949)
         self._ev_enabled: bool = False
+        self._last_known_ev_soc: float = -1.0
         self._ev_current_amps: int = 0
         self._ev_last_ramp_time: float = 0.0
         self._ev_initialized: bool = False
@@ -959,11 +960,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH)
             )
 
-            if ev_enabled and state.ev_soc >= 0:
+            # IT-1965: Use last known SoC with derating if current unavailable
+            ev_soc_for_plan = state.ev_soc
+            if ev_soc_for_plan < 0:
+                # Try last known SoC from CARMA state (derated by 10%)
+                derating = float(self._cfg.get("ev_soc_derating", 10.0))
+                if hasattr(self, "_last_known_ev_soc") and self._last_known_ev_soc > 0:
+                    ev_soc_for_plan = max(0, self._last_known_ev_soc - derating)
+                    _LOGGER.info(
+                        "CARMA EV: using last known SoC %.0f%% - %.0f%% derating = %.0f%%",
+                        self._last_known_ev_soc, derating, ev_soc_for_plan,
+                    )
+            elif state.ev_soc > 0:
+                self._last_known_ev_soc = state.ev_soc
+
+            if ev_enabled and ev_soc_for_plan >= 0:
                 ev_demand = calculate_ev_schedule(
                     start_hour=start_hour,
                     num_hours=len(prices),
-                    ev_soc_pct=state.ev_soc,
+                    ev_soc_pct=ev_soc_for_plan,
                     ev_capacity_kwh=ev_capacity,
                     hourly_prices=prices,
                     hourly_loads=consumption[: len(prices)],
