@@ -709,7 +709,7 @@ class TestDecisionRecording:
     @pytest.mark.asyncio
     async def test_idle_decision_recorded(self) -> None:
         coord = _make_coordinator()
-        state = CarmaboxState(grid_power_w=1000, battery_soc_1=80)
+        state = CarmaboxState(grid_power_w=100, battery_soc_1=30)
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value.hour = 12
             await coord._execute(state)

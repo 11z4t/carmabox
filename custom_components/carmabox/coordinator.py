@@ -1151,10 +1151,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             }
         )
 
-        # ── RULE 0.5: PV producing + battery not full → charge_pv ──
-        # This catches the case where PV > 500W but house consumes more
-        # than PV (grid > 0). Battery should still charge from PV.
-        if pv_kw > 0.5 and not state.all_batteries_full:
+        # ── RULE 0.5: PV surplus + battery not full → charge_pv ──
+        # ONLY charge batteries from PV if we are EXPORTING (PV > house load).
+        # If grid is importing, PV doesn't cover house — don't add battery
+        # charging load on top (it increases grid import).
+        if pv_kw > 0.5 and not state.all_batteries_full and state.is_exporting:
             charge_result = self.safety.check_charge(
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
@@ -1259,17 +1260,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 return
 
-        # ── RULE 1.8: Proactive discharge — SoC high + grid importing ──
-        # When batteries are near-full and grid is importing (even below target),
-        # discharge to eliminate unnecessary grid import. Solar will refill batteries.
-        # This maximises self-consumption and reduces Ellevio weighted average.
+        # ── RULE 1.8: Proactive discharge — eliminate grid import ──
+        # Batteries should ALWAYS support the house when SoC is high enough.
+        # Don't wait for grid to exceed target — ANY unnecessary grid import
+        # when batteries have capacity is wasted money.
         #
-        # Aggressiveness scales with SoC and PV availability:
-        # - SoC >= 80% + PV active (>500W) → aggressive: target nätimport = 0
-        # - SoC >= 80% + no PV → moderate: only discharge if grid > 200W
-        # - SoC < 80% → skip (let target-based RULE 2 handle it)
-        _proactive_min_grid_w = 50.0 if pv_kw > 0.5 else 200.0
-        _proactive_soc_threshold = 80.0 if pv_kw > 0.5 else 90.0
+        # Aggressiveness scales with SoC and PV:
+        # - SoC >= 50% + PV active (>300W) → aggressive: target 0W grid
+        #   (PV + battery = house should run on free energy)
+        # - SoC >= 80% + no PV → moderate: discharge to reduce grid
+        # - SoC >= min_soc + 5% → conservative: only if grid > 500W
+        _proactive_min_grid_w = 50.0 if pv_kw > 0.3 else 200.0
+        _proactive_soc_threshold = max(self.min_soc + 10, 50.0) if pv_kw > 0.3 else 80.0
         if (
             state.total_battery_soc >= _proactive_soc_threshold
             and net_w > _proactive_min_grid_w
