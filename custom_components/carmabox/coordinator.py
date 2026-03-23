@@ -2658,7 +2658,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         battery_charge_w = max(0, total_battery_w)
         grid_import_w = max(0, state.grid_power_w)
         grid_export_w = max(0, -state.grid_power_w)
-        house_w = grid_import_w + battery_discharge_w + state.pv_power_w - battery_charge_w - grid_export_w
+        house_w = (
+            grid_import_w
+            + battery_discharge_w
+            + state.pv_power_w
+            - battery_charge_w
+            - grid_export_w
+        )
 
         # Battery SoC average
         battery_soc = state.total_battery_soc
