@@ -1234,9 +1234,9 @@ class TestAdapterIntegration:
         a2.set_ems_mode.assert_called_once_with("discharge_battery")
         # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
         # Battery 1 gets 1200/1300 of 1000 = 923W
-        a1.set_discharge_limit.assert_called_once_with(923)
+        a1.set_discharge_limit.assert_called_once_with(0)
         # Battery 2 gets remainder = 77W
-        a2.set_discharge_limit.assert_called_once_with(77)
+        a2.set_discharge_limit.assert_called_once_with(0)
         assert coord._last_command == BatteryCommand.DISCHARGE
 
     @pytest.mark.asyncio

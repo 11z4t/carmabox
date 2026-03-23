@@ -3520,9 +3520,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         _LOGGER.info("CARMA: discharge %dW (target %.1f kW)", watts, self.target_kw)
 
         if self.inverter_adapters:
-            # Calculate energy-proportional split across adapters
-            # Use SoC × capacity (kWh) so different-sized batteries
-            # discharge proportional to stored energy, not just SoC %
+            # GoodWe peak_shaving_power_limit = max grid import threshold.
+            # To force discharge: set limit to 0 (zero grid import allowed).
+            # GoodWe will discharge whatever is needed to keep grid <= limit.
+            # The 'watts' parameter is informational (how much we EXPECT to discharge).
+            #
+            # Each inverter gets limit=0 (target zero import).
+            # GoodWe internally splits discharge proportional to its capacity.
             opts = self._cfg
             defaults = [DEFAULT_BATTERY_1_KWH, DEFAULT_BATTERY_2_KWH]
             caps = [
@@ -3536,20 +3540,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             success = False
             failed = False
-            remaining_w = watts
             for idx, adapter in enumerate(self.inverter_adapters):
-                if idx == len(self.inverter_adapters) - 1:
-                    w = remaining_w  # Last adapter gets remainder
-                else:
-                    w = int(watts * stored[idx] / total_soc)
-                    remaining_w -= w
-                if w <= 0:
+                if stored[idx] <= 0:
                     continue
                 ems_ok = await adapter.set_ems_mode("discharge_battery")
                 if not ems_ok:
                     failed = True
                     continue
-                limit_ok = await adapter.set_discharge_limit(w)
+                # Set peak_shaving_power_limit to 0 = target zero grid import
+                # GoodWe will discharge enough to compensate house load
+                limit_ok = await adapter.set_discharge_limit(0)
                 if not limit_ok:
                     # K2: Rollback EMS if limit failed — avoid stale discharge
                     _LOGGER.error("Discharge limit failed — rolling back to standby")
