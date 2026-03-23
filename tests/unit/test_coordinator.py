@@ -127,6 +127,8 @@ def _make_coordinator(
     coord._savings_store.async_save = AsyncMock()
     coord._consumption_loaded = True  # Skip restore in tests
     coord._consumption_last_save = 0.0
+    coord._rule_triggers = {}  # IT-1937: Rule tracking
+    coord._active_rule_id = ""  # IT-1937: Active rule
     coord._consumption_last_hour = -1
     coord._consumption_store = MagicMock()
     coord._consumption_store.async_save = AsyncMock()

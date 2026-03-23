@@ -59,6 +59,14 @@ class HourEntry:
     action: str = ""  # CARMA decision this hour (idle/discharge/grid_charge/etc)
     temperature_c: float = 0.0  # Outdoor temperature
 
+    # IT-1936: Per-appliance tracking
+    tvatt_kwh: float = 0.0  # Tvättmaskin consumption this hour
+    tork_kwh: float = 0.0  # Torktumlare consumption this hour
+    disk_kwh: float = 0.0  # Diskmaskin consumption this hour
+    vp_kontor_kwh: float = 0.0  # VP kontor consumption this hour
+    vp_pool_kwh: float = 0.0  # VP pool consumption this hour
+    cirk_pool_kwh: float = 0.0  # Cirkulationspump pool consumption this hour
+
     @property
     def grid_cost_kr(self) -> float:
         """What grid import cost this hour (kr)."""
@@ -136,6 +144,13 @@ class HourEntry:
             "miner_kwh": round(self.miner_kwh, 3),
             "action": self.action,
             "temperature_c": round(self.temperature_c, 1),
+            # IT-1936: Per-appliance tracking
+            "tvatt_kwh": round(self.tvatt_kwh, 3),
+            "tork_kwh": round(self.tork_kwh, 3),
+            "disk_kwh": round(self.disk_kwh, 3),
+            "vp_kontor_kwh": round(self.vp_kontor_kwh, 3),
+            "vp_pool_kwh": round(self.vp_pool_kwh, 3),
+            "cirk_pool_kwh": round(self.cirk_pool_kwh, 3),
         }
         if self.appliance_kwh:
             result["appliances"] = {
@@ -179,6 +194,14 @@ class EnergyLedger:
     _last_action: str = ""  # Snapshot at hour end
     _last_temp: float = 0.0  # Snapshot at hour end
 
+    # IT-1936: Per-appliance accumulators
+    _acc_tvatt_w: float = 0.0
+    _acc_tork_w: float = 0.0
+    _acc_disk_w: float = 0.0
+    _acc_vp_kontor_w: float = 0.0
+    _acc_vp_pool_w: float = 0.0
+    _acc_cirk_pool_w: float = 0.0
+
     def record_sample(
         self,
         hour: int,
@@ -199,6 +222,13 @@ class EnergyLedger:
         ev_soc: float = 0.0,
         action: str = "",
         temperature_c: float = 0.0,
+        # IT-1936: Per-appliance parameters
+        tvatt_w: float = 0.0,
+        tork_w: float = 0.0,
+        disk_w: float = 0.0,
+        vp_kontor_w: float = 0.0,
+        vp_pool_w: float = 0.0,
+        cirk_pool_w: float = 0.0,
     ) -> None:
         """Record a 30-second sample.
 
@@ -267,6 +297,14 @@ class EnergyLedger:
         self._last_action = action
         self._last_temp = temperature_c
 
+        # IT-1936: Accumulate per-appliance power
+        self._acc_tvatt_w += tvatt_w * wh_factor
+        self._acc_tork_w += tork_w * wh_factor
+        self._acc_disk_w += disk_w * wh_factor
+        self._acc_vp_kontor_w += vp_kontor_w * wh_factor
+        self._acc_vp_pool_w += vp_pool_w * wh_factor
+        self._acc_cirk_pool_w += cirk_pool_w * wh_factor
+
     def _flush_hour(self) -> None:
         """Flush accumulated samples into an HourEntry."""
         if self._acc_samples == 0:
@@ -299,6 +337,13 @@ class EnergyLedger:
             miner_kwh=self._acc_miner_w / 1000,
             action=self._last_action,
             temperature_c=self._last_temp,
+            # IT-1936: Per-appliance fields
+            tvatt_kwh=self._acc_tvatt_w / 1000,
+            tork_kwh=self._acc_tork_w / 1000,
+            disk_kwh=self._acc_disk_w / 1000,
+            vp_kontor_kwh=self._acc_vp_kontor_w / 1000,
+            vp_pool_kwh=self._acc_vp_pool_w / 1000,
+            cirk_pool_kwh=self._acc_cirk_pool_w / 1000,
         )
         self.entries.append(entry)
 
@@ -326,6 +371,14 @@ class EnergyLedger:
         self._last_ev_soc = 0.0
         self._last_action = ""
         self._last_temp = 0.0
+
+        # IT-1936: Reset per-appliance accumulators
+        self._acc_tvatt_w = 0.0
+        self._acc_tork_w = 0.0
+        self._acc_disk_w = 0.0
+        self._acc_vp_kontor_w = 0.0
+        self._acc_vp_pool_w = 0.0
+        self._acc_cirk_pool_w = 0.0
 
     def today(self, date_str: str) -> list[HourEntry]:
         """Get today's entries."""
@@ -358,6 +411,14 @@ class EnergyLedger:
         total_house = sum(e.house_consumption_kwh for e in day)
         total_miner = sum(e.miner_kwh for e in day)
         temps = [e.temperature_c for e in day if e.temperature_c != 0]
+
+        # IT-1936: Aggregate per-appliance consumption
+        total_tvatt = sum(e.tvatt_kwh for e in day)
+        total_tork = sum(e.tork_kwh for e in day)
+        total_disk = sum(e.disk_kwh for e in day)
+        total_vp_kontor = sum(e.vp_kontor_kwh for e in day)
+        total_vp_pool = sum(e.vp_pool_kwh for e in day)
+        total_cirk_pool = sum(e.cirk_pool_kwh for e in day)
 
         cheapest = min(day, key=lambda e: e.total_cost_kr) if day else None
         most_expensive = max(day, key=lambda e: e.total_cost_kr) if day else None
@@ -401,6 +462,13 @@ class EnergyLedger:
             "min_temp_c": round(min(temps), 1) if temps else 0,
             "max_temp_c": round(max(temps), 1) if temps else 0,
             "avg_temp_c": round(sum(temps) / len(temps), 1) if temps else 0,
+            # IT-1936: Per-appliance aggregates
+            "total_tvatt_kwh": round(total_tvatt, 3),
+            "total_tork_kwh": round(total_tork, 3),
+            "total_disk_kwh": round(total_disk, 3),
+            "total_vp_kontor_kwh": round(total_vp_kontor, 3),
+            "total_vp_pool_kwh": round(total_vp_pool, 3),
+            "total_cirk_pool_kwh": round(total_cirk_pool, 3),
             # Hourly table for mail
             "hourly": [e.to_dict() for e in day],
         }
@@ -468,6 +536,13 @@ class EnergyLedger:
                     miner_kwh=ed.get("miner_kwh", 0),
                     action=ed.get("action", ""),
                     temperature_c=ed.get("temperature_c", 0),
+                    # IT-1936: Deserialize per-appliance fields
+                    tvatt_kwh=ed.get("tvatt_kwh", 0),
+                    tork_kwh=ed.get("tork_kwh", 0),
+                    disk_kwh=ed.get("disk_kwh", 0),
+                    vp_kontor_kwh=ed.get("vp_kontor_kwh", 0),
+                    vp_pool_kwh=ed.get("vp_pool_kwh", 0),
+                    cirk_pool_kwh=ed.get("cirk_pool_kwh", 0),
                 )
             )
         ledger._current_hour = data.get("current_hour", -1)

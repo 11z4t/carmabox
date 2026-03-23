@@ -3203,6 +3203,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         temperature_c = self._read_float(temp_entity, 0.0)
 
+        # IT-1936: Read per-appliance sensors
+        tvatt_w = self._read_float("sensor.102_shelly_plug_g3_power", 0.0)
+        tork_w = self._read_float("sensor.103_shelly_plug_g3_power", 0.0)
+        disk_w = self._read_float("sensor.98_shelly_plug_s_power", 0.0)
+        vp_kontor_w = self._read_float(
+            "sensor.kontor_varmepump_alltid_pa_switch_0_power", 0.0
+        )
+        vp_pool_w = self._read_float("sensor.poolvarmare_shelly_1pm_power", 0.0)
+        cirk_pool_w = self._read_float("sensor.gv_cirkulationspump_effekt", 0.0)
+
         self.ledger.record_sample(
             hour=hour,
             date_str=today,
@@ -3222,6 +3232,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_soc=ev_soc,
             action=action,
             temperature_c=temperature_c,
+            # IT-1936: Pass per-appliance power
+            tvatt_w=tvatt_w,
+            tork_w=tork_w,
+            disk_w=disk_w,
+            vp_kontor_w=vp_kontor_w,
+            vp_pool_w=vp_pool_w,
+            cirk_pool_w=cirk_pool_w,
         )
         # CARMA-P0-FIXES Task 4: Save ledger after recording (rate-limited)
         self.hass.async_create_task(

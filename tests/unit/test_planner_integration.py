@@ -90,6 +90,10 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     # PLAT-965: Predictor
     coord.predictor = ConsumptionPredictor()
 
+    # IT-1937: Rule tracking
+    coord._rule_triggers = {}
+    coord._active_rule_id = ""
+
     return coord
 
 
