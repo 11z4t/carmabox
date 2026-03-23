@@ -85,7 +85,7 @@ CROSSCHARGE_THRESHOLD_W = 500
 EXPORT_GUARD_THRESHOLD_W = -1000
 TEMPERATURE_MIN_C = 0
 TEMPERATURE_MAX_C = 45
-MAX_MODE_CHANGES_PER_HOUR = 120  # 2/min — with hysteresis should stay well under
+MAX_MODE_CHANGES_PER_HOUR = 30  # 0.5/min — prevents oscillation flooding
 
 # Appliance categories
 APPLIANCE_CATEGORIES = {

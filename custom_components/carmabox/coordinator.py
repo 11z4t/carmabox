@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import deque
 from datetime import datetime, timedelta
 from enum import Enum
@@ -198,6 +199,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Plan accuracy tracking
         self.hourly_actuals: list[HourActual] = []
         self._last_tracked_hour: int = -1
+
+        # Plan self-correction — track consecutive deviations >50%
+        self._plan_deviation_count: int = 0
+        self._plan_last_correction_time: float = 0.0
 
         # PLAT-940: Shadow mode — CARMA vs v6 comparison
         self.shadow: ShadowComparison = ShadowComparison()
@@ -629,6 +634,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._plan_counter = 0
                 self._generate_plan(state)
                 self._check_repair_issues()
+
+            # Plan self-correction — adjust if actual deviates >50% from plan for 3+ cycles
+            self._check_plan_correction(state)
 
             await self._execute(state)
             await self._watchdog(state)
@@ -1344,6 +1352,84 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.warning("CARMA: pool switch failed: %s", entity_id, exc_info=True)
 
+    def _check_plan_correction(self, state: CarmaboxState) -> None:
+        """Plan self-correction — adjust action if actual deviates >50% from plan.
+
+        If planned grid_kw deviates >50% from actual for 3+ consecutive cycles
+        AND the plan action is not achieving its goal, switch to corrective action.
+
+        Examples:
+        - Plan: grid_charge, but grid_kw keeps exceeding target → switch to idle
+        - Plan: idle, but grid_kw well below target → allow opportunistic grid_charge
+        """
+        now = time.time()
+        # Rate limit corrections to once per 5 minutes to avoid oscillation
+        if now - self._plan_last_correction_time < 300:
+            return
+
+        hour = datetime.now().hour
+        planned = next((h for h in self.plan if h.hour == hour), None)
+        if not planned:
+            self._plan_deviation_count = 0
+            return
+
+        # Calculate actual grid_kw (same as used in hourly tracking)
+        grid_kw = max(0, state.grid_power_w) / 1000
+        planned_grid_kw = planned.grid_kw
+
+        # Check for >50% deviation
+        if planned_grid_kw > 0:
+            deviation_pct = abs(grid_kw - planned_grid_kw) / planned_grid_kw
+        else:
+            # No plan expectation → no deviation
+            deviation_pct = 0.0
+
+        if deviation_pct > 0.5:
+            self._plan_deviation_count += 1
+        else:
+            self._plan_deviation_count = 0
+            return
+
+        # Trigger correction after 3 consecutive deviations
+        if self._plan_deviation_count < 3:
+            return
+
+        # Determine correction needed
+        correction_needed = False
+        new_action = planned.action
+
+        # Case 1: Plan says grid_charge but grid_kw exceeds target significantly
+        target_kw = self.target_kw
+        if planned.action == "g" and grid_kw > target_kw * 1.5:
+            new_action = "i"  # Switch to idle
+            correction_needed = True
+            _LOGGER.warning(
+                "PLAN SELF-CORRECT: planned grid_charge but grid %.1f kW > target %.1f kW "
+                "for %d cycles → switching to idle",
+                grid_kw,
+                target_kw,
+                self._plan_deviation_count,
+            )
+
+        # Case 2: Plan says idle but grid_kw well below target (opportunity for cheap charge)
+        elif planned.action == "i" and grid_kw < target_kw * 0.3 and state.current_price < 30:
+            new_action = "g"  # Allow opportunistic grid_charge
+            correction_needed = True
+            _LOGGER.warning(
+                "PLAN SELF-CORRECT: planned idle but grid %.1f kW << target %.1f kW "
+                "and price %.0f öre cheap for %d cycles → allowing grid_charge",
+                grid_kw,
+                target_kw,
+                state.current_price,
+                self._plan_deviation_count,
+            )
+
+        if correction_needed:
+            # Update planned action for current hour
+            planned.action = new_action
+            self._plan_last_correction_time = now
+            self._plan_deviation_count = 0
+
     async def _watchdog(self, state: CarmaboxState) -> None:
         """Self-correction watchdog — catches obvious decision errors.
 
@@ -1402,13 +1488,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # W2/W3: Grid > target + not discharging (battery has capacity)
+        # Add 10% hysteresis to prevent oscillation at boundary
+        w2_threshold = target_w * 1.1
         if (
-            weighted_net > target_w
+            weighted_net > w2_threshold
             and weight > 0
             and state.total_battery_soc > self.min_soc
-            and action not in ("discharge",)
+            and action not in ("discharge", "grid_charge")
         ):
-            discharge_w = int((weighted_net - target_w) / weight)
+            discharge_w = int((weighted_net - w2_threshold) / weight)
             if discharge_w > wd_discharge_min:
                 _LOGGER.warning(
                     "WATCHDOG W2: grid %.0fW > target %.0fW, bat %s%%, "

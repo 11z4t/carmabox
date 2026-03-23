@@ -65,6 +65,9 @@ class SafetyGuard:
         # #7 Rate guard — track mode changes (S3: bounded deque)
         self._mode_change_timestamps: deque[float] = deque(maxlen=max_mode_changes_per_hour * 2)
 
+        # Rate limit cooldown — when triggered, pause ALL commands for 5 min
+        self._rate_limit_cooldown_until: float | None = None
+
         # #8 Heartbeat — track last successful update
         self._last_heartbeat: float = time.monotonic()
 
@@ -256,15 +259,35 @@ class SafetyGuard:
         """#7 Rate guard — block if too many mode changes per hour.
 
         Prevents oscillation and Modbus flooding.
+        When triggered, enters 5-minute cooldown to break oscillation cycle.
         """
         now = time.monotonic()
+
+        # Check if in cooldown period
+        if self._rate_limit_cooldown_until is not None:
+            if now < self._rate_limit_cooldown_until:
+                remaining = int(self._rate_limit_cooldown_until - now)
+                reason = f"rate limit cooldown: {remaining}s remaining"
+                _LOGGER.debug("SafetyGuard BLOCK: %s", reason)
+                r = SafetyResult(ok=False, reason=reason)
+                # Don't log during cooldown to avoid spam
+                return r
+            # Cooldown expired — clear it
+            _LOGGER.info("SafetyGuard: rate limit cooldown expired, resuming normal operation")
+            self._rate_limit_cooldown_until = None
+
         cutoff = now - 3600  # 1 hour window
 
         # Count recent timestamps (deque is already bounded)
         recent_count = sum(1 for t in self._mode_change_timestamps if t > cutoff)
 
         if recent_count >= self.max_mode_changes:
-            reason = f"rate limit: {recent_count} changes in 1h (max {self.max_mode_changes})"
+            # Trigger 5-minute cooldown
+            self._rate_limit_cooldown_until = now + 300  # 5 minutes
+            reason = (
+                f"rate limit: {recent_count} changes in 1h (max {self.max_mode_changes}) "
+                f"— entering 5min cooldown"
+            )
             _LOGGER.warning("SafetyGuard BLOCK: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("rate_limit", r)
