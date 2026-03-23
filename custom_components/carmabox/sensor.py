@@ -54,6 +54,8 @@ def _plan_status_value(coord: CarmaboxCoordinator) -> str:
     last = coord._last_command
     if last == BatteryCommand.DISCHARGE:
         return "discharging"
+    if last == BatteryCommand.CHARGE_PV_TAPER:
+        return "charging_taper"  # IT-1939: BMS taper state
     if last == BatteryCommand.CHARGE_PV:
         return "charging"
     return "idle"
@@ -525,7 +527,9 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        value_fn=lambda coord: round(coord.data.total_battery_soc, 0) if coord.data else 0,
+        value_fn=lambda coord: round(coord.data.total_battery_soc, 0)
+        if coord.data
+        else 0,
     ),
     CarmaboxSensorDescription(
         key="grid_import",
@@ -655,7 +659,9 @@ def _appliance_value_factory(category: str) -> Callable[[CarmaboxCoordinator], f
     return _value
 
 
-def _appliance_attrs_factory(category: str) -> Callable[[CarmaboxCoordinator], dict[str, Any]]:
+def _appliance_attrs_factory(
+    category: str,
+) -> Callable[[CarmaboxCoordinator], dict[str, Any]]:
     """Create an attrs function for a specific appliance category."""
 
     def _attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
@@ -664,7 +670,9 @@ def _appliance_attrs_factory(category: str) -> Callable[[CarmaboxCoordinator], d
         members = [app for app in coord._appliances if app.get("category") == category]
         return {
             "energy_today_kwh": round(energy_wh / 1000, 2),
-            "appliances": [{"entity_id": m["entity_id"], "name": m["name"]} for m in members],
+            "appliances": [
+                {"entity_id": m["entity_id"], "name": m["name"]} for m in members
+            ],
         }
 
     return _attrs
@@ -706,10 +714,14 @@ async def async_setup_entry(
 ) -> None:
     """Set up CARMA Box sensors from EntityDescription."""
     coordinator: CarmaboxCoordinator = entry.runtime_data
-    entities = [CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS]
+    entities = [
+        CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS
+    ]
 
     # PLAT-943: Add per-category appliance sensors
-    appliances = list(entry.options.get("appliances") or entry.data.get("appliances") or [])
+    appliances = list(
+        entry.options.get("appliances") or entry.data.get("appliances") or []
+    )
     for desc in _build_appliance_descriptions(appliances):
         entities.append(CarmaboxSensor(coordinator, entry, desc))
 

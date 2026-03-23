@@ -71,7 +71,13 @@ from .optimizer.consumption import ConsumptionProfile, calculate_house_consumpti
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.hourly_ledger import EnergyLedger
-from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
+from .optimizer.models import (
+    CarmaboxState,
+    Decision,
+    HourActual,
+    HourPlan,
+    ShadowComparison,
+)
 from .optimizer.planner import generate_plan
 from .optimizer.predictor import ConsumptionPredictor, HourSample
 from .optimizer.report import (
@@ -128,6 +134,7 @@ class BatteryCommand(Enum):
 
     IDLE = "idle"
     CHARGE_PV = "charge_pv"
+    CHARGE_PV_TAPER = "charge_pv_taper"  # IT-1939: BMS taper detection
     STANDBY = "standby"
     DISCHARGE = "discharge"
 
@@ -188,7 +195,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     hass, ev_device_id, str(ev_prefix), charger_id=ev_charger_id
                 )
 
-        self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
+        self.target_kw: float = self._cfg.get(
+            "target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW
+        )
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
         init_now = datetime.now()
         self.savings = SavingsState(month=init_now.month, year=init_now.year)
@@ -197,7 +206,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self._savings_loaded = False
         self._savings_last_save: float = 0.0
-        self.report_collector = ReportCollector(month=init_now.month, year=init_now.year)
+        self.report_collector = ReportCollector(
+            month=init_now.month, year=init_now.year
+        )
         self._daily_discharge_kwh = 0.0
         self._daily_safety_blocks = 0
         self._daily_plans = 0
@@ -330,7 +341,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
 
         if not self.executor_enabled:
-            _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
+            _LOGGER.warning(
+                "CARMA Box running in ANALYZER mode — no commands will be sent"
+            )
 
     def _has_feature(self, feature: str) -> bool:
         """Check if a feature is enabled by current license."""
@@ -379,7 +392,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
                     # Update executor based on new license
                     config_exec = bool(self._cfg.get("executor_enabled", False))
-                    self.executor_enabled = config_exec and self._has_feature("executor")
+                    self.executor_enabled = config_exec and self._has_feature(
+                        "executor"
+                    )
 
                     _LOGGER.info(
                         "License validated: tier=%s, features=%d, valid_until=%s",
@@ -420,7 +435,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             await self._cmd_ev_start(6)
         else:
-            _LOGGER.info("CARMA: Cable connected, no PV surplus — waiting for next cycle")
+            _LOGGER.info(
+                "CARMA: Cable connected, no PV surplus — waiting for next cycle"
+            )
 
     def _detect_miner_entity(self) -> str:
         """Auto-detect miner switch from appliances config."""
@@ -539,9 +556,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 stored = self._cfg.get("consumption_profile", {})
                 if isinstance(stored, dict) and stored:
                     self.consumption_profile = ConsumptionProfile.from_dict(stored)
-                    _LOGGER.info("Migrated consumption profile from config entry options")
+                    _LOGGER.info(
+                        "Migrated consumption profile from config entry options"
+                    )
         except Exception:
-            _LOGGER.warning("Failed to restore consumption profile, starting fresh", exc_info=True)
+            _LOGGER.warning(
+                "Failed to restore consumption profile, starting fresh", exc_info=True
+            )
 
     async def _async_save_consumption(self) -> None:
         """Persist consumption profile (rate-limited to every 5 minutes)."""
@@ -568,7 +589,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self.predictor.is_trained,
                 )
         except Exception:
-            _LOGGER.warning("Failed to restore predictor, starting fresh", exc_info=True)
+            _LOGGER.warning(
+                "Failed to restore predictor, starting fresh", exc_info=True
+            )
 
     async def _async_restore_runtime(self) -> None:
         """Restore runtime state from persistent storage (CARMA-P0-FIXES Task 4)."""
@@ -743,7 +766,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # EV startup: set safe fallback + disable (PLAT-949)
             if not self._ev_initialized and self.ev_adapter:
                 self._ev_initialized = True
-                _LOGGER.info("CARMA: EV startup — setting 6A fallback + disabling charger")
+                _LOGGER.info(
+                    "CARMA: EV startup — setting 6A fallback + disabling charger"
+                )
                 await self._cmd_ev_stop()
 
             self.safety.update_heartbeat()
@@ -797,35 +822,61 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         a2 = adapters[1] if len(adapters) >= 2 else None
 
         # Battery 1 — adapter or legacy config
-        battery_soc_1 = a1.soc if a1 else self._read_float(opts.get("battery_soc_1", ""))
-        battery_power_1 = a1.power_w if a1 else self._read_float(opts.get("battery_power_1", ""))
-        battery_ems_1 = a1.ems_mode if a1 else self._read_str(opts.get("battery_ems_1", ""))
+        battery_soc_1 = (
+            a1.soc if a1 else self._read_float(opts.get("battery_soc_1", ""))
+        )
+        battery_power_1 = (
+            a1.power_w if a1 else self._read_float(opts.get("battery_power_1", ""))
+        )
+        battery_ems_1 = (
+            a1.ems_mode if a1 else self._read_str(opts.get("battery_ems_1", ""))
+        )
 
         # Battery 2 — adapter or legacy config
-        battery_soc_2 = a2.soc if a2 else self._read_float(opts.get("battery_soc_2", ""), -1)
-        battery_power_2 = a2.power_w if a2 else self._read_float(opts.get("battery_power_2", ""))
-        battery_ems_2 = a2.ems_mode if a2 else self._read_str(opts.get("battery_ems_2", ""))
+        battery_soc_2 = (
+            a2.soc if a2 else self._read_float(opts.get("battery_soc_2", ""), -1)
+        )
+        battery_power_2 = (
+            a2.power_w if a2 else self._read_float(opts.get("battery_power_2", ""))
+        )
+        battery_ems_2 = (
+            a2.ems_mode if a2 else self._read_str(opts.get("battery_ems_2", ""))
+        )
 
         # PLAT-946: Check if battery power sensors are actually available
         # At HA start, sensors report unknown/unavailable → _read_float returns 0.0
         # which masks potential crosscharge. Track validity separately.
         bp1_entity = (
-            f"sensor.goodwe_battery_power_{a1.prefix}" if a1 else opts.get("battery_power_1", "")
+            f"sensor.goodwe_battery_power_{a1.prefix}"
+            if a1
+            else opts.get("battery_power_1", "")
         )
         bp2_entity = (
-            f"sensor.goodwe_battery_power_{a2.prefix}" if a2 else opts.get("battery_power_2", "")
+            f"sensor.goodwe_battery_power_{a2.prefix}"
+            if a2
+            else opts.get("battery_power_2", "")
         )
         bp1_valid = self._read_float_or_none(bp1_entity) is not None
-        bp2_valid = self._read_float_or_none(bp2_entity) is not None if bp2_entity else True
+        bp2_valid = (
+            self._read_float_or_none(bp2_entity) is not None if bp2_entity else True
+        )
 
         # EV — adapter or legacy config
         ev = self.ev_adapter
-        ev_power_w = ev.power_w if ev else self._read_float(opts.get("ev_power_entity", ""))
-        ev_current_a = ev.current_a if ev else self._read_float(opts.get("ev_current_entity", ""))
-        ev_status = ev.status if ev else self._read_str(opts.get("ev_status_entity", ""))
+        ev_power_w = (
+            ev.power_w if ev else self._read_float(opts.get("ev_power_entity", ""))
+        )
+        ev_current_a = (
+            ev.current_a if ev else self._read_float(opts.get("ev_current_entity", ""))
+        )
+        ev_status = (
+            ev.status if ev else self._read_str(opts.get("ev_status_entity", ""))
+        )
 
         return CarmaboxState(
-            grid_power_w=self._read_float(opts.get("grid_entity", "sensor.house_grid_power")),
+            grid_power_w=self._read_float(
+                opts.get("grid_entity", "sensor.house_grid_power")
+            ),
             battery_soc_1=battery_soc_1,
             battery_power_1=battery_power_1,
             battery_power_1_valid=bp1_valid,
@@ -853,7 +904,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 opts.get("illuminance_entity", "sensor.tempest_illuminance")
             ),
             barometric_pressure_hpa=self._read_float(
-                opts.get("pressure_entity", "sensor.sanduddsvagen_60_pressure_barometric")
+                opts.get(
+                    "pressure_entity", "sensor.sanduddsvagen_60_pressure_barometric"
+                )
             ),
             rain_mm=self._read_float(
                 opts.get("rain_entity", "sensor.sanduddsvagen_60_rain_last_hour")
@@ -875,14 +928,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Collect prices — try primary, fallback to secondary
             price_entity = self._get_entity("price_entity", "")
             price_entity_fallback = self._get_entity("price_entity_fallback", "")
-            fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+            fallback_price = float(
+                self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
+            )
             price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
             today_prices = price_adapter.today_prices
 
             # If primary returns all-fallback, try secondary
             if price_entity_fallback and all(p == fallback_price for p in today_prices):
                 _LOGGER.info("Primary price source offline, trying fallback")
-                price_adapter = NordpoolAdapter(self.hass, price_entity_fallback, fallback_price)
+                price_adapter = NordpoolAdapter(
+                    self.hass, price_entity_fallback, fallback_price
+                )
                 today_prices = price_adapter.today_prices
 
             tomorrow_prices = price_adapter.tomorrow_prices
@@ -967,7 +1024,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             pv_daily = solcast.forecast_daily_3d
             reserve = calculate_reserve(pv_daily, daily_consumption, daily_battery_need)
             target = calculate_target(
-                battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
+                battery_kwh_available=battery_kwh
+                - (self.min_soc / 100 * total_bat_kwh),
                 hourly_loads=consumption[: len(prices)],
                 hourly_weights=[
                     ellevio_weight((start_hour + i) % 24, night_weight=night_weight)
@@ -986,16 +1044,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # Grid charge config
             grid_charge_threshold = float(
-                opts.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
+                opts.get(
+                    "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
+                )
             )
             grid_charge_max_soc = float(
                 opts.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
             )
 
             # Generate plan
-            battery_efficiency = float(opts.get("battery_efficiency", DEFAULT_BATTERY_EFFICIENCY))
-            max_discharge_kw = float(opts.get("max_discharge_kw", DEFAULT_MAX_DISCHARGE_KW))
-            max_grid_charge_kw = float(opts.get("max_grid_charge_kw", DEFAULT_MAX_GRID_CHARGE_KW))
+            battery_efficiency = float(
+                opts.get("battery_efficiency", DEFAULT_BATTERY_EFFICIENCY)
+            )
+            max_discharge_kw = float(
+                opts.get("max_discharge_kw", DEFAULT_MAX_DISCHARGE_KW)
+            )
+            max_grid_charge_kw = float(
+                opts.get("max_grid_charge_kw", DEFAULT_MAX_GRID_CHARGE_KW)
+            )
 
             self.plan = generate_plan(
                 num_hours=n,
@@ -1132,7 +1198,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Step 3: Pris-tier = vald intensitet
         price_cheap = float(self._cfg.get("price_cheap_ore", DEFAULT_PRICE_CHEAP_ORE))
-        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        price_expensive = float(
+            self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+        )
         if state.current_price < price_cheap:
             tier = "billigt"
             intensity = "passiv — spara batteri"
@@ -1179,8 +1247,33 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
             if charge_result.ok:
-                reasoning.append(f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda")
+                reasoning.append(
+                    f"PV {pv_kw:.1f} kW aktiv, batteri ej fullt → solladda"
+                )
                 await self._cmd_charge_pv(state)
+
+                # IT-1939: Taper detection — if BMS can't accept charge, surplus to loads
+                if self._is_in_taper(state):
+                    export_w = abs(state.grid_power_w)
+                    reasoning.append(
+                        f"BMS taper detekterad — {export_w:.0f}W export vid {state.total_battery_soc:.0f}% SoC"
+                    )
+                    self._record_decision(
+                        state,
+                        "charge_pv_taper",
+                        f"Taper-mode — BMS tar lite laddning, {export_w:.0f}W → surplus-kedja",
+                        reasoning=reasoning,
+                    )
+                    self._last_command = BatteryCommand.CHARGE_PV_TAPER
+                    # Force surplus chain with target_kw=0 to maximize absorption
+                    saved_target = self.target_kw
+                    self.target_kw = 0.0
+                    await self._execute_ev(state)
+                    await self._execute_miner(state)
+                    await self._execute_climate(state)
+                    self.target_kw = saved_target
+                    return
+
                 self._record_decision(
                     state,
                     "charge_pv",
@@ -1198,7 +1291,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── RULE 1: Never discharge during export ────────────
         if state.is_exporting:
-            reasoning.append(f"Exporterar {abs(state.grid_power_w):.0f}W → sol driver allt")
+            reasoning.append(
+                f"Exporterar {abs(state.grid_power_w):.0f}W → sol driver allt"
+            )
             if not state.all_batteries_full:
                 charge_result = self.safety.check_charge(
                     state.battery_soc_1, state.battery_soc_2, temp_c
@@ -1207,8 +1302,33 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     step5 = "Solladdar — Ellevio-påverkan: 0 kW (exporterar)"
                     reasoning.append("Batteri ej fullt → solladda")
                     reasoning.append(step5)
-                    chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+                    chain.append(
+                        {"step": "resultat", "label": "Resultat", "detail": step5}
+                    )
                     await self._cmd_charge_pv(state)
+
+                    # IT-1939: Taper detection in export path too
+                    if self._is_in_taper(state):
+                        export_w = abs(state.grid_power_w)
+                        reasoning.append(
+                            f"BMS taper — {export_w:.0f}W export vid {state.total_battery_soc:.0f}%"
+                        )
+                        self._record_decision(
+                            state,
+                            "charge_pv_taper",
+                            f"Taper — {export_w:.0f}W → surplus-kedja",
+                            reasoning=reasoning,
+                            reasoning_chain=chain,
+                        )
+                        self._last_command = BatteryCommand.CHARGE_PV_TAPER
+                        saved_target = self.target_kw
+                        self.target_kw = 0.0
+                        await self._execute_ev(state)
+                        await self._execute_miner(state)
+                        await self._execute_climate(state)
+                        self.target_kw = saved_target
+                        return
+
                     self._record_decision(
                         state,
                         "charge_pv",
@@ -1222,7 +1342,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     # fall through to standby. NOT a user-facing safety issue.
                     step5 = "Standby — laddning ej möjlig, exporterar överskott"
                     reasoning.append(step5)
-                    chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
+                    chain.append(
+                        {"step": "resultat", "label": "Resultat", "detail": step5}
+                    )
                     await self._cmd_standby(state)
                     self._record_decision(
                         state,
@@ -1248,7 +1370,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── RULE 1.5: Grid charge at very cheap price ────────
         grid_charge_threshold = float(
-            self._cfg.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
+            self._cfg.get(
+                "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
+            )
         )
         grid_charge_max_soc = float(
             self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
@@ -1371,7 +1495,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 temp_c,
             )
             if result.ok:
-                peak_kr = float(self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
+                peak_kr = float(
+                    self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW)
+                )
                 ellevio_saving = (weighted_net / 1000 - self.target_kw) * peak_kr
                 step5 = (
                     f"Urladdning {discharge_w}W → Ellevio ser {self.target_kw:.1f} kW "
@@ -1472,7 +1598,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         hour = datetime.now().hour
         is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
         is_summer = 5 <= datetime.now().month <= 9
-        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        price_expensive = float(
+            self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+        )
 
         # Comfort thresholds
         cool_target = float(self._cfg.get("climate_cool_target_c", 23.0))
@@ -1488,11 +1616,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 # Pre-cool with free surplus
                 if current_mode == "off":
                     await self._climate_call(climate_entity, "cool", cool_target - 1)
-                    _LOGGER.info("CARMA: VP pre-cool (surplus %.0fW)", abs(state.grid_power_w))
-            elif not is_summer and current_temp < heat_target + 2 and current_mode == "off":
+                    _LOGGER.info(
+                        "CARMA: VP pre-cool (surplus %.0fW)", abs(state.grid_power_w)
+                    )
+            elif (
+                not is_summer
+                and current_temp < heat_target + 2
+                and current_mode == "off"
+            ):
                 # Pre-heat with free surplus
                 await self._climate_call(climate_entity, "heat", heat_target + 1)
-                _LOGGER.info("CARMA: VP pre-heat (surplus %.0fW)", abs(state.grid_power_w))
+                _LOGGER.info(
+                    "CARMA: VP pre-heat (surplus %.0fW)", abs(state.grid_power_w)
+                )
             return
 
         # ── VP-3: Expensive + importing → pause if temp OK ──
@@ -1512,11 +1648,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     current_temp,
                 )
 
-    async def _climate_call(self, entity_id: str, mode: str, temp: float | None = None) -> None:
+    async def _climate_call(
+        self, entity_id: str, mode: str, temp: float | None = None
+    ) -> None:
         """Set climate mode + temperature."""
         try:
             if mode == "off":
-                await self.hass.services.async_call("climate", "turn_off", {"entity_id": entity_id})
+                await self.hass.services.async_call(
+                    "climate", "turn_off", {"entity_id": entity_id}
+                )
             else:
                 data: dict[str, Any] = {"entity_id": entity_id, "hvac_mode": mode}
                 if temp is not None:
@@ -1574,7 +1714,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._pool_switch(pool_entity, True)
                 temp_str = f"{pool_temp:.1f}°C" if pool_temp else "okänd"
                 _LOGGER.info(
-                    "CARMA: Pool ON (surplus %.0fW, temp %s)", abs(state.grid_power_w), temp_str
+                    "CARMA: Pool ON (surplus %.0fW, temp %s)",
+                    abs(state.grid_power_w),
+                    temp_str,
                 )
             return
 
@@ -1587,7 +1729,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """Turn pool switch on/off."""
         try:
             service = "turn_on" if on else "turn_off"
-            await self.hass.services.async_call("switch", service, {"entity_id": entity_id})
+            await self.hass.services.async_call(
+                "switch", service, {"entity_id": entity_id}
+            )
         except Exception:
             _LOGGER.warning("CARMA: pool switch failed: %s", entity_id, exc_info=True)
 
@@ -1651,7 +1795,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
         # Case 2: Plan says idle but grid_kw well below target (opportunity for cheap charge)
-        elif planned.action == "i" and grid_kw < target_kw * 0.3 and state.current_price < 30:
+        elif (
+            planned.action == "i"
+            and grid_kw < target_kw * 0.3
+            and state.current_price < 30
+        ):
             new_action = "g"  # Allow opportunistic grid_charge
             correction_needed = True
             _LOGGER.warning(
@@ -1699,18 +1847,26 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         target_w = self.target_kw * 1000
 
         # W1: Exporting + battery not full + not charging
-        wd_export_w = float(self._cfg.get("watchdog_export_w", DEFAULT_WATCHDOG_EXPORT_W))
+        wd_export_w = float(
+            self._cfg.get("watchdog_export_w", DEFAULT_WATCHDOG_EXPORT_W)
+        )
         wd_discharge_min = float(
             self._cfg.get("watchdog_discharge_min_w", DEFAULT_WATCHDOG_DISCHARGE_MIN_W)
         )
-        wd_ev_import_w = float(self._cfg.get("watchdog_ev_import_w", DEFAULT_WATCHDOG_EV_IMPORT_W))
-        wd_min_soc = float(self._cfg.get("watchdog_min_soc_pct", DEFAULT_WATCHDOG_MIN_SOC_PCT))
-        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        wd_ev_import_w = float(
+            self._cfg.get("watchdog_ev_import_w", DEFAULT_WATCHDOG_EV_IMPORT_W)
+        )
+        wd_min_soc = float(
+            self._cfg.get("watchdog_min_soc_pct", DEFAULT_WATCHDOG_MIN_SOC_PCT)
+        )
+        price_expensive = float(
+            self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+        )
         if (
             state.is_exporting
             and abs(state.grid_power_w) > wd_export_w
             and not state.all_batteries_full
-            and action not in ("charge_pv", "grid_charge")
+            and action not in ("charge_pv", "charge_pv_taper", "grid_charge")
         ):
             _LOGGER.warning(
                 "WATCHDOG W1: exporting %.0fW, bat %s%%, action=%s → correcting to charge_pv",
@@ -1818,7 +1974,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── EV-2: Target SoC reached → stop ──────────────────
-        ev_target = float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
+        ev_target = float(
+            self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC)
+        )
         if state.ev_soc >= ev_target:
             if self._ev_enabled:
                 _LOGGER.info(
@@ -1844,7 +2002,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
                 )
                 current_price = (
-                    state.current_price if state.current_price > 0 else self._daily_avg_price
+                    state.current_price
+                    if state.current_price > 0
+                    else self._daily_avg_price
                 )
                 if (
                     self.ev_adapter
@@ -1868,8 +2028,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_load_kw = state.ev_power_w / 1000
             house_only_kw = max(0, max(0, state.grid_power_w) / 1000 - ev_load_kw)
             weight = night_weight if is_night else 1.0
-            ev_max_hw = float(self._cfg.get("ev_night_headroom_kw", DEFAULT_EV_NIGHT_HEADROOM_KW))
-            headroom_kw = (self.target_kw / weight - house_only_kw) if weight > 0 else ev_max_hw
+            ev_max_hw = float(
+                self._cfg.get("ev_night_headroom_kw", DEFAULT_EV_NIGHT_HEADROOM_KW)
+            )
+            headroom_kw = (
+                (self.target_kw / weight - house_only_kw) if weight > 0 else ev_max_hw
+            )
             optimal_amps = max(0, int(headroom_kw * 1000 / DEFAULT_VOLTAGE))
             optimal_amps = min(optimal_amps, DEFAULT_EV_MAX_AMPS)
 
@@ -1936,7 +2100,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── State reconciliation: read actual switch state ────
         actual_state_obj = self.hass.states.get(self._miner_entity)
-        actual_on = actual_state_obj.state == "on" if actual_state_obj else self._miner_on
+        actual_on = (
+            actual_state_obj.state == "on" if actual_state_obj else self._miner_on
+        )
 
         # Correct internal state if mismatch (e.g. manual toggle or HA restart)
         if actual_on != self._miner_on:
@@ -1951,12 +2117,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
         is_daytime = not is_night
         is_winter = datetime.now().month in (10, 11, 12, 1, 2, 3)
-        miner_heat_useful = bool(self._cfg.get("miner_heat_useful", False)) and is_winter
+        miner_heat_useful = (
+            bool(self._cfg.get("miner_heat_useful", False)) and is_winter
+        )
 
-        miner_start_w = float(self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W))
-        miner_stop_w = float(self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W))
-        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
-        current_price = state.current_price if state.current_price > 0 else self._daily_avg_price
+        miner_start_w = float(
+            self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W)
+        )
+        miner_stop_w = float(
+            self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W)
+        )
+        price_expensive = float(
+            self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+        )
+        current_price = (
+            state.current_price if state.current_price > 0 else self._daily_avg_price
+        )
 
         # ── (b) Low SoC + expensive price → OFF ────────────────
         if state.total_battery_soc < 30 and current_price > price_expensive:
@@ -2133,7 +2309,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     def _read_battery_temp(self) -> float | None:
         """Read battery temperature — uses adapters when available, else legacy entity."""
         if self.inverter_adapters:
-            temps = [a.temperature_c for a in self.inverter_adapters if a.temperature_c is not None]
+            temps = [
+                a.temperature_c
+                for a in self.inverter_adapters
+                if a.temperature_c is not None
+            ]
             return min(temps) if temps else None
         temp_entity = self._get_entity("battery_temp_entity", "")
         if not temp_entity:
@@ -2224,7 +2404,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """
         actuals = self.hourly_actuals
         if len(actuals) < 2:
-            return {"score_today": None, "score_7d": None, "score_30d": None, "trend": "stable"}
+            return {
+                "score_today": None,
+                "score_7d": None,
+                "score_30d": None,
+                "trend": "stable",
+            }
 
         # Today's score: min/max ratio across tracked hours
         scores: list[float] = []
@@ -2237,7 +2422,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 lo, hi = min(p, r), max(p, r)
                 scores.append((lo / hi) * 100 if hi > 0 else 100.0)
 
-        score_today: float | None = round(sum(scores) / len(scores), 1) if scores else None
+        score_today: float | None = (
+            round(sum(scores) / len(scores), 1) if scores else None
+        )
 
         # 7d and 30d: use daily_savings trend as proxy for consistency
         daily = self.savings.daily_savings
@@ -2307,11 +2494,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         for d in self.decision_log:
             if d.weighted_kw > worst_kw:
                 worst_kw = d.weighted_kw
-                worst_hour = int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                worst_hour = (
+                    int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                )
                 worst_reason = d.reason
             if 0 < d.weighted_kw < best_kw:
                 best_kw = d.weighted_kw
-                best_hour = int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                best_hour = (
+                    int(d.timestamp.split("T")[1][:2]) if "T" in d.timestamp else -1
+                )
                 best_reason = d.reason
 
         # ── Nordpool cost analysis (last 24h) ─────────────────────
@@ -2337,8 +2528,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
 
         avg_price = round(total_cost_kr / total_kwh * 100, 1) if total_kwh > 0 else 0.0
-        cheapest = min(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
-        most_expensive = max(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
+        cheapest = (
+            min(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
+        )
+        most_expensive = (
+            max(hourly_costs, key=lambda x: x["price_ore"]) if hourly_costs else {}
+        )
 
         # ── Deep analysis: WHY worst/best hours happened ──────────
         worst_analysis = self._analyze_hour(worst_hour, "worst")
@@ -2509,7 +2704,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         bat_full = d.battery_soc >= 99 if d else False
         price = d.price_ore if d else 0
         price_cheap = float(self._cfg.get("price_cheap_ore", DEFAULT_PRICE_CHEAP_ORE))
-        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        price_expensive = float(
+            self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+        )
 
         nodes = [
             {
@@ -2700,7 +2897,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         price_entity = self._get_entity("price_entity", "")
         if not price_entity:
             return
-        fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+        fallback = float(
+            self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
+        )
         adapter = NordpoolAdapter(self.hass, price_entity, fallback)
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
@@ -2788,7 +2987,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # If CARMA has lower weighted kW → it would reduce the peak → saves money
         delta_weighted = actual_weighted - carma_weighted  # Positive = CARMA is better
         # Annual cost impact (very rough): delta × peak_cost / samples_per_hour
-        carma_better_kr = delta_weighted * peak_cost / 120 if delta_weighted > 0.01 else 0.0
+        carma_better_kr = (
+            delta_weighted * peak_cost / 120 if delta_weighted > 0.01 else 0.0
+        )
 
         # Also price optimization: if CARMA says "don't discharge" at cheap price but v6 does
         if (
@@ -2798,7 +2999,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ):
             # v6 discharges at cheap price = waste. CARMA saved that.
             wasted_kwh = actual_discharge_w / 1000 * interval_hours
-            carma_better_kr += wasted_kwh * (self._daily_avg_price - state.current_price) / 100
+            carma_better_kr += (
+                wasted_kwh * (self._daily_avg_price - state.current_price) / 100
+            )
 
         self._shadow_savings_kr += carma_better_kr
 
@@ -2860,7 +3063,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Ellevio measures HOURLY averages, not instantaneous peaks.
         # We collect 30s samples and record the hourly avg at hour change.
         if not hasattr(self, "_peak_hour_samples"):
-            self._peak_hour_samples: list[tuple[float, float]] = []  # (actual, baseline)
+            self._peak_hour_samples: list[
+                tuple[float, float]
+            ] = []  # (actual, baseline)
             self._peak_last_hour: int = -1
         if hour != self._peak_last_hour:
             if self._peak_hour_samples and self._peak_last_hour >= 0:
@@ -2908,7 +3113,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.savings.charge_from_grid_cost_ore += charge_kwh * state.current_price
             self.savings.grid_charge_prices.append(state.current_price)
             if len(self.savings.grid_charge_prices) > 2000:
-                self.savings.grid_charge_prices = self.savings.grid_charge_prices[-2000:]
+                self.savings.grid_charge_prices = self.savings.grid_charge_prices[
+                    -2000:
+                ]
 
         # What-if cost tracking
         consumption_kw = max(0, state.grid_power_w) / 1000 + battery_discharge_kw
@@ -2968,7 +3175,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         action = self.last_decision.action if self.last_decision else "idle"
 
         # Outdoor temperature — read from sensor
-        temp_entity = self._cfg.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
+        temp_entity = self._cfg.get(
+            "outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature"
+        )
         temperature_c = self._read_float(temp_entity, 0.0)
 
         self.ledger.record_sample(
@@ -3006,9 +3215,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if total_wt > 0:
                     self._ellevio_monthly_hourly_peaks.append(total_w / total_wt)
                     if len(self._ellevio_monthly_hourly_peaks) > 800:
-                        self._ellevio_monthly_hourly_peaks = self._ellevio_monthly_hourly_peaks[
-                            -744:
-                        ]
+                        self._ellevio_monthly_hourly_peaks = (
+                            self._ellevio_monthly_hourly_peaks[-744:]
+                        )
             self._ellevio_hour_samples = []
             self._ellevio_current_hour = now_hour
         self._ellevio_hour_samples.append((grid_kw, weight))
@@ -3078,7 +3287,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Check if EMS mode entity is unavailable (integration not loaded)
             ems_entity = f"select.goodwe_{adapter.prefix}_ems_mode"
             ems_state = self.hass.states.get(ems_entity)
-            if ems_state is not None and ems_state.state not in ("unavailable", "unknown"):
+            if ems_state is not None and ems_state.state not in (
+                "unavailable",
+                "unknown",
+            ):
                 # Integration is fine, reset failure counter
                 self._ems_consecutive_failures = 0
                 continue
@@ -3110,7 +3322,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "reload_config_entry",
                     {"entity_id": ems_entity},
                 )
-                _LOGGER.info("CARMA self-heal: triggered reload for GoodWe %s", adapter.prefix)
+                _LOGGER.info(
+                    "CARMA self-heal: triggered reload for GoodWe %s", adapter.prefix
+                )
             except Exception:
                 _LOGGER.debug(
                     "CARMA self-heal: reload failed for %s",
@@ -3143,7 +3357,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # If CARMA thinks EV should be on but it got disabled, same thing.
             self._ev_last_known_enabled = current_enabled
 
-    async def _safe_service_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
+    async def _safe_service_call(
+        self, domain: str, service: str, data: dict[str, object]
+    ) -> bool:
         """Call HA service with error handling and retry. Returns True on success.
 
         In dry-run mode: logs the call but does NOT execute it.
@@ -3225,6 +3441,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 self._daily_safety_blocks += 1
 
+    def _is_in_taper(self, state: CarmaboxState) -> bool:
+        """IT-1939: Detect BMS taper mode.
+
+        Returns True if:
+        - Current command is charge_pv
+        - Exporting > 200W (BMS not accepting full charge)
+        - Average SoC < 100% (batteries not yet full)
+        - PV > 500W (still producing)
+
+        BMS taper occurs when SoC > 95% — batteries slow charge acceptance,
+        causing 2-3kW export at low prices. Solution: keep charge_pv active
+        but route surplus to miner/VP/EV instead of exporting.
+        """
+        return (
+            self._last_command == BatteryCommand.CHARGE_PV
+            and state.is_exporting
+            and abs(state.grid_power_w) > 200
+            and state.total_battery_soc < 100
+            and state.pv_power_w > 500
+        )
+
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:
         """Set batteries to charge from solar.
 
@@ -3247,7 +3484,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         temp_c = self._read_battery_temp()
-        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
+        charge_check = self.safety.check_charge(
+            state.battery_soc_1, state.battery_soc_2, temp_c
+        )
         if not charge_check.ok:
             _LOGGER.info("SafetyGuard blocked charge_pv: %s", charge_check.reason)
             self._daily_safety_blocks += 1
@@ -3265,7 +3504,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     ok = await adapter.set_ems_mode("charge_pv")
                     # Enable fast charging for max PV absorption
                     if ok and isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                        await adapter.set_fast_charging(
+                            on=True, power_pct=100, soc_target=100
+                        )
                 if ok:
                     success = True
                 else:
@@ -3273,7 +3514,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # R3: Rollback on partial failure — force ALL to standby
             if failed and success:
-                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby")
+                _LOGGER.warning(
+                    "Partial charge_pv failure — rolling back all to standby"
+                )
                 for adapter in self.inverter_adapters:
                     await adapter.set_ems_mode("battery_standby")
                 self._daily_safety_blocks += 1
@@ -3298,7 +3541,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # R3: Rollback on partial failure — force ALL to standby
             if failed and success:
-                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby (legacy)")
+                _LOGGER.warning(
+                    "Partial charge_pv failure — rolling back all to standby (legacy)"
+                )
                 for ems_key in ("battery_ems_1", "battery_ems_2"):
                     entity = self._get_entity(ems_key)
                     if entity:
@@ -3327,7 +3572,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if self.inverter_adapters:
                 for adapter in self.inverter_adapters:
                     if isinstance(adapter, GoodWeAdapter) and adapter.soc < 100:
-                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                        await adapter.set_fast_charging(
+                            on=True, power_pct=100, soc_target=100
+                        )
             return
 
         # ── SafetyGuard gates (defense-in-depth) ─────────────
@@ -3344,7 +3591,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         temp_c = self._read_battery_temp()
-        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
+        charge_check = self.safety.check_charge(
+            state.battery_soc_1, state.battery_soc_2, temp_c
+        )
         if not charge_check.ok:
             _LOGGER.info("SafetyGuard blocked grid_charge: %s", charge_check.reason)
             self._daily_safety_blocks += 1
@@ -3362,7 +3611,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     ok = await adapter.set_ems_mode("charge_pv")
                     # Enable fast charging with grid import — GoodWe charges from grid when no PV
                     if ok and isinstance(adapter, GoodWeAdapter):
-                        ok = await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                        ok = await adapter.set_fast_charging(
+                            on=True, power_pct=100, soc_target=100
+                        )
                 if ok:
                     success = True
                 else:
@@ -3370,11 +3621,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # R3: Rollback on partial failure — force ALL to standby
             if failed and success:
-                _LOGGER.warning("Partial grid_charge failure — rolling back all to standby")
+                _LOGGER.warning(
+                    "Partial grid_charge failure — rolling back all to standby"
+                )
                 for adapter in self.inverter_adapters:
                     await adapter.set_ems_mode("battery_standby")
                     if isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=False, power_pct=0, soc_target=100)
+                        await adapter.set_fast_charging(
+                            on=False, power_pct=0, soc_target=100
+                        )
                 self._daily_safety_blocks += 1
                 success = False
         else:
@@ -3533,7 +3788,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 float(opts.get(f"battery_{i}_kwh", defaults[i - 1]))
                 for i in range(1, len(self.inverter_adapters) + 1)
             ]
-            stored = [max(0, a.soc) * caps[idx] for idx, a in enumerate(self.inverter_adapters)]
+            stored = [
+                max(0, a.soc) * caps[idx]
+                for idx, a in enumerate(self.inverter_adapters)
+            ]
             total_soc = sum(stored)
             if total_soc <= 0:
                 return
@@ -3563,7 +3821,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # R3: Rollback on partial failure — force ALL to standby
             if failed and success:
-                _LOGGER.warning("Partial discharge failure — rolling back all to standby")
+                _LOGGER.warning(
+                    "Partial discharge failure — rolling back all to standby"
+                )
                 for adapter in self.inverter_adapters:
                     await adapter.set_ems_mode("battery_standby")
                 self._daily_safety_blocks += 1
@@ -3615,13 +3875,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         self._check_write_verify(ems_entity, "discharge_battery")
                     if limit_entity:
                         await self._safe_service_call(
-                            "number", "set_value", {"entity_id": limit_entity, "value": w}
+                            "number",
+                            "set_value",
+                            {"entity_id": limit_entity, "value": w},
                         )
                         success = True
 
             # R3: Rollback on partial failure — force ALL to standby
             if failed and success:
-                _LOGGER.warning("Partial discharge failure — rolling back all to standby (legacy)")
+                _LOGGER.warning(
+                    "Partial discharge failure — rolling back all to standby (legacy)"
+                )
                 for ems_key in ("battery_ems_1", "battery_ems_2"):
                     entity = self._get_entity(ems_key)
                     if entity:
