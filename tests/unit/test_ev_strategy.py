@@ -10,8 +10,8 @@ from custom_components.carmabox.optimizer.ev_strategy import (
 
 
 class TestCalculateEvSchedule:
-    def test_no_ev_returns_zeros(self) -> None:
-        """No EV (soc < 0) → all zeros."""
+    def test_no_ev_uses_fallback_soc(self) -> None:
+        """No EV SoC (soc < 0) → uses fallback 50%, still schedules charging."""
         schedule = calculate_ev_schedule(
             start_hour=20,
             num_hours=12,
@@ -21,7 +21,9 @@ class TestCalculateEvSchedule:
             hourly_loads=[1.5] * 12,
             target_weighted_kw=2.0,
         )
-        assert all(p == 0.0 for p in schedule)
+        # With fallback 50% SoC, EV needs ~49 kWh → should schedule some hours
+        assert len(schedule) == 12
+        assert any(p > 0.0 for p in schedule)
 
     def test_already_full(self) -> None:
         """EV at 100% → no charge needed."""

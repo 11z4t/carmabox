@@ -71,7 +71,11 @@ def calculate_ev_schedule(
     """
     schedule = [0.0] * num_hours
 
-    if ev_soc_pct < 0 or ev_capacity_kwh <= 0:
+    # CARMA-P0-FIXES Task 1: Robustness — use default SoC if unavailable
+    if ev_soc_pct < 0:
+        ev_soc_pct = 50.0  # Assume mid-range if sensor unavailable
+
+    if ev_capacity_kwh <= 0:
         return schedule
 
     # Determine target — force 100% if overdue for full charge

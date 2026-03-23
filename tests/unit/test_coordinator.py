@@ -75,6 +75,8 @@ def _make_coordinator(
     coord.notifier.crosscharge_alert = AsyncMock()
     coord.notifier.proactive_discharge_started = AsyncMock()
     coord.notifier.safety_block = AsyncMock()
+    coord._runtime_loaded = True
+    coord._ledger_loaded = True
     coord.inverter_adapters = []
     coord.ev_adapter = None
     coord.last_decision = Decision()

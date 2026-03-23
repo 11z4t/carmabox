@@ -111,6 +111,13 @@ CONSUMPTION_STORE_KEY = "carmabox_consumption_profile"
 PREDICTOR_STORE_VERSION = 1
 PREDICTOR_STORE_KEY = "carmabox_predictor"
 
+# CARMA-P0-FIXES Task 4: Runtime persistence
+RUNTIME_STORE_VERSION = 1
+RUNTIME_STORE_KEY = "carmabox_runtime"
+
+LEDGER_STORE_VERSION = 1
+LEDGER_STORE_KEY = "carmabox_ledger"
+
 # Self-healing constants (PLAT-972)
 SELF_HEALING_MAX_FAILURES = 3
 SELF_HEALING_PAUSE_SECONDS = 300  # 5 minutes
@@ -232,6 +239,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self._predictor_loaded = False
         self._predictor_last_save: float = 0.0
+
+        # CARMA-P0-FIXES Task 4: Runtime persistence
+        self._runtime_store: Store[dict[str, Any]] = Store(
+            hass, RUNTIME_STORE_VERSION, RUNTIME_STORE_KEY
+        )
+        self._runtime_loaded = False
+        self._runtime_dirty = False  # Flag for deferred save after plan generation
+
+        # CARMA-P0-FIXES Task 4: Ledger persistence
+        self._ledger_store: Store[dict[str, Any]] = Store(
+            hass, LEDGER_STORE_VERSION, LEDGER_STORE_KEY
+        )
+        self._ledger_loaded = False
+        self._ledger_last_save: float = 0.0
 
         # PLAT-972: Self-healing state
         self._ems_consecutive_failures: int = 0
@@ -549,6 +570,109 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.warning("Failed to restore predictor, starting fresh", exc_info=True)
 
+    async def _async_restore_runtime(self) -> None:
+        """Restore runtime state from persistent storage (CARMA-P0-FIXES Task 4)."""
+        try:
+            data = await self._runtime_store.async_load()
+            if data and isinstance(data, dict):
+                # Restore plan
+                plan_data = data.get("plan", [])
+                from .optimizer.models import HourPlan
+
+                self.plan = [
+                    HourPlan(
+                        hour=p.get("hour", 0),
+                        action=p.get("action", "i"),
+                        battery_kw=p.get("battery_kw", 0.0),
+                        grid_kw=p.get("grid_kw", 0.0),
+                        weighted_kw=p.get("weighted_kw", 0.0),
+                        pv_kw=p.get("pv_kw", 0.0),
+                        consumption_kw=p.get("consumption_kw", 0.0),
+                        ev_kw=p.get("ev_kw", 0.0),
+                        ev_soc=p.get("ev_soc", 0),
+                        battery_soc=p.get("battery_soc", 0),
+                        price=p.get("price", 0.0),
+                    )
+                    for p in plan_data
+                ]
+                # Restore last_command
+                cmd_str = data.get("last_command", "STANDBY")
+                try:
+                    self._last_command = BatteryCommand[cmd_str]
+                except (KeyError, ValueError):
+                    self._last_command = BatteryCommand.STANDBY
+                # Restore EV state
+                self._ev_enabled = bool(data.get("ev_enabled", False))
+                self._ev_current_amps = int(data.get("ev_current_amps", 6))
+                # Restore miner state
+                self._miner_on = bool(data.get("miner_on", False))
+                _LOGGER.info(
+                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s",
+                    len(self.plan),
+                    cmd_str,
+                    self._ev_enabled,
+                    self._ev_current_amps,
+                    self._miner_on,
+                )
+        except Exception:
+            _LOGGER.warning("Failed to restore runtime, starting fresh", exc_info=True)
+
+    async def _async_save_runtime(self) -> None:
+        """Persist runtime state (CARMA-P0-FIXES Task 4)."""
+        try:
+            data = {
+                "plan": [
+                    {
+                        "hour": p.hour,
+                        "action": p.action,
+                        "battery_kw": p.battery_kw,
+                        "grid_kw": p.grid_kw,
+                        "weighted_kw": p.weighted_kw,
+                        "pv_kw": p.pv_kw,
+                        "consumption_kw": p.consumption_kw,
+                        "ev_kw": p.ev_kw,
+                        "ev_soc": p.ev_soc,
+                        "battery_soc": p.battery_soc,
+                        "price": p.price,
+                    }
+                    for p in self.plan
+                ],
+                "last_command": self._last_command.name,
+                "ev_enabled": self._ev_enabled,
+                "ev_current_amps": self._ev_current_amps,
+                "miner_on": self._miner_on,
+            }
+            await self._runtime_store.async_save(data)
+        except Exception:
+            _LOGGER.debug("Failed to save runtime", exc_info=True)
+
+    async def _async_restore_ledger(self) -> None:
+        """Restore ledger from persistent storage (CARMA-P0-FIXES Task 4)."""
+        try:
+            data = await self._ledger_store.async_load()
+            if data and isinstance(data, dict):
+                self.ledger = EnergyLedger.from_dict(data)
+                _LOGGER.info(
+                    "Restored ledger: %d entries, last=%s",
+                    len(self.ledger.entries),
+                    self.ledger.entries[-1].date if self.ledger.entries else "none",
+                )
+        except Exception:
+            _LOGGER.warning("Failed to restore ledger, starting fresh", exc_info=True)
+
+    async def _async_save_ledger(self) -> None:
+        """Persist ledger state (rate-limited to every 5 minutes, CARMA-P0-FIXES Task 4)."""
+        import time
+
+        now = time.monotonic()
+        if now - self._ledger_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._ledger_last_save = now
+        try:
+            await self._ledger_store.async_save(self.ledger.to_dict())
+        except Exception:
+            _LOGGER.debug("Failed to save ledger", exc_info=True)
+
     async def _async_save_predictor(self) -> None:
         """Persist predictor state (rate-limited to every 5 minutes)."""
         import time
@@ -598,6 +722,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if not self._predictor_loaded:
                 self._predictor_loaded = True
                 await self._async_restore_predictor()
+            # CARMA-P0-FIXES Task 4: Restore runtime + ledger BEFORE first _execute cycle
+            if not self._runtime_loaded:
+                self._runtime_loaded = True
+                await self._async_restore_runtime()
+            if not self._ledger_loaded:
+                self._ledger_loaded = True
+                await self._async_restore_ledger()
 
             old_month = self.savings.month
             self.savings = reset_if_new_month(self.savings, now)
@@ -877,6 +1008,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 sum(1 for h in self.plan if h.action == "d"),
                 sum(1 for h in self.plan if h.action == "g"),
             )
+            # CARMA-P0-FIXES Task 4: Mark runtime as dirty — will be saved in next async_update_data
+            self._runtime_dirty = True
 
         except Exception:
             _LOGGER.exception("Plan generation failed — keeping old plan")
@@ -1114,7 +1247,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
             if charge_result.ok:
-                await self._cmd_charge_pv(state)  # charge_pv works for grid charge too
+                await self._cmd_grid_charge(
+                    state
+                )  # CARMA-P0-FIXES Task 2: Use dedicated grid charge
                 self._record_decision(
                     state,
                     "grid_charge",
@@ -1236,6 +1371,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning=reasoning,
                     reasoning_chain=chain,
                 )
+            # CARMA-P0-FIXES Task 3d: Call miner from discharge path too
+            await self._execute_ev(state)
+            await self._execute_miner(state)
+            await self._execute_climate(state)
             return
 
         # ── RULE 4: Under target → idle ──────────────────────
@@ -1589,6 +1728,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         f"men var {action} → urladdning {discharge_w}W",
                         discharge_w=discharge_w,
                     )
+                    # CARMA-P0-FIXES Task 3d: Call miner from watchdog discharge path too
+                    await self._execute_ev(state)
+                    await self._execute_miner(state)
+                    await self._execute_climate(state)
                     return
 
         # W4: EV charging + grid importing during day
@@ -1660,7 +1803,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     planned_ev_kw = h.ev_kw
                     break
 
+            # CARMA-P0-FIXES Task 1: Fallback if plan has 0 but conditions are good
             if planned_ev_kw <= 0:
+                # Fallback: if EV connected + SoC < target + cheap price → charge at 6A minimum
+                price_expensive = float(
+                    self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE)
+                )
+                current_price = (
+                    state.current_price if state.current_price > 0 else self._daily_avg_price
+                )
+                if (
+                    self.ev_adapter
+                    and self.ev_adapter.cable_locked
+                    and state.ev_soc >= 0
+                    and state.ev_soc < ev_target
+                    and current_price < price_expensive
+                ):
+                    # Charge at 6A minimum — better than doing nothing
+                    if not self._ev_enabled:
+                        await self._cmd_ev_start(6)
+                    elif self._ev_current_amps != 6:
+                        await self._cmd_ev_adjust(6)
+                    return
+                # No fallback applicable — stop EV
                 if self._ev_enabled:
                     await self._cmd_ev_stop()
                 return
@@ -1721,30 +1886,71 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._cmd_ev_stop()
 
     async def _execute_miner(self, state: CarmaboxState) -> None:
-        """PLAT-992: Control miner based on PV surplus.
+        """CARMA-P0-FIXES Task 3: Miner control with SoC/price awareness + state reconciliation.
 
         Priority chain: Battery → EV → Miner → VP → Pool → Export.
-        Miner turns ON when exporting (surplus after battery + EV).
-        Miner turns OFF when importing — UNLESS it's winter and the
-        miner heat is useful (configurable via miner_heat_useful).
+
+        Logic:
+        a) High SoC (>80%) + daytime: keep ON (batteries support via discharge)
+        b) Low SoC (<30%) + expensive price (>80 öre): turn OFF
+        c) State reconciliation: read actual switch state and correct mismatch
+        d) Export surplus: turn ON
+        e) Import + not special conditions: turn OFF
         """
         if not self._miner_entity:
             return
 
+        # ── State reconciliation: read actual switch state ────
+        actual_state_obj = self.hass.states.get(self._miner_entity)
+        actual_on = actual_state_obj.state == "on" if actual_state_obj else self._miner_on
+
+        # Correct internal state if mismatch (e.g. manual toggle or HA restart)
+        if actual_on != self._miner_on:
+            _LOGGER.info(
+                "CARMA: Miner state reconciliation — internal=%s actual=%s → correcting",
+                self._miner_on,
+                actual_on,
+            )
+            self._miner_on = actual_on
+
         hour = datetime.now().hour
         is_night = hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END
+        is_daytime = not is_night
         is_winter = datetime.now().month in (10, 11, 12, 1, 2, 3)
         miner_heat_useful = bool(self._cfg.get("miner_heat_useful", False)) and is_winter
 
         miner_start_w = float(self._cfg.get("miner_start_export_w", DEFAULT_MINER_START_EXPORT_W))
         miner_stop_w = float(self._cfg.get("miner_stop_import_w", DEFAULT_MINER_STOP_IMPORT_W))
+        price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        current_price = state.current_price if state.current_price > 0 else self._daily_avg_price
 
-        # Night: miner OFF (save grid power) — unless heat is needed
+        # ── (b) Low SoC + expensive price → OFF ────────────────
+        if state.total_battery_soc < 30 and current_price > price_expensive:
+            if self._miner_on:
+                _LOGGER.info(
+                    "CARMA: Low battery %.0f%% + expensive price %.0f öre → miner OFF",
+                    state.total_battery_soc,
+                    current_price,
+                )
+                await self._cmd_miner(False)
+            return
+
+        # ── (a) High SoC + daytime → keep ON (batteries support) ──
+        if state.total_battery_soc > 80 and is_daytime:
+            if not self._miner_on:
+                _LOGGER.info(
+                    "CARMA: High battery %.0f%% + daytime → miner ON (battery supports)",
+                    state.total_battery_soc,
+                )
+                await self._cmd_miner(True)
+            return
+
+        # ── Night: miner OFF (save grid power) — unless heat needed ──
         if is_night and self._miner_on and not miner_heat_useful:
             await self._cmd_miner(False)
             return
 
-        # Exporting surplus → mine
+        # ── Exporting surplus → mine ───────────────────────────
         if state.is_exporting and abs(state.grid_power_w) > miner_start_w:
             if not self._miner_on:
                 _LOGGER.info(
@@ -1778,6 +1984,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 {"entity_id": self._miner_entity},
             )
             self._miner_on = on
+            # CARMA-P0-FIXES Task 4: Save runtime after miner state change
+            await self._async_save_runtime()
         except Exception:
             _LOGGER.warning("CARMA: miner control failed", exc_info=True)
 
@@ -1799,6 +2007,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 return
         self._ev_enabled = True
         self._ev_current_amps = amps
+        # CARMA-P0-FIXES Task 4: Save runtime after EV state change
+        await self._async_save_runtime()
 
     async def _cmd_ev_stop(self) -> None:
         """Stop EV: disable + reset to 6A."""
@@ -1809,6 +2019,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         await self.ev_adapter.reset_to_default()
         self._ev_enabled = False
         self._ev_current_amps = 0
+        # CARMA-P0-FIXES Task 4: Save runtime after EV state change
+        await self._async_save_runtime()
 
     async def _cmd_ev_adjust(self, amps: int) -> None:
         """Adjust EV amps without enable/disable."""
@@ -1821,6 +2033,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ok = await self.ev_adapter.set_current(amps)
         if ok:
             self._ev_current_amps = amps
+            # CARMA-P0-FIXES Task 4: Save runtime after EV amps change
+            await self._async_save_runtime()
 
     def _record_decision(
         self,
@@ -2743,6 +2957,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             action=action,
             temperature_c=temperature_c,
         )
+        # CARMA-P0-FIXES Task 4: Save ledger after recording (rate-limited)
+        self.hass.async_create_task(
+            self._async_save_ledger(),
+            "carmabox_save_ledger",
+        )
 
         # PLAT-927: Ellevio realtime — rolling hourly weighted average
         now_hour = datetime.now().hour
@@ -3060,6 +3279,113 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if success:
             self._last_command = BatteryCommand.CHARGE_PV
             self.safety.record_mode_change()
+            # CARMA-P0-FIXES Task 4: Save runtime after command change
+            await self._async_save_runtime()
+
+    async def _cmd_grid_charge(self, state: CarmaboxState) -> None:
+        """Set batteries to charge from grid (CARMA-P0-FIXES Task 2).
+
+        GoodWe: charge_pv + fast_charging = charges from grid when no PV.
+        SafetyGuard: heartbeat + rate limit + charge check.
+        """
+        if self._last_command == BatteryCommand.CHARGE_PV:
+            # Already in charge mode — just ensure fast charging is on
+            if self.inverter_adapters:
+                for adapter in self.inverter_adapters:
+                    if isinstance(adapter, GoodWeAdapter) and adapter.soc < 100:
+                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+            return
+
+        # ── SafetyGuard gates (defense-in-depth) ─────────────
+        heartbeat = self.safety.check_heartbeat()
+        if not heartbeat.ok:
+            _LOGGER.warning("SafetyGuard blocked grid_charge: %s", heartbeat.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        rate = self.safety.check_rate_limit()
+        if not rate.ok:
+            _LOGGER.info("SafetyGuard blocked grid_charge: %s", rate.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        temp_c = self._read_battery_temp()
+        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
+        if not charge_check.ok:
+            _LOGGER.info("SafetyGuard blocked grid_charge: %s", charge_check.reason)
+            self._daily_safety_blocks += 1
+            return
+
+        _LOGGER.info("CARMA: grid_charge (cheap price)")
+        success = False
+        failed = False
+
+        if self.inverter_adapters:
+            for adapter in self.inverter_adapters:
+                if adapter.soc >= 100:
+                    ok = await adapter.set_ems_mode("battery_standby")
+                else:
+                    ok = await adapter.set_ems_mode("charge_pv")
+                    # Enable fast charging with grid import — GoodWe charges from grid when no PV
+                    if ok and isinstance(adapter, GoodWeAdapter):
+                        ok = await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                if ok:
+                    success = True
+                else:
+                    failed = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning("Partial grid_charge failure — rolling back all to standby")
+                for adapter in self.inverter_adapters:
+                    await adapter.set_ems_mode("battery_standby")
+                    if isinstance(adapter, GoodWeAdapter):
+                        await adapter.set_fast_charging(on=False, power_pct=0, soc_target=100)
+                self._daily_safety_blocks += 1
+                success = False
+        else:
+            # Legacy: raw entity-based control
+            # Note: legacy mode doesn't have fast_charging — grid charge won't work properly
+            _LOGGER.warning(
+                "Grid charge requested but no GoodWe adapter — using charge_pv (may not work)"
+            )
+            for ems_key in ("battery_ems_1", "battery_ems_2"):
+                entity = self._get_entity(ems_key)
+                if not entity:
+                    continue
+                soc_key = ems_key.replace("ems", "soc")
+                soc = self._read_float(self._get_entity(soc_key))
+                mode = "battery_standby" if soc >= 100 else "charge_pv"
+                if await self._safe_service_call(
+                    "select", "select_option", {"entity_id": entity, "option": mode}
+                ):
+                    if self.executor_enabled:
+                        self._check_write_verify(entity, mode)
+                    success = True
+                else:
+                    failed = True
+
+            # R3: Rollback on partial failure — force ALL to standby
+            if failed and success:
+                _LOGGER.warning(
+                    "Partial grid_charge failure — rolling back all to standby (legacy)"
+                )
+                for ems_key in ("battery_ems_1", "battery_ems_2"):
+                    entity = self._get_entity(ems_key)
+                    if entity:
+                        await self._safe_service_call(
+                            "select",
+                            "select_option",
+                            {"entity_id": entity, "option": "battery_standby"},
+                        )
+                self._daily_safety_blocks += 1
+                success = False
+
+        if success:
+            self._last_command = BatteryCommand.CHARGE_PV  # Same command enum
+            self.safety.record_mode_change()
+            # CARMA-P0-FIXES Task 4: Save runtime after command change
+            await self._async_save_runtime()
 
     async def _cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:
         """Set all batteries to standby.
@@ -3111,6 +3437,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if success:
             self._last_command = BatteryCommand.STANDBY
             self.safety.record_mode_change()
+            # CARMA-P0-FIXES Task 4: Save runtime after command change
+            await self._async_save_runtime()
 
     async def _cmd_discharge(self, state: CarmaboxState, watts: int) -> None:
         """Set batteries to discharge at specified wattage.
@@ -3208,6 +3536,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._last_command = BatteryCommand.DISCHARGE
                 self._last_discharge_w = watts
                 self.safety.record_mode_change()
+                # CARMA-P0-FIXES Task 4: Save runtime after command change
+                await self._async_save_runtime()
+                # CARMA-P0-FIXES Task 4: Save runtime after command change
+                await self._async_save_runtime()
         else:
             # Legacy: raw entity-based control
             # Energy-proportional split (SoC × capacity)
@@ -3268,3 +3600,5 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._last_command = BatteryCommand.DISCHARGE
                 self._last_discharge_w = watts
                 self.safety.record_mode_change()
+                # CARMA-P0-FIXES Task 4: Save runtime after command change
+                await self._async_save_runtime()
