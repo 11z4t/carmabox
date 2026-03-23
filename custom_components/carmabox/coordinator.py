@@ -772,8 +772,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # EV startup: set safe fallback + disable (PLAT-949)
             if not self._ev_initialized and self.ev_adapter:
                 self._ev_initialized = True
-                _LOGGER.info("CARMA: EV startup — setting 6A fallback + disabling charger")
-                await self._cmd_ev_stop()
+                if self._ev_enabled:
+                    _LOGGER.info("CARMA: EV was charging before restart — keeping")
+                else:
+                    _LOGGER.info("CARMA: EV startup — fallback 6A")
+                    await self._cmd_ev_stop()
 
             self.safety.update_heartbeat()
 
