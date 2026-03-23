@@ -170,6 +170,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # EV executor state (PLAT-949)
         self._ev_enabled: bool = False
         self._last_known_ev_soc: float = -1.0
+        # IT-1965: Seed from persistent helper if available
+        try:
+            seed = self.hass.states.get("input_number.carma_ev_last_known_soc")
+            if seed and seed.state not in ("unknown", "unavailable", ""):
+                self._last_known_ev_soc = float(seed.state)
+                _LOGGER.info("CARMA EV: seeded last_known_soc=%.0f%% from helper", self._last_known_ev_soc)
+        except Exception:
+            pass
         self._ev_current_amps: int = 0
         self._ev_last_ramp_time: float = 0.0
         self._ev_initialized: bool = False
