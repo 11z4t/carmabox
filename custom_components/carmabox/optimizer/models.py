@@ -131,6 +131,14 @@ class CarmaboxState:
     # Temperature
     battery_temp_c: float | None = None
 
+    # Weather (Tempest)
+    outdoor_temp_c: float = 0.0
+    solar_radiation_wm2: float = 0.0  # W/m² — direct solar irradiance
+    illuminance_lx: float = 0.0  # lux — light level
+    barometric_pressure_hpa: float = 0.0  # hPa — falling = bad weather coming
+    rain_mm: float = 0.0  # mm last hour — rain = no PV
+    wind_speed_kmh: float = 0.0  # km/h — affects VP efficiency
+
     # Price
     current_price: float = 0.0
 

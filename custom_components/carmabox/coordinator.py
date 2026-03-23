@@ -842,6 +842,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_current_a=ev_current_a,
             ev_status=ev_status,
             battery_temp_c=self._read_battery_temp(),
+            # Weather (Tempest — prefer local MQTT, fallback to cloud)
+            outdoor_temp_c=self._read_float(
+                opts.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
+            ),
+            solar_radiation_wm2=self._read_float(
+                opts.get("solar_radiation_entity", "sensor.tempest_solar_radiation")
+            ),
+            illuminance_lx=self._read_float(
+                opts.get("illuminance_entity", "sensor.tempest_illuminance")
+            ),
+            barometric_pressure_hpa=self._read_float(
+                opts.get("pressure_entity", "sensor.sanduddsvagen_60_pressure_barometric")
+            ),
+            rain_mm=self._read_float(
+                opts.get("rain_entity", "sensor.sanduddsvagen_60_rain_last_hour")
+            ),
+            wind_speed_kmh=self._read_float(
+                opts.get("wind_speed_entity", "sensor.sanduddsvagen_60_wind_speed")
+            ),
             current_price=self._read_float(opts.get("price_entity", "")),
             target_weighted_kw=self.target_kw,
             plan=self.plan,
@@ -1265,13 +1284,26 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Don't wait for grid to exceed target — ANY unnecessary grid import
         # when batteries have capacity is wasted money.
         #
-        # Aggressiveness scales with SoC and PV:
-        # - SoC >= 50% + PV active (>300W) → aggressive: target 0W grid
-        #   (PV + battery = house should run on free energy)
-        # - SoC >= 80% + no PV → moderate: discharge to reduce grid
-        # - SoC >= min_soc + 5% → conservative: only if grid > 500W
-        _proactive_min_grid_w = 50.0 if pv_kw > 0.3 else 200.0
-        _proactive_soc_threshold = max(self.min_soc + 10, 50.0) if pv_kw > 0.3 else 80.0
+        # Aggressiveness scales with SoC, PV, and solar radiation (Tempest):
+        # - High radiation (>200 W/m²) OR PV active → aggressive: batteries refill from sun
+        # - Low radiation + rain → conservative: save batteries
+        # - No weather data → use PV as proxy
+        _sun_available = (
+            state.solar_radiation_wm2 > 100
+            or pv_kw > 0.3
+            or (not is_night and state.illuminance_lx > 20000)
+        )
+        _rain_active = state.rain_mm > 0.5
+        if _sun_available and not _rain_active:
+            _proactive_min_grid_w = 50.0
+            _proactive_soc_threshold = max(self.min_soc + 10, 40.0)
+        elif not is_night:
+            # Daytime but cloudy/rainy — moderate
+            _proactive_min_grid_w = 200.0
+            _proactive_soc_threshold = 80.0
+        else:
+            _proactive_min_grid_w = 300.0
+            _proactive_soc_threshold = 90.0
         if (
             state.total_battery_soc >= _proactive_soc_threshold
             and net_w > _proactive_min_grid_w
