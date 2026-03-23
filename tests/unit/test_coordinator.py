@@ -71,6 +71,10 @@ def _make_coordinator(
     coord._current_date = "2026-03-18"
     coord._daily_avg_price = float((options or {}).get("fallback_price_ore", 80.0))
     coord._avg_price_initialized = True
+    coord.notifier = MagicMock()
+    coord.notifier.crosscharge_alert = AsyncMock()
+    coord.notifier.proactive_discharge_started = AsyncMock()
+    coord.notifier.safety_block = AsyncMock()
     coord.inverter_adapters = []
     coord.ev_adapter = None
     coord.last_decision = Decision()

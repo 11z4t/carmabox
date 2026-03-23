@@ -66,6 +66,7 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
@@ -143,6 +144,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.safety = SafetyGuard(
             min_soc=self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC),
         )
+        self.notifier = CarmaNotifier(hass, self._cfg)
         self.plan: list[HourPlan] = []
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
@@ -913,6 +915,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not crosscharge.ok:
             _LOGGER.warning("SafetyGuard crosscharge: %s", crosscharge.reason)
             self._daily_safety_blocks += 1
+            await self.notifier.crosscharge_alert(
+                state.battery_power_1,
+                state.battery_power_2,
+            )
             await self._cmd_standby(state, force=True)
             return
 
@@ -1159,6 +1165,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
                 await self._cmd_discharge(state, proactive_w)
+                await self.notifier.proactive_discharge_started(
+                    proactive_w,
+                    state.total_battery_soc,
+                    net_w,
+                    pv_kw,
+                )
                 self._record_decision(
                     state,
                     "discharge",
@@ -2402,6 +2414,38 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.appliance_energy_wh = {}
             self._current_date = today
             self._update_daily_avg_price()
+
+        # Morning report at 06:00 (once per day)
+        if now.hour == 6 and now.minute < 1:
+            self.hass.async_create_task(
+                self._send_morning_report(),
+                "carmabox_morning_report",
+            )
+
+    async def _send_morning_report(self) -> None:
+        """Send morning battery/energy report at 06:00."""
+        try:
+            soc_k = self._read_float(self._get_entity("battery_soc_1"))
+            soc_f = self._read_float(self._get_entity("battery_soc_2"))
+            ev_soc = self._read_float(self._get_entity("ev_soc_entity"), -1)
+            # Yesterday's summary from ledger
+            from datetime import timedelta
+
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            summary = self.ledger.daily_summary(yesterday)
+            cost = summary.get("total_cost_kr", 0)
+            saved = summary.get("battery_net_saving_kr", 0)
+            price = self._read_float(self._get_entity("price_entity"), 0)
+            await self.notifier.morning_report(
+                soc_k,
+                soc_f,
+                ev_soc,
+                cost,
+                saved,
+                price,
+            )
+        except Exception as e:
+            _LOGGER.debug("Morning report failed: %s", e)
 
     def _update_daily_avg_price(self) -> None:
         """Calculate daily average price from Nordpool today_prices."""
