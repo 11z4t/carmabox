@@ -1519,6 +1519,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         hysteresis = 0.9 if self._last_command == BatteryCommand.DISCHARGE else 1.0
         if weighted_net > target_w * hysteresis and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
+
+            # IT-2074: Price-aware discharge throttling
+            # If price drops >30% in next 2h, throttle to 50% (save kWh for later)
+            current_price = state.current_price if state.current_price > 0 else self._daily_avg_price
+            if current_price > 0 and len(self.plan) > 0:
+                future_prices = []
+                for ph in self.plan:
+                    if ph.hour == (hour + 1) % 24 or ph.hour == (hour + 2) % 24:
+                        if ph.price_ore > 0:
+                            future_prices.append(ph.price_ore)
+                if future_prices:
+                    min_future = min(future_prices)
+                    if min_future < current_price * 0.7:
+                        # Price drops >30% soon — throttle discharge
+                        old_discharge = discharge_w
+                        discharge_w = max(100, discharge_w // 2)
+                        reasoning.append(
+                            f"Pris {current_price:.0f}→{min_future:.0f} öre inom 2h "
+                            f"→ throttlad {old_discharge}→{discharge_w}W (sparar för dyrare)"
+                        )
+
             reasoning.append(
                 f"Grid {weighted_net / 1000:.1f} kW viktat > target {self.target_kw:.1f} kW "
                 f"→ batteri kompenserar {discharge_w}W"
