@@ -1473,12 +1473,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # With PV: aggressively target 0W grid (sol fyller tillbaka)
             # Without PV: moderate — just reduce grid, don't drain battery
             proactive_w = int(min(net_w, 5000))  # Match grid import fully
+            # IT-2075: Calculate available vs reserve for gating
+            bat1_kwh = float(self._cfg.get("battery_1_kwh", 15.0))
+            bat2_kwh = float(self._cfg.get("battery_2_kwh", 5.0))
+            available_kwh = max(0, (state.battery_soc_1 - self.min_soc) / 100 * bat1_kwh
+                               + max(0, (state.battery_soc_2 - self.min_soc) / 100 * bat2_kwh))
+            reserve_kwh = getattr(self, "_current_reserve_kwh", 0.0)
+
             result = self.safety.check_discharge(
                 state.battery_soc_1,
                 state.battery_soc_2,
                 self.min_soc,
                 state.grid_power_w,
                 temp_c,
+                reserve_kwh=reserve_kwh,
+                available_kwh=available_kwh,
             )
             if result.ok:
                 pv_note = (

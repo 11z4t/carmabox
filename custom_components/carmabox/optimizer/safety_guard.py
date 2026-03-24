@@ -109,6 +109,8 @@ class SafetyGuard:
         min_soc: float,
         grid_power_w: float,
         temp_c: float | None = None,
+        reserve_kwh: float = 0.0,
+        available_kwh: float = 999.0,
     ) -> SafetyResult:
         """Check if discharge is safe.
 
@@ -116,7 +118,15 @@ class SafetyGuard:
         - Any battery below min SoC
         - Grid is exporting (grid_power < 0)
         - Temperature out of range
+        - IT-2075: Available energy below reserve
         """
+        # IT-2075: Reserve-aware gating
+        if reserve_kwh > 0 and available_kwh < reserve_kwh + 1.0:
+            reason = f"available {available_kwh:.1f} kWh < reserve {reserve_kwh:.1f} + 1.0"
+            _LOGGER.info("SafetyGuard BLOCK discharge: %s", reason)
+            r = SafetyResult(ok=False, reason=reason)
+            self._log("discharge", r)
+            return r
         # Never discharge during export
         if grid_power_w < 0:
             reason = f"grid exporting ({grid_power_w:.0f}W)"
