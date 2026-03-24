@@ -2109,6 +2109,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         elif ev_soc > 0:
             self._last_known_ev_soc = ev_soc
 
+        # ── IT-2064: Ellevio emergency brake ──────────────────
+        # If weighted grid > tak * 0.95 AND EV is charging → reduce immediately
+        if self._ev_enabled and self.ev_adapter and self.ev_adapter.power_w > 100:
+            weight = self._ellevio_weight(hour)
+            grid_kw = max(0, state.grid_power_w) / 1000
+            weighted_kw = grid_kw * weight
+            tak_kw = float(self._cfg.get("ellevio_tak_kw", 4.0))
+            if weighted_kw > tak_kw * 0.95:
+                # Emergency: reduce to 6A or stop
+                if self._ev_current_amps > 6:
+                    _LOGGER.warning(
+                        "CARMA EV BRAKE: weighted %.1f kW > tak %.1f — reducing to 6A",
+                        weighted_kw, tak_kw,
+                    )
+                    await self._cmd_ev_adjust(6)
+                    return
+                elif weighted_kw > tak_kw * 1.05:
+                    _LOGGER.warning(
+                        "CARMA EV BRAKE: weighted %.1f kW >> tak %.1f — stopping EV",
+                        weighted_kw, tak_kw,
+                    )
+                    await self._cmd_ev_stop()
+                    return
+
         # ── EV-2: Target SoC reached → stop ──────────────────
         ev_target = self._calculate_ev_target()
         if ev_soc >= ev_target:
