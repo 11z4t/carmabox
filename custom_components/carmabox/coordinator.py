@@ -1563,9 +1563,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         hysteresis = 0.9 if self._last_command == BatteryCommand.DISCHARGE else 1.0
         if weighted_net > target_w * hysteresis and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
+
+            # IT-2074: Price-aware discharge throttle — if prices are falling
+            # in the next 2h, throttle discharge by 50% to conserve expensive kWh
+            # for later when they're worth less. Only the amount is throttled;
+            # the decision to discharge still stands (peak shaving must continue).
+            price_falling, drop_ratio = self._price_falling_ahead(hour)
+            throttle_note = ""
+            if price_falling and discharge_w > 0:
+                original_w = discharge_w
+                throttle_factor = float(self._cfg.get("price_drop_throttle_factor", 0.5))
+                discharge_w = max(200, int(discharge_w * throttle_factor))
+                throttle_note = (
+                    f" (throttlad {original_w}→{discharge_w}W, "
+                    f"pris faller {drop_ratio * 100:.0f}% nästa 2h)"
+                )
+                reasoning.append(
+                    f"IT-2074: Pris faller {drop_ratio * 100:.0f}% inom 2h "
+                    f"→ throttlar urladdning {throttle_factor * 100:.0f}% "
+                    f"({original_w}→{discharge_w}W)"
+                )
+
             reasoning.append(
                 f"Grid {weighted_net / 1000:.1f} kW viktat > target {active_target_kw:.1f} kW "
-                f"→ batteri kompenserar {discharge_w}W"
+                f"→ batteri kompenserar {discharge_w}W{throttle_note}"
             )
             result = self.safety.check_discharge(
                 state.battery_soc_1,
@@ -1580,6 +1601,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 step5 = (
                     f"Urladdning {discharge_w}W → Ellevio ser {active_target_kw:.1f} kW "
                     f"istf {weighted_net / 1000:.1f} kW, sparar ~{ellevio_saving:.0f} kr/mån"
+                    f"{throttle_note}"
                 )
                 reasoning.append(step5)
                 chain.append({"step": "resultat", "label": "Resultat", "detail": step5})
@@ -1590,7 +1612,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     f"Urladdning {discharge_w}W — grid {weighted_net / 1000:.1f} kW viktat "
                     f"> target {active_target_kw:.1f} kW "
                     f"({state.current_price:.0f} öre/kWh, "
-                    f"batteri {state.battery_soc_1:.0f}%)",
+                    f"batteri {state.battery_soc_1:.0f}%)"
+                    f"{throttle_note}",
                     discharge_w=discharge_w,
                     reasoning=reasoning,
                     reasoning_chain=chain,
@@ -2951,6 +2974,68 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
             self._daily_avg_price = sum(prices) / len(prices)
+
+    def _price_falling_ahead(
+        self,
+        current_hour: int,
+        lookahead_hours: int = 2,
+    ) -> tuple[bool, float]:
+        """IT-2074: Check if prices are falling in the next hours.
+
+        Returns (is_falling, drop_ratio) where drop_ratio is the fraction
+        the price drops (e.g. 0.5 means price halves). Only considers it
+        "falling" if the minimum upcoming price is at least 30% cheaper
+        than the current price.
+
+        Args:
+            current_hour: Current hour (0-23).
+            lookahead_hours: How many hours ahead to check (default 2).
+
+        Returns:
+            Tuple of (is_falling, drop_ratio). drop_ratio = 1 - (min_future / current).
+        """
+        price_entity = self._get_entity("price_entity", "")
+        if not price_entity:
+            return False, 0.0
+
+        fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+        adapter = NordpoolAdapter(self.hass, price_entity, fallback)
+        today = adapter.today_prices
+        tomorrow = adapter.tomorrow_prices
+
+        # Build upcoming price window
+        current_price = today[current_hour] if current_hour < len(today) else fallback
+        if current_price <= 0 or current_price == fallback:
+            return False, 0.0
+
+        upcoming: list[float] = []
+        for h_offset in range(1, lookahead_hours + 1):
+            h = current_hour + h_offset
+            if h < 24:
+                if h < len(today):
+                    upcoming.append(today[h])
+            else:
+                # Next day
+                h_tomorrow = h - 24
+                if tomorrow and h_tomorrow < len(tomorrow):
+                    upcoming.append(tomorrow[h_tomorrow])
+                elif h_tomorrow < len(today):
+                    # No tomorrow data — skip (don't assume)
+                    pass
+
+        if not upcoming:
+            return False, 0.0
+
+        min_upcoming = min(upcoming)
+        if min_upcoming >= current_price:
+            return False, 0.0
+
+        drop_ratio = 1.0 - (min_upcoming / current_price)
+        # Only consider it "falling" if drop is significant (>= 30%)
+        threshold = float(self._cfg.get("price_drop_throttle_pct", 30.0)) / 100.0
+        if drop_ratio >= threshold:
+            return True, round(drop_ratio, 3)
+        return False, 0.0
 
     def _track_appliances(self) -> None:
         """PLAT-943: Read appliance power sensors and accumulate energy."""

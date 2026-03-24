@@ -2374,3 +2374,165 @@ class TestReserveTarget:
         target = coord._calculate_reserve_target()
         # Neutral → base 15% + 5% = 20%
         assert target == 20.0
+
+
+class TestPriceFallingAhead:
+    """IT-2074: Price-aware discharge throttle tests."""
+
+    def _setup_prices(
+        self,
+        coord: CarmaboxCoordinator,
+        today: list[float],
+        tomorrow: list[float] | None = None,
+    ) -> None:
+        """Set up Nordpool price mock on coordinator."""
+        attrs: dict[str, object] = {"today": today}
+        if tomorrow is not None:
+            attrs["tomorrow"] = tomorrow
+            attrs["tomorrow_valid"] = True
+        else:
+            attrs["tomorrow_valid"] = False
+        _set_state(coord, "sensor.nordpool", str(today[0]), attributes=attrs)
+
+    def test_falling_price_detected(self) -> None:
+        """120 öre now, 40 öre in 2h → falling (67% drop)."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        # 24h prices: hour 17=120, hour 18=80, hour 19=40
+        prices = [50.0] * 24
+        prices[17] = 120.0
+        prices[18] = 80.0
+        prices[19] = 40.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
+        assert falling is True
+        assert ratio >= 0.3  # 40/120 = 0.33 → drop = 0.67
+
+    def test_stable_price_not_flagged(self) -> None:
+        """120 öre now, 110 öre in 2h → not falling (< 30% drop)."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        prices = [120.0] * 24
+        prices[18] = 110.0
+        prices[19] = 100.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
+        assert falling is False
+
+    def test_rising_price_not_flagged(self) -> None:
+        """80 öre now, 120 öre in 1h → not falling."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        prices = [80.0] * 24
+        prices[17] = 80.0
+        prices[18] = 120.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17)
+        assert falling is False
+        assert ratio == 0.0
+
+    def test_cross_midnight_uses_tomorrow(self) -> None:
+        """Hour 23, tomorrow hour 0 is much cheaper → falling."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        today = [50.0] * 24
+        today[23] = 120.0
+        tomorrow = [30.0] * 24  # Much cheaper
+        self._setup_prices(coord, today, tomorrow)
+
+        falling, ratio = coord._price_falling_ahead(23, lookahead_hours=2)
+        assert falling is True
+        assert ratio >= 0.3
+
+    def test_no_price_entity_returns_false(self) -> None:
+        """No price entity configured → no throttle."""
+        coord = _make_coordinator({})
+        falling, ratio = coord._price_falling_ahead(17)
+        assert falling is False
+        assert ratio == 0.0
+
+    def test_configurable_threshold(self) -> None:
+        """Custom threshold of 50% — 40% drop should NOT trigger."""
+        coord = _make_coordinator(
+            {
+                "price_entity": "sensor.nordpool",
+                "price_drop_throttle_pct": 50.0,
+            }
+        )
+        prices = [100.0] * 24
+        prices[17] = 100.0
+        prices[18] = 65.0  # 35% drop — below 50% threshold
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=1)
+        assert falling is False
+
+
+class TestPriceAwareDischargeThrottle:
+    """IT-2074: Verify RULE_2 throttles discharge when prices fall."""
+
+    @pytest.mark.asyncio
+    async def test_discharge_throttled_when_price_falling(self) -> None:
+        """High load + falling prices → discharge at 50% power."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+                "price_entity": "sensor.nordpool",
+            }
+        )
+
+        # Setup falling prices: hour 17=120, hour 18=40
+        prices = [50.0] * 24
+        prices[17] = 120.0
+        prices[18] = 40.0
+        prices[19] = 30.0
+        attrs = {"today": prices, "tomorrow_valid": False}
+        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
+
+        state = CarmaboxState(
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=-1,
+            current_price=120.0,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 17
+            await coord._execute(state)
+
+        # Should still discharge (peak shaving) but at reduced power
+        assert coord._last_command == BatteryCommand.DISCHARGE
+        # Check that the decision mentions throttle
+        assert (
+            "throttl" in coord.last_decision.reason.lower()
+            or coord.last_decision.discharge_w < 3000
+        )  # Throttled from ~3000W
+
+    @pytest.mark.asyncio
+    async def test_discharge_not_throttled_when_price_stable(self) -> None:
+        """High load + stable prices → full discharge."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+                "price_entity": "sensor.nordpool",
+            }
+        )
+
+        # Stable prices
+        prices = [120.0] * 24
+        attrs = {"today": prices, "tomorrow_valid": False}
+        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
+
+        state = CarmaboxState(
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=-1,
+            current_price=120.0,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 17
+            await coord._execute(state)
+
+        assert coord._last_command == BatteryCommand.DISCHARGE
+        # Full discharge — no throttle mentioned
+        assert "throttl" not in (coord.last_decision.reason or "").lower()
