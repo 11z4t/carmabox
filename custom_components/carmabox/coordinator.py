@@ -1405,9 +1405,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── RULE 1.5: Grid charge at very cheap price ────────
-        grid_charge_threshold = float(
+        static_threshold = float(
             self._cfg.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
         )
+        # IT-2077: Dynamic threshold = min(static, daily_avg * 0.4)
+        # Catches cheap hours even in low-price seasons (summer avg ~15 öre)
+        dynamic_threshold = self._daily_avg_price * 0.4 if self._daily_avg_price > 0 else 999
+        grid_charge_threshold = min(static_threshold, max(5.0, dynamic_threshold))
         grid_charge_max_soc = float(
             self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
         )
