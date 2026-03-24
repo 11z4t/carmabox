@@ -347,6 +347,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not self._miner_entity:
             self._miner_entity = self._detect_miner_entity()
         self._miner_on: bool = False
+        self._ev_last_full_charge_date: str = ""  # ISO date of last 100% charge
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -450,6 +451,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._cmd_ev_start(6)
         else:
             _LOGGER.info("CARMA: Cable connected, no PV surplus — waiting for next cycle")
+
+    def _days_since_full_charge(self) -> int:
+        """IT-2066: Days since EV was last at 100% SoC."""
+        if not self._ev_last_full_charge_date:
+            return 99  # Unknown → assume overdue
+        try:
+            last = datetime.strptime(self._ev_last_full_charge_date, "%Y-%m-%d")
+            return (datetime.now() - last).days
+        except ValueError:
+            return 99
 
     def _detect_miner_entity(self) -> str:
         """Auto-detect miner switch from appliances config."""
@@ -1009,6 +1020,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     target_weighted_kw=self.target_kw,
                     morning_target_soc=ev_morning_target,
                     full_charge_interval_days=ev_full_days,
+                    days_since_full_charge=self._days_since_full_charge(),
                     battery_kwh_available=battery_kwh_available,
                     pv_tomorrow_kwh=pv_tomorrow_kwh,
                     daily_consumption_kwh=daily_consumption,
@@ -2108,6 +2120,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 _LOGGER.warning("CARMA EV: no SoC data at all — assuming 50%%")
         elif ev_soc > 0:
             self._last_known_ev_soc = ev_soc
+            # Track full charge for weekly full-charge logic
+            if ev_soc >= 99:
+                self._ev_last_full_charge_date = datetime.now().strftime("%Y-%m-%d")
+
+        # ── IT-2066: Appliance detection (disk/tvätt/tork) ─────
+        # Read appliance power for pause logic
+        _appliance_w = 0.0
+        for app_entity in ("sensor.98_shelly_plug_s_power",
+                           "sensor.102_shelly_plug_g3_power",
+                           "sensor.103_shelly_plug_g3_power"):
+            app_state = self.hass.states.get(app_entity)
+            if app_state and app_state.state not in ("unavailable", "unknown", ""):
+                try:
+                    _appliance_w += float(app_state.state)
+                except (ValueError, TypeError):
+                    pass
 
         # ── IT-2064: Ellevio emergency brake ──────────────────
         # If weighted grid > tak * 0.95 AND EV is charging → reduce immediately
@@ -2174,6 +2202,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     grid_now_kw = max(0, state.grid_power_w) / 1000
                     weight = self._ellevio_weight(hour)
                     headroom_kw = self.target_kw / weight - grid_now_kw
+                    # IT-2066: If appliances running, check combined headroom
+                    if _appliance_w > 500:
+                        combined_kw = ev_kw + _appliance_w / 1000
+                        if headroom_kw < combined_kw:
+                            _LOGGER.info(
+                                "CARMA EV: appliances %.0fW running — pausing EV (headroom %.1f < combined %.1f)",
+                                _appliance_w, headroom_kw, combined_kw,
+                            )
+                            if self._ev_enabled:
+                                await self._cmd_ev_stop()
+                            return
+
                     if headroom_kw >= ev_kw * 0.5:
                         # Enough headroom — charge at 6A
                         if not self._ev_enabled:
