@@ -36,6 +36,8 @@ from .adapters.solcast import SolcastAdapter
 from .const import (
     COLD_LOCK_CELL_TEMP_C,
     COLD_LOCK_POWER_THRESHOLD_W,
+    COLD_MIN_SOC_PCT,
+    COLD_TEMP_THRESHOLD_C,
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
@@ -58,15 +60,37 @@ from .const import (
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PRICE_CHEAP_ORE,
     DEFAULT_PRICE_EXPENSIVE_ORE,
+    DEFAULT_TARGET_DAY_KW,
+    DEFAULT_TARGET_NIGHT_KW,
     DEFAULT_TARGET_WEIGHTED_KW,
     DEFAULT_VOLTAGE,
     DEFAULT_WATCHDOG_DISCHARGE_MIN_W,
     DEFAULT_WATCHDOG_EV_IMPORT_W,
     DEFAULT_WATCHDOG_EXPORT_W,
     DEFAULT_WATCHDOG_MIN_SOC_PCT,
+    DISCHARGE_LIMIT_HIGH_SOC_W,
+    DISCHARGE_LIMIT_LOW_SOC_W,
+    DISCHARGE_LIMIT_MID_SOC_W,
+    DISCHARGE_LIMIT_VERY_LOW_SOC_W,
+    DISCHARGE_NIGHT_FACTOR,
     EV_RAMP_INTERVAL_S,
+    PEAK_MIN_MEANINGFUL_KW,
+    PEAK_RANK_COUNT,
+    PEAK_UPDATE_INTERVAL_S,
+    PEAK_WARNING_MARGIN_KW,
     PLAN_INTERVAL_SECONDS,
+    RESERVE_OFFSET_NEUTRAL_PCT,
+    RESERVE_OFFSET_STRONG_PCT,
+    RESERVE_OFFSET_WEAK_PCT,
+    RESERVE_PV_STRONG_KWH,
+    RESERVE_PV_WEAK_KWH,
     SCAN_INTERVAL_SECONDS,
+    SPIKE_COOLDOWN_S,
+    SPIKE_DEFAULT_PS_LIMIT_W,
+    SPIKE_DETECTION_THRESHOLD_W,
+    SPIKE_HISTORY_WINDOW_S,
+    SPIKE_PS_LIMIT_W,
+    SPIKE_SAFETY_TIMEOUT_S,
     TAPER_EV_SURPLUS_W,
     TAPER_EXIT_EXPORT_W,
     TAPER_EXIT_PV_KW,
@@ -333,6 +357,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # IT-1948: BMS cold lock detection — tracks when BMS blocks ALL charging
         # because min cell temperature is below lithium plating protection threshold
         self._cold_lock_active: bool = False
+
+        # ── IT-2067: Peak Tracking (rolling top-3 monthly peaks) ───
+        self._peak_ranks: list[float] = [0.0] * PEAK_RANK_COUNT
+        self._peak_month: int = init_now.month
+        self._peak_last_update: float = 0.0  # monotonic
+
+        # ── IT-2067: Appliance Spike Detection & Response ──────────
+        self._spike_active: bool = False
+        self._spike_activated_at: float = 0.0  # monotonic
+        self._spike_cooldown_started: float = 0.0  # monotonic
+        self._grid_power_history: deque[tuple[float, float]] = deque(
+            maxlen=120
+        )  # (monotonic_time, grid_w) — ~60s at 30s intervals + safety margin
+
+        # ── IT-2067: Reserve Target (Solcast-based dynamic min_soc) ─
+        self._reserve_target_pct: float = self.min_soc
+        self._reserve_last_calc: float = 0.0  # monotonic
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -621,13 +662,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._ev_current_amps = int(data.get("ev_current_amps", 6))
                 # Restore miner state
                 self._miner_on = bool(data.get("miner_on", False))
+                # IT-2067: Restore peak tracking data
+                peak_data = data.get("peak_ranks", [])
+                if isinstance(peak_data, list) and len(peak_data) == PEAK_RANK_COUNT:
+                    self._peak_ranks = [float(p) for p in peak_data]
+                self._peak_month = int(data.get("peak_month", datetime.now().month))
                 _LOGGER.info(
-                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s",
+                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s, "
+                    "peaks=%s (month=%d)",
                     len(self.plan),
                     cmd_str,
                     self._ev_enabled,
                     self._ev_current_amps,
                     self._miner_on,
+                    [f"{p:.2f}" for p in self._peak_ranks],
+                    self._peak_month,
                 )
         except Exception:
             _LOGGER.warning("Failed to restore runtime, starting fresh", exc_info=True)
@@ -656,6 +705,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "ev_enabled": self._ev_enabled,
                 "ev_current_amps": self._ev_current_amps,
                 "miner_on": self._miner_on,
+                # IT-2067: Peak tracking persistence
+                "peak_ranks": self._peak_ranks,
+                "peak_month": self._peak_month,
             }
             await self._runtime_store.async_save(data)
         except Exception:
@@ -1095,17 +1147,33 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Read temperature for safety checks
         temp_c = self._read_battery_temp()
 
-        # ── Compute metrics for decision ──────────────────────
+        # ── IT-2067: Update subsystems ────────────────────────
         hour = datetime.now().hour
+        is_night = hour >= 22 or hour < 6
+        net_w = max(0, state.grid_power_w)
+        grid_kw = net_w / 1000
+
+        # Peak tracking: update rolling top-3
+        self._track_peaks(grid_kw)
+
+        # Appliance spike: check recovery first, then detect new spikes
+        await self._handle_spike_recovery(state.grid_power_w)
+        if not self._spike_active and self._detect_appliance_spike(state.grid_power_w):
+            await self._handle_appliance_spike(state)
+
+        # Reserve target: dynamic min_soc based on forecast + temperature
+        effective_min_soc = self._effective_min_soc()
+
+        # ── Compute metrics for decision ──────────────────────
         night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
         weight = ellevio_weight(hour, night_weight=night_weight)
         # H5: grid_power_w IS what Ellevio sees (net import after PV + battery)
         # Don't adjust for EV/PV — they're already in the meter reading
-        net_w = max(0, state.grid_power_w)
         weighted_net = net_w * weight
-        target_w = self.target_kw * 1000
+        # IT-2067: Use peak-risk-adjusted target instead of flat target_kw
+        active_target_kw = self._adjusted_target_kw(is_night, grid_kw)
+        target_w = active_target_kw * 1000
         pv_kw = state.pv_power_w / 1000
-        is_night = hour >= 22 or hour < 6
 
         # IT-1939: Clear taper if conditions no longer met
         if self._taper_active and (
@@ -1139,12 +1207,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         reasoning: list[str] = []
         chain: list[dict[str, str]] = []
         period = "natt" if is_night else "dag"
-        allowed_import = self.target_kw / weight if weight > 0 else self.target_kw
+        allowed_import = active_target_kw / weight if weight > 0 else active_target_kw
 
         # Step 1: Tidpunkt + Ellevio-vikt → tillåten import
+        # IT-2067: Include peak risk in reasoning
+        peak_risk = self._peak_risk_status(grid_kw)
         step1 = (
-            f"Kl {hour:02d}, {period}, Ellevio-vikt {weight:.1f} "
-            f"→ tillåten import {allowed_import:.1f} kW"
+            f"Kl {hour:02d}, {period}, Ellevio-vikt {weight:.1f}, "
+            f"peak-risk={peak_risk} "
+            f"→ tillåten import {allowed_import:.1f} kW "
+            f"(mål {active_target_kw:.1f} kW)"
         )
         reasoning.append(step1)
         chain.append(
@@ -1428,7 +1500,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         _rain_active = state.rain_mm > 0.5
         if _sun_available and not _rain_active:
             _proactive_min_grid_w = 50.0
-            _proactive_soc_threshold = max(self.min_soc + 10, 40.0)
+            _proactive_soc_threshold = max(effective_min_soc + 10, 40.0)
         elif not is_night:
             # Daytime but cloudy/rainy — moderate
             _proactive_min_grid_w = 200.0
@@ -1449,7 +1521,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             result = self.safety.check_discharge(
                 state.battery_soc_1,
                 state.battery_soc_2,
-                self.min_soc,
+                effective_min_soc,
                 state.grid_power_w,
                 temp_c,
             )
@@ -1492,21 +1564,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if weighted_net > target_w * hysteresis and weight > 0:
             discharge_w = int((weighted_net - target_w) / weight)
             reasoning.append(
-                f"Grid {weighted_net / 1000:.1f} kW viktat > target {self.target_kw:.1f} kW "
+                f"Grid {weighted_net / 1000:.1f} kW viktat > target {active_target_kw:.1f} kW "
                 f"→ batteri kompenserar {discharge_w}W"
             )
             result = self.safety.check_discharge(
                 state.battery_soc_1,
                 state.battery_soc_2,
-                self.min_soc,
+                effective_min_soc,
                 state.grid_power_w,
                 temp_c,
             )
             if result.ok:
                 peak_kr = float(self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
-                ellevio_saving = (weighted_net / 1000 - self.target_kw) * peak_kr
+                ellevio_saving = (weighted_net / 1000 - active_target_kw) * peak_kr
                 step5 = (
-                    f"Urladdning {discharge_w}W → Ellevio ser {self.target_kw:.1f} kW "
+                    f"Urladdning {discharge_w}W → Ellevio ser {active_target_kw:.1f} kW "
                     f"istf {weighted_net / 1000:.1f} kW, sparar ~{ellevio_saving:.0f} kr/mån"
                 )
                 reasoning.append(step5)
@@ -1516,7 +1588,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     state,
                     "discharge",
                     f"Urladdning {discharge_w}W — grid {weighted_net / 1000:.1f} kW viktat "
-                    f"> target {self.target_kw:.1f} kW "
+                    f"> target {active_target_kw:.1f} kW "
                     f"({state.current_price:.0f} öre/kWh, "
                     f"batteri {state.battery_soc_1:.0f}%)",
                     discharge_w=discharge_w,
@@ -1547,10 +1619,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         headroom_val = (target_w - weighted_net) / 1000
         step5 = (
             f"Vila — {headroom_val:.1f} kW headroom, "
-            f"Ellevio ser {weighted_net / 1000:.1f} kW (mål {self.target_kw:.1f} kW)"
+            f"Ellevio ser {weighted_net / 1000:.1f} kW (mål {active_target_kw:.1f} kW)"
         )
         reasoning.append(
-            f"Grid {weighted_net / 1000:.2f} kW viktat < target {self.target_kw:.1f} kW "
+            f"Grid {weighted_net / 1000:.2f} kW viktat < target {active_target_kw:.1f} kW "
             f"→ {headroom_val:.1f} kW headroom, batteriet vilar"
         )
         reasoning.append(step5)
@@ -1561,7 +1633,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             state,
             "idle",
             f"Vila — grid {weighted_net / 1000:.2f} kW viktat "
-            f"< target {self.target_kw:.1f} kW "
+            f"< target {active_target_kw:.1f} kW "
             f"({state.current_price:.0f} öre/kWh)",
             reasoning=reasoning,
             reasoning_chain=chain,
@@ -2666,6 +2738,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         action = d.action if d else "idle"
         pv_active = d.pv_kw > 0.5 if d else False
         is_exporting = d.grid_kw <= 0 if d else False
+        grid_kw = max(0, d.grid_kw) if d else 0.0
         bat_full = d.battery_soc >= 99 if d else False
         price = d.price_ore if d else 0
         price_cheap = float(self._cfg.get("price_cheap_ore", DEFAULT_PRICE_CHEAP_ORE))
@@ -2741,6 +2814,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ]
 
         # Safety guards
+        eff_min_soc = self._reserve_target_pct
         guards = [
             {
                 "id": "guard_crosscharge",
@@ -2750,9 +2824,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             },
             {
                 "id": "guard_min_soc",
-                "label": f"Min batteri {self.min_soc:.0f}%",
+                "label": f"Min batteri {eff_min_soc:.0f}%",
                 "icon": "mdi:battery-alert",
-                "status": "ok" if (d and d.battery_soc > self.min_soc) else "warning",
+                "status": "ok" if (d and d.battery_soc > eff_min_soc) else "warning",
+            },
+            {
+                "id": "guard_peak_risk",
+                "label": f"Peak-risk: {self._peak_risk_status(grid_kw)}",
+                "icon": "mdi:transmission-tower-export",
+                "status": ("ok" if self._peak_risk_status(grid_kw) == "safe" else "warning"),
+            },
+            {
+                "id": "guard_spike",
+                "label": "Vitvaru-skydd",
+                "icon": "mdi:washing-machine-alert",
+                "status": "active" if self._spike_active else "ok",
             },
             {
                 "id": "guard_ev_max",
@@ -2895,6 +2981,322 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
         self.appliance_power = category_power
+
+    # ── IT-2067: Peak Tracking System ─────────────────────────────
+
+    def _track_peaks(self, grid_kw: float) -> None:
+        """Update rolling top-3 monthly peaks (called every cycle).
+
+        Actual update happens every PEAK_UPDATE_INTERVAL_S (5 min) to avoid
+        noise from transient spikes. Resets on 1st of each month.
+        """
+        now_mono = time.monotonic()
+        now_dt = datetime.now()
+
+        # Monthly reset
+        if now_dt.month != self._peak_month:
+            old_peaks = list(self._peak_ranks)
+            self._peak_ranks = [0.0] * PEAK_RANK_COUNT
+            self._peak_month = now_dt.month
+            self._runtime_dirty = True
+            _LOGGER.info("CARMA peak tracking: monthly reset (old peaks: %s)", old_peaks)
+
+        # Only update every 5 min
+        if now_mono - self._peak_last_update < PEAK_UPDATE_INTERVAL_S:
+            return
+        self._peak_last_update = now_mono
+
+        if grid_kw <= 0:
+            return
+
+        # Insert into sorted top-3 (descending)
+        for i in range(PEAK_RANK_COUNT):
+            if grid_kw > self._peak_ranks[i]:
+                # Shift down
+                self._peak_ranks.insert(i, grid_kw)
+                self._peak_ranks = self._peak_ranks[:PEAK_RANK_COUNT]
+                self._runtime_dirty = True
+                _LOGGER.info(
+                    "CARMA peak tracking: new rank %d = %.2f kW (peaks: %s)",
+                    i + 1,
+                    grid_kw,
+                    [f"{p:.2f}" for p in self._peak_ranks],
+                )
+                break
+
+    def _peak_risk_status(self, current_grid_kw: float) -> str:
+        """Calculate peak risk: safe/warning/risk.
+
+        Returns 'safe' if rank_3 < PEAK_MIN_MEANINGFUL_KW to avoid
+        false positives during normal house consumption (2-3 kW).
+        """
+        rank_3 = self._peak_ranks[-1] if self._peak_ranks else 0.0
+        if rank_3 < PEAK_MIN_MEANINGFUL_KW:
+            return "safe"
+        margin = float(self._cfg.get("peak_warning_margin_kw", PEAK_WARNING_MARGIN_KW))
+        if current_grid_kw >= rank_3:
+            return "risk"
+        if current_grid_kw >= (rank_3 - margin):
+            return "warning"
+        return "safe"
+
+    def _adjusted_target_kw(self, is_night: bool, current_grid_kw: float) -> float:
+        """Dynamic grid import target adjusted by peak risk status.
+
+        Base targets from config (day/night), reduced when approaching peaks.
+        """
+        if is_night:
+            base = float(self._cfg.get("target_night_kw", DEFAULT_TARGET_NIGHT_KW))
+        else:
+            base = float(self._cfg.get("target_day_kw", DEFAULT_TARGET_DAY_KW))
+
+        margin = float(self._cfg.get("peak_warning_margin_kw", PEAK_WARNING_MARGIN_KW))
+        risk = self._peak_risk_status(current_grid_kw)
+
+        if risk == "risk":
+            return max(0.5, base - margin)
+        if risk == "warning":
+            return max(0.5, base - margin / 2)
+        return base
+
+    # ── IT-2067: Appliance Spike Detection & Response ─────────────
+
+    def _detect_appliance_spike(self, grid_w: float) -> bool:
+        """Detect sudden grid power spike (appliance start).
+
+        Compares current grid_w to the minimum in the last 60s window.
+        If delta > threshold → spike detected.
+        """
+        now_mono = time.monotonic()
+        self._grid_power_history.append((now_mono, grid_w))
+
+        # Find min in window
+        cutoff = now_mono - SPIKE_HISTORY_WINDOW_S
+        min_w = grid_w
+        for ts, w in self._grid_power_history:
+            if ts >= cutoff and w < min_w:
+                min_w = w
+
+        delta = grid_w - min_w
+        return delta > SPIKE_DETECTION_THRESHOLD_W
+
+    async def _handle_appliance_spike(self, state: CarmaboxState) -> None:
+        """Respond to detected appliance spike.
+
+        Lowers peak_shaving_power_limit to force battery discharge
+        to compensate for the spike. Also reduces EV amps at night.
+        """
+        if self._spike_active:
+            return  # Already handling a spike
+
+        # Check discharge is allowed (SoC + temp)
+        temp_c = self._read_battery_temp()
+        discharge_ok = self.safety.check_discharge(
+            state.battery_soc_1,
+            state.battery_soc_2,
+            self.min_soc,
+            state.grid_power_w,
+            temp_c,
+        )
+        if not discharge_ok.ok:
+            _LOGGER.debug("Spike detected but discharge blocked: %s", discharge_ok.reason)
+            return
+
+        self._spike_active = True
+        self._spike_activated_at = time.monotonic()
+        self._spike_cooldown_started = 0.0
+
+        spike_limit = int(self._cfg.get("spike_ps_limit_w", SPIKE_PS_LIMIT_W))
+        _LOGGER.warning(
+            "CARMA: Appliance spike detected — grid %.0fW, "
+            "lowering PS limit to %dW for battery compensation",
+            state.grid_power_w,
+            spike_limit,
+        )
+
+        # Lower PS limit on all inverters
+        for adapter in self.inverter_adapters:
+            await adapter.set_discharge_limit(spike_limit)
+
+        # At night with EV charging: reduce EV amps
+        hour = datetime.now().hour
+        is_night = hour >= 22 or hour < 6
+        if is_night and self._ev_enabled and self.ev_adapter and self._ev_current_amps > 6:
+            _LOGGER.info("CARMA: Spike at night — reducing EV to 6A")
+            await self._cmd_ev_adjust(6)
+
+    async def _handle_spike_recovery(self, grid_w: float) -> None:
+        """Recover from appliance spike when grid power normalizes.
+
+        Waits for cooldown period, then restores normal PS limit.
+        Also handles safety timeout (10 min max).
+        """
+        if not self._spike_active:
+            return
+
+        now_mono = time.monotonic()
+
+        # Safety timeout — force reset after 10 min
+        if now_mono - self._spike_activated_at > SPIKE_SAFETY_TIMEOUT_S:
+            _LOGGER.warning(
+                "CARMA: Spike safety timeout (>%ds) — force resetting",
+                SPIKE_SAFETY_TIMEOUT_S,
+            )
+            await self._restore_spike_ps_limit()
+            return
+
+        # Check if spike condition has ended
+        spike_still_active = self._detect_appliance_spike(grid_w)
+        if spike_still_active:
+            self._spike_cooldown_started = 0.0  # Reset cooldown
+            return
+
+        # Start cooldown timer
+        cooldown_s = int(self._cfg.get("spike_cooldown_s", SPIKE_COOLDOWN_S))
+        if self._spike_cooldown_started == 0.0:
+            self._spike_cooldown_started = now_mono
+            return
+
+        # Wait for cooldown
+        if now_mono - self._spike_cooldown_started < cooldown_s:
+            return
+
+        # Cooldown complete — restore
+        _LOGGER.info("CARMA: Spike cooldown complete — restoring normal PS limit")
+        await self._restore_spike_ps_limit()
+
+    async def _restore_spike_ps_limit(self) -> None:
+        """Restore PS limit after spike, respecting current battery state."""
+        self._spike_active = False
+        self._spike_cooldown_started = 0.0
+
+        # If currently discharging, use dynamic limit; otherwise default (20000W)
+        if self._last_command == BatteryCommand.DISCHARGE:
+            limit = self._dynamic_discharge_limit_w()
+        else:
+            limit = SPIKE_DEFAULT_PS_LIMIT_W
+
+        for adapter in self.inverter_adapters:
+            await adapter.set_discharge_limit(limit)
+
+    # ── IT-2067: Reserve Target (Solcast-based) ──────────────────
+
+    def _calculate_reserve_target(self) -> float:
+        """Calculate dynamic min SoC based on Solcast forecast + temperature.
+
+        Strong sun (>20 kWh tomorrow) → min_soc + 0% (batteries refill from sun)
+        Weak sun (<5 kWh tomorrow)    → min_soc + 10% (need grid backup)
+        Neutral (5-20 kWh)            → min_soc + 5%
+
+        Cold temperature → use cold_min_soc (20%) as base instead of 15%.
+        """
+        # Update every 5 min (same as plan interval)
+        now_mono = time.monotonic()
+        if now_mono - self._reserve_last_calc < PLAN_INTERVAL_SECONDS:
+            return self._reserve_target_pct
+        self._reserve_last_calc = now_mono
+
+        # Temperature-adjusted base
+        cold_threshold = float(self._cfg.get("cold_temp_threshold_c", COLD_TEMP_THRESHOLD_C))
+        temp_1 = None
+        temp_2 = None
+        if self.inverter_adapters:
+            a1 = self.inverter_adapters[0] if len(self.inverter_adapters) >= 1 else None
+            a2 = self.inverter_adapters[1] if len(self.inverter_adapters) >= 2 else None
+            temp_1 = a1.temperature_c if a1 else None
+            temp_2 = a2.temperature_c if a2 else None
+
+        is_cold = False
+        if temp_1 is not None and temp_1 < cold_threshold:
+            is_cold = True
+        if temp_2 is not None and temp_2 < cold_threshold:
+            is_cold = True
+
+        base_min_soc = COLD_MIN_SOC_PCT if is_cold else self.min_soc
+
+        # Solcast forecast for tomorrow
+        solcast_entity = self._get_entity(
+            "solcast_tomorrow_entity",
+            "sensor.solcast_pv_forecast_forecast_tomorrow",
+        )
+        forecast_kwh = self._read_float(solcast_entity, -1.0)
+
+        strong_threshold = float(self._cfg.get("reserve_pv_strong_kwh", RESERVE_PV_STRONG_KWH))
+        weak_threshold = float(self._cfg.get("reserve_pv_weak_kwh", RESERVE_PV_WEAK_KWH))
+
+        if forecast_kwh < 0:
+            # Forecast unavailable → neutral
+            offset = RESERVE_OFFSET_NEUTRAL_PCT
+            scenario = "forecast_unavailable"
+        elif forecast_kwh >= strong_threshold:
+            offset = RESERVE_OFFSET_STRONG_PCT
+            scenario = "strong_sun"
+        elif forecast_kwh < weak_threshold:
+            offset = RESERVE_OFFSET_WEAK_PCT
+            scenario = "weak_sun"
+        else:
+            offset = RESERVE_OFFSET_NEUTRAL_PCT
+            scenario = "neutral"
+
+        target = base_min_soc + offset
+        if abs(target - self._reserve_target_pct) > 0.5:
+            _LOGGER.info(
+                "CARMA reserve target: %.1f%% (%s, forecast=%.1f kWh, "
+                "base=%.0f%%, offset=+%.0f%%, cold=%s)",
+                target,
+                scenario,
+                forecast_kwh,
+                base_min_soc,
+                offset,
+                is_cold,
+            )
+        self._reserve_target_pct = target
+        return target
+
+    # ── IT-2067: Dynamic Discharge Limit ─────────────────────────
+
+    def _dynamic_discharge_limit_w(self) -> int:
+        """Calculate PS limit for discharge based on SoC and time of day.
+
+        Higher SoC = lower PS limit = more aggressive discharge.
+        Night: ×2 factor (Ellevio weights night at ×0.5).
+
+        Returns peak_shaving_power_limit in watts.
+        """
+        # Average SoC across batteries
+        state = getattr(self, "data", None)
+        if state and hasattr(state, "battery_soc_1"):
+            if state.has_battery_2:
+                avg_soc = (state.battery_soc_1 + state.battery_soc_2) / 2
+            else:
+                avg_soc = state.battery_soc_1
+        else:
+            avg_soc = 50.0  # Safe default
+
+        if avg_soc > 60:
+            base = DISCHARGE_LIMIT_HIGH_SOC_W
+        elif avg_soc > 40:
+            base = DISCHARGE_LIMIT_MID_SOC_W
+        elif avg_soc > 20:
+            base = DISCHARGE_LIMIT_LOW_SOC_W
+        else:
+            base = DISCHARGE_LIMIT_VERY_LOW_SOC_W
+
+        hour = datetime.now().hour
+        is_night = hour >= 22 or hour < 6
+        factor = DISCHARGE_NIGHT_FACTOR if is_night else 1.0
+
+        return int(base * factor)
+
+    # ── IT-2067: Cold Temperature Per-Battery Protection ──────────
+
+    def _effective_min_soc(self) -> float:
+        """Get effective minimum SoC considering temperature and forecast.
+
+        Uses reserve target (Solcast-adjusted) which already includes
+        cold temperature protection.
+        """
+        return self._calculate_reserve_target()
 
     def _track_shadow(self, state: CarmaboxState) -> None:
         """PLAT-940: Compare CARMA recommendation vs v6 actual behavior."""
@@ -3712,9 +4114,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if not ems_ok:
                     failed = True
                     continue
-                # Set peak_shaving_power_limit to 0 = target zero grid import
-                # GoodWe will discharge enough to compensate house load
-                limit_ok = await adapter.set_discharge_limit(0)
+                # IT-2067: Use dynamic PS limit based on SoC (not always 0).
+                # Higher SoC = lower limit = more aggressive discharge.
+                # During spike: spike handler manages the limit separately.
+                ps_limit = 0 if self._spike_active else self._dynamic_discharge_limit_w()
+                limit_ok = await adapter.set_discharge_limit(ps_limit)
                 if not limit_ok:
                     # K2: Rollback EMS if limit failed — avoid stale discharge
                     _LOGGER.error("Discharge limit failed — rolling back to standby")

@@ -100,6 +100,41 @@ TEMPERATURE_MIN_C = 0
 TEMPERATURE_MAX_C = 45
 MAX_MODE_CHANGES_PER_HOUR = 30  # 0.5/min — prevents oscillation flooding
 
+# ── IT-2067: Peak Tracking ─────────────────────────────────────
+PEAK_UPDATE_INTERVAL_S = 300  # Check for new peaks every 5 min
+PEAK_RANK_COUNT = 3  # Top-N monthly peaks (Ellevio billing)
+PEAK_MIN_MEANINGFUL_KW = 3.0  # Ignore peaks below normal house load
+PEAK_WARNING_MARGIN_KW = 1.0  # Warning threshold = rank_3 - margin
+DEFAULT_TARGET_DAY_KW = 3.0  # Base daytime grid import target
+DEFAULT_TARGET_NIGHT_KW = 5.0  # Base nighttime grid import target
+
+# ── IT-2067: Appliance Spike Detection ─────────────────────────
+SPIKE_DETECTION_THRESHOLD_W = 1000  # Grid power jump > this = spike
+SPIKE_HISTORY_WINDOW_S = 60  # Window for min-power baseline
+SPIKE_PS_LIMIT_W = 1500  # PS limit during spike compensation
+SPIKE_COOLDOWN_S = 60  # Seconds after spike ends before restoring
+SPIKE_SAFETY_TIMEOUT_S = 600  # Force reset if spike_active > 10 min
+SPIKE_DEFAULT_PS_LIMIT_W = 20000  # Normal PS limit (no restriction)
+
+# ── IT-2067: Reserve Target (Solcast-based) ────────────────────
+RESERVE_PV_STRONG_KWH = 20.0  # Strong sun → low reserve
+RESERVE_PV_WEAK_KWH = 5.0  # Weak sun → high reserve
+RESERVE_OFFSET_STRONG_PCT = 0.0  # Add 0% to min_soc on sunny days
+RESERVE_OFFSET_WEAK_PCT = 10.0  # Add 10% on cloudy days
+RESERVE_OFFSET_NEUTRAL_PCT = 5.0  # Add 5% for average days
+
+# ── IT-2067: Dynamic Discharge Limit ──────────────────────────
+# SoC-based: higher SoC = lower PS limit (more aggressive discharge)
+DISCHARGE_LIMIT_HIGH_SOC_W = 1000  # SoC > 60%: aggressive
+DISCHARGE_LIMIT_MID_SOC_W = 1500  # SoC 40-60%: moderate
+DISCHARGE_LIMIT_LOW_SOC_W = 2000  # SoC 20-40%: conservative
+DISCHARGE_LIMIT_VERY_LOW_SOC_W = 3000  # SoC < 20%: very conservative
+DISCHARGE_NIGHT_FACTOR = 2.0  # Night: ×2 (Ellevio weights ×0.5)
+
+# ── IT-2067: Cold Temperature Protection ──────────────────────
+COLD_TEMP_THRESHOLD_C = 4.0  # Below this = cold condition
+COLD_MIN_SOC_PCT = 20.0  # Min SoC when cold (vs 15% normal)
+
 # Appliance categories
 APPLIANCE_CATEGORIES = {
     "laundry": "Vitvaror",

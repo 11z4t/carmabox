@@ -105,6 +105,18 @@ def _make_coordinator(
     coord._miner_on = False
     coord._taper_active = False
     coord._cold_lock_active = False
+    # IT-2067: Peak tracking, spike, reserve, dynamic discharge
+    from custom_components.carmabox.const import PEAK_RANK_COUNT
+
+    coord._peak_ranks = [0.0] * PEAK_RANK_COUNT
+    coord._peak_month = 3
+    coord._peak_last_update = 0.0
+    coord._spike_active = False
+    coord._spike_activated_at = 0.0
+    coord._spike_cooldown_started = 0.0
+    coord._grid_power_history = _deque(maxlen=120)
+    coord._reserve_target_pct = 15.0
+    coord._reserve_last_calc = 0.0
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
@@ -1234,11 +1246,13 @@ class TestAdapterIntegration:
 
         a1.set_ems_mode.assert_called_once_with("peak_shaving")
         a2.set_ems_mode.assert_called_once_with("peak_shaving")
-        # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
-        # Battery 1 gets 1200/1300 of 1000 = 923W
-        a1.set_discharge_limit.assert_called_once_with(0)
-        # Battery 2 gets remainder = 77W
-        a2.set_discharge_limit.assert_called_once_with(0)
+        # IT-2067: Dynamic discharge limit based on SoC.
+        # avg_soc = (80+20)/2 = 50 → MID tier (1500W)
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
+
+        expected_limit = DISCHARGE_LIMIT_MID_SOC_W
+        a1.set_discharge_limit.assert_called_once_with(expected_limit)
+        a2.set_discharge_limit.assert_called_once_with(expected_limit)
         assert coord._last_command == BatteryCommand.DISCHARGE
 
     @pytest.mark.asyncio
@@ -2136,3 +2150,227 @@ class TestColdLockDetection:
         assert coord._cold_lock_active is True
         assert coord._taper_active is False
         assert coord.last_decision.action == "bms_cold_lock"
+
+
+# ── IT-2067: Peak Tracking Tests ─────────────────────────────────
+
+
+class TestPeakTracking:
+    """Test rolling top-3 monthly peak tracking."""
+
+    def test_initial_peaks_are_zero(self) -> None:
+        coord = _make_coordinator()
+        assert coord._peak_ranks == [0.0, 0.0, 0.0]
+
+    def test_track_single_peak(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_last_update = 0.0  # Force update
+        coord._track_peaks(5.0)
+        assert coord._peak_ranks[0] == 5.0
+        assert coord._peak_ranks[1] == 0.0
+
+    def test_track_multiple_peaks_sorted(self) -> None:
+        coord = _make_coordinator()
+        # Force updates by setting last_update far in past
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(3.0)
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(5.0)
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(4.0)
+        # Should be sorted descending
+        assert coord._peak_ranks == [5.0, 4.0, 3.0]
+
+    def test_new_peak_pushes_out_lowest(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [8.0, 6.0, 4.0]
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(5.0)
+        assert coord._peak_ranks == [8.0, 6.0, 5.0]
+
+    def test_monthly_reset(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        coord._peak_month = 2  # February — will trigger reset in March
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(1.0)
+        assert coord._peak_ranks[0] == 1.0
+        assert coord._peak_month != 2  # Month updated
+
+    def test_negative_grid_ignored(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(-1.0)
+        assert coord._peak_ranks == [0.0, 0.0, 0.0]
+
+
+class TestPeakRiskStatus:
+    """Test peak risk calculation."""
+
+    def test_safe_when_below_threshold(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        assert coord._peak_risk_status(4.0) == "safe"
+
+    def test_warning_near_rank3(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # margin=1.0 default, so warning at >= 5.0
+        assert coord._peak_risk_status(5.5) == "warning"
+
+    def test_risk_at_rank3(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        assert coord._peak_risk_status(6.0) == "risk"
+
+    def test_safe_when_peaks_below_meaningful(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [2.0, 1.0, 0.5]
+        # rank_3 < 3.0 → always safe (normal house load)
+        assert coord._peak_risk_status(2.5) == "safe"
+
+
+class TestAdjustedTarget:
+    """Test dynamic target adjustment based on peak risk."""
+
+    def test_no_adjustment_when_safe(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # grid_kw=1.0, well below rank_3=6.0, safe
+        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=1.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW
+
+        assert target == DEFAULT_TARGET_DAY_KW
+
+    def test_reduced_when_risk(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # grid_kw=7.0 >= rank_3=6.0 → risk
+        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=7.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW, PEAK_WARNING_MARGIN_KW
+
+        assert target == max(0.5, DEFAULT_TARGET_DAY_KW - PEAK_WARNING_MARGIN_KW)
+
+    def test_night_target_different(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        target = coord._adjusted_target_kw(is_night=True, current_grid_kw=1.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_NIGHT_KW
+
+        assert target == DEFAULT_TARGET_NIGHT_KW
+
+
+# ── IT-2067: Appliance Spike Tests ───────────────────────────────
+
+
+class TestApplianceSpikeDetection:
+    """Test appliance spike detection logic."""
+
+    def test_no_spike_on_stable_load(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        base = time.monotonic()
+        # Simulate stable 2000W for 60s
+        for i in range(10):
+            coord._grid_power_history.append((base + i * 6, 2000))
+        assert coord._detect_appliance_spike(2100) is False
+
+    def test_spike_on_sudden_jump(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        base = time.monotonic()
+        # Stable baseline at 1500W
+        for i in range(5):
+            coord._grid_power_history.append((base + i * 6, 1500))
+        # Sudden jump to 3000W (delta = 1500 > 1000 threshold)
+        assert coord._detect_appliance_spike(3000) is True
+
+    def test_spike_recovery_resets_flag(self) -> None:
+        coord = _make_coordinator()
+        coord._spike_active = True
+        coord._spike_activated_at = 0.0  # Very old → safety timeout
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(coord._handle_spike_recovery(1000))
+        assert coord._spike_active is False
+
+
+# ── IT-2067: Dynamic Discharge Limit Tests ────────────────────────
+
+
+class TestDynamicDischargeLimit:
+    """Test SoC-based dynamic discharge limit."""
+
+    def test_high_soc_aggressive(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_HIGH_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_HIGH_SOC_W
+
+    def test_low_soc_conservative(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=25, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_LOW_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_LOW_SOC_W
+
+    def test_very_low_soc(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=15, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_VERY_LOW_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_VERY_LOW_SOC_W
+
+    def test_two_batteries_average(self) -> None:
+        coord = _make_coordinator()
+        # Average = (80+40)/2 = 60, which is > 40 but not > 60
+        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=40)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_MID_SOC_W
+
+
+# ── IT-2067: Reserve Target Tests ─────────────────────────────────
+
+
+class TestReserveTarget:
+    """Test Solcast-based dynamic min SoC."""
+
+    def test_strong_sun_no_offset(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0  # Force recalc
+        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "25.0")
+        target = coord._calculate_reserve_target()
+        # Strong sun (25 kWh > 20 threshold) → base 15% + 0% = 15%
+        assert target == 15.0
+
+    def test_weak_sun_adds_offset(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0
+        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "3.0")
+        target = coord._calculate_reserve_target()
+        # Weak sun (3 kWh < 5 threshold) → base 15% + 10% = 25%
+        assert target == 25.0
+
+    def test_forecast_unavailable_neutral(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0
+        # No state set → _read_float returns -1 → neutral
+        target = coord._calculate_reserve_target()
+        # Neutral → base 15% + 5% = 20%
+        assert target == 20.0

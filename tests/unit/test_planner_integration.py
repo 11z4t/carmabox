@@ -79,6 +79,20 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._miner_on = False
     coord._taper_active = False
     coord._cold_lock_active = False
+    # IT-2067: Peak tracking, spike, reserve
+    from collections import deque as _deque
+
+    from custom_components.carmabox.const import PEAK_RANK_COUNT
+
+    coord._peak_ranks = [0.0] * PEAK_RANK_COUNT
+    coord._peak_month = 3
+    coord._peak_last_update = 0.0
+    coord._spike_active = False
+    coord._spike_activated_at = 0.0
+    coord._spike_cooldown_started = 0.0
+    coord._grid_power_history = _deque(maxlen=120)
+    coord._reserve_target_pct = 15.0
+    coord._reserve_last_calc = 0.0
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
@@ -269,6 +283,7 @@ class TestExecutorWithPlan:
             {
                 "battery_ems_1": "select.ems1",
                 "battery_limit_1": "number.limit1",
+                "target_day_kw": 2.0,  # Match legacy target
             }
         )
 
