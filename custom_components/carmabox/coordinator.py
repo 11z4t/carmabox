@@ -1039,6 +1039,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             pv_daily = solcast.forecast_daily_3d
             reserve = calculate_reserve(pv_daily, daily_consumption, daily_battery_need)
+
+            # IT-2078: Intraday reserve correction
+            # If actual PV << forecast midday, increase reserve
+            hour_now = datetime.now().hour
+            if 10 <= hour_now <= 15:
+                actual_pv_kw = state.pv_power_w / 1000
+                forecast_now_kw = solcast.power_now_kw
+                if forecast_now_kw > 1.0 and actual_pv_kw < forecast_now_kw * 0.5:
+                    correction = reserve * 0.3  # increase reserve by 30%
+                    reserve += correction
+                    _LOGGER.info(
+                        "CARMA: Intraday PV correction — actual %.1f kW << forecast %.1f kW "
+                        "→ reserve +%.1f kWh (now %.1f)",
+                        actual_pv_kw, forecast_now_kw, correction, reserve,
+                    )
+            self._current_reserve_kwh = reserve
+
             target = calculate_target(
                 battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
                 hourly_loads=consumption[: len(prices)],
