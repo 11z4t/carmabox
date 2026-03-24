@@ -772,12 +772,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # EV startup: set safe fallback + disable (PLAT-949)
             if not self._ev_initialized and self.ev_adapter:
                 self._ev_initialized = True
-                if self._ev_enabled:
-                    _LOGGER.info("CARMA: EV was charging before restart — keeping")
+                # IT-2009: Restart-resilient EV startup
+                # Wait for Easee integration to be available
+                easee_ready = self.ev_adapter and self.ev_adapter.status != ""
+                if not easee_ready:
+                    _LOGGER.info("CARMA: EV startup — Easee not ready yet, deferring")
+                    self._ev_initialized = False  # retry next cycle
+                elif self._ev_enabled:
+                    # Was charging before restart — RESUME, dont stop
+                    _LOGGER.info(
+                        "CARMA: EV was charging before restart — resuming %dA",
+                        self._ev_current_amps or 6,
+                    )
+                    await self.ev_adapter.ensure_initialized()
+                    await self.ev_adapter.set_current(self._ev_current_amps or 6)
+                    await self.ev_adapter.enable()
                 else:
-                    _LOGGER.info("CARMA: EV startup — fallback 6A")
-                    await self._cmd_ev_stop()
-
+                    # Was not charging — just initialize adapter safely
+                    _LOGGER.info("CARMA: EV startup — idle, initializing adapter")
+                    await self.ev_adapter.ensure_initialized()
             self.safety.update_heartbeat()
 
             # License check (every 6h — Hub handshake)
@@ -2133,7 +2146,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     and current_price < price_expensive
                 ):
                     # Check Ellevio headroom before starting
-                    ev_kw = 6 * 230 / 1000  # 1.38 kW at 6A
+                    ev_kw = self.ev_adapter.charging_power_at_amps if self.ev_adapter else 6 * 230 * 3 / 1000  # 3-phase aware
                     grid_now_kw = max(0, state.grid_power_w) / 1000
                     weight = self._ellevio_weight(hour)
                     headroom_kw = self.target_kw / weight - grid_now_kw

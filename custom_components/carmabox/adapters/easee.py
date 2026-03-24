@@ -1,6 +1,13 @@
 """CARMA Box — Easee EV charger adapter.
 
-Reads charger state and controls charging via HA's easee integration.
+IT-1965/IT-1966: Rewritten for correct Easee control.
+
+KEY INSIGHT (2026-03-23):
+  - max_charger_limit = HARD CEILING. If set to 6A, Easee enters
+    "waiting_in_fully" and BLOCKS all charging. NEVER set below 10A.
+  - dynamic_charger_limit = ACTUAL current control. Use this for 6-10A.
+  - On startup: set max=10A, dynamic=6A, disable smart_charging.
+  - cable_locked=off is NORMAL when idle (car controls lock).
 """
 
 from __future__ import annotations
@@ -16,14 +23,13 @@ from . import EVAdapter
 _LOGGER = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5
+_MAX_LIMIT_FLOOR = 10  # NEVER set max_charger_limit below this
+_DYNAMIC_MIN = 6
+_DYNAMIC_MAX = 10
 
 
 class EaseeAdapter(EVAdapter):
-    """Adapter for Easee EV charger via HA integration.
-
-    Reads: status, current (A), power (W), cable state.
-    Writes: enable/disable, dynamic charger limit (A).
-    """
+    """Adapter for Easee EV charger via HA integration."""
 
     def __init__(
         self,
@@ -32,21 +38,31 @@ class EaseeAdapter(EVAdapter):
         entity_prefix: str = "easee_home_12840",
         charger_id: str = "",
     ) -> None:
-        """Initialize Easee adapter.
-
-        Args:
-            hass: Home Assistant instance.
-            device_id: Easee device ID for service calls.
-            entity_prefix: Entity prefix (e.g. 'easee_home_12840').
-            charger_id: Easee charger serial (e.g. 'EH128405') for native service calls.
-        """
         self.hass = hass
         self.device_id = device_id
         self.charger_id = charger_id
         self.prefix = entity_prefix
+        self._initialized = False
+
+    async def ensure_initialized(self) -> None:
+        """One-time setup: max_limit=10, smart_charging=off."""
+        if self._initialized:
+            return
+        self._initialized = True
+        _LOGGER.info("Easee: initializing — max_limit=%dA, smart_charging=off", _MAX_LIMIT_FLOOR)
+        # Set max_limit to floor (never blocks charging)
+        if self.charger_id:
+            await self._safe_call(
+                "easee", "set_charger_max_limit",
+                {"charger_id": self.charger_id, "current": _MAX_LIMIT_FLOOR},
+            )
+        # Disable smart charging (Easee cloud queue blocks us)
+        await self._safe_call(
+            "switch", "turn_off",
+            {"entity_id": f"switch.{self.prefix}_smart_charging"},
+        )
 
     def _state(self, suffix: str, default: float = 0.0) -> float:
-        """Read float state."""
         entity_id = f"sensor.{self.prefix}_{suffix}"
         state = self.hass.states.get(entity_id)
         if state is None or state.state in ("unknown", "unavailable", ""):
@@ -57,50 +73,25 @@ class EaseeAdapter(EVAdapter):
             return default
 
     def _str_state(self, entity_id: str) -> str:
-        """Read string state."""
         state = self.hass.states.get(entity_id)
         if state is None or state.state in ("unknown", "unavailable"):
             return ""
         return state.state
 
     async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
-        """Call HA service with error handling and 1 retry. Returns True on success."""
-        entity_id = data.get("entity_id", "?")
-
+        entity_id = data.get("entity_id", data.get("charger_id", "?"))
         if getattr(self, "_analyze_only", False):
             _LOGGER.info("DRY-RUN Easee: %s.%s → %s", domain, service, entity_id)
             return True
-
         for attempt in range(2):
             try:
                 await self.hass.services.async_call(domain, service, data)
                 return True
             except ServiceNotFound:
-                _LOGGER.error(
-                    "Easee: service not found %s.%s → %s",
-                    domain,
-                    service,
-                    entity_id,
-                )
+                _LOGGER.error("Easee: service not found %s.%s", domain, service)
                 return False
-            except HomeAssistantError as err:
-                _LOGGER.error(
-                    "Easee: HA error %s.%s → %s: %s (attempt %d/2)",
-                    domain,
-                    service,
-                    entity_id,
-                    err,
-                    attempt + 1,
-                )
-            except Exception as err:
-                _LOGGER.exception(
-                    "Easee: unexpected error %s.%s → %s: %s (attempt %d/2)",
-                    domain,
-                    service,
-                    entity_id,
-                    err,
-                    attempt + 1,
-                )
+            except (HomeAssistantError, Exception) as err:
+                _LOGGER.error("Easee: %s.%s error: %s (attempt %d/2)", domain, service, err, attempt + 1)
             if attempt == 0:
                 await asyncio.sleep(_RETRY_DELAY_S)
         return False
@@ -109,90 +100,103 @@ class EaseeAdapter(EVAdapter):
 
     @property
     def status(self) -> str:
-        """Charger status (awaiting_start, charging, paused, etc.)."""
         return self._str_state(f"sensor.{self.prefix}_status")
 
     @property
     def current_a(self) -> float:
-        """Current charging amperage."""
         return self._state("current")
 
     @property
     def power_w(self) -> float:
-        """Current charging power (W). Easee reports kW — convert to W."""
         return self._state("power") * 1000
 
     @property
+    def power_kw(self) -> float:
+        return self._state("power")
+
+    @property
     def is_enabled(self) -> bool:
-        """Charger enabled."""
         return self._str_state(f"switch.{self.prefix}_is_enabled") == "on"
 
     @property
     def is_charging(self) -> bool:
-        """True if actively charging."""
         return self.status == "charging"
 
     @property
     def cable_locked(self) -> bool:
-        """True if cable is locked (car connected)."""
+        # cable_locked=off is NORMAL when idle — check plug instead
+        plug = self._str_state(f"binary_sensor.{self.prefix}_plug")
+        if plug == "on":
+            return True  # plug connected = car present
         return self._str_state(f"binary_sensor.{self.prefix}_cable_locked") == "on"
 
     @property
+    def plug_connected(self) -> bool:
+        return self._str_state(f"binary_sensor.{self.prefix}_plug") == "on"
+
+    @property
     def dynamic_limit_a(self) -> float:
-        """Current dynamic charger limit (A)."""
         return self._state("dynamic_charger_limit")
+
+    @property
+    def reason_for_no_current(self) -> str:
+        return self._str_state(f"sensor.{self.prefix}_reason_for_no_current")
+
+    @property
+    def phase_count(self) -> int:
+        mode = self._str_state(f"sensor.{self.prefix}_phase_mode")
+        return 3 if mode == "three" else 1
+
+    @property
+    def charging_power_at_amps(self) -> float:
+        """Expected kW at current dynamic limit."""
+        return self.dynamic_limit_a * 230 * self.phase_count / 1000
 
     # ── Write ─────────────────────────────────────────────────
 
     async def enable(self) -> bool:
-        """Enable the charger."""
+        await self.ensure_initialized()
         _LOGGER.info("Easee: enable charger")
-        return await self._safe_call(
-            "switch",
-            "turn_on",
+        ok = await self._safe_call(
+            "switch", "turn_on",
             {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
+        if ok and self.charger_id:
+            # Resume in case Easee is in awaiting_start
+            await self._safe_call(
+                "easee", "action_command",
+                {"charger_id": self.charger_id, "action_command": "resume"},
+            )
+        return ok
 
     async def disable(self) -> bool:
-        """Disable the charger."""
         _LOGGER.info("Easee: disable charger")
         return await self._safe_call(
-            "switch",
-            "turn_off",
+            "switch", "turn_off",
             {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
 
     async def set_current(self, amps: int) -> bool:
-        """Set charger max limit (A).
+        """Set charging current via dynamic_charger_limit.
 
-        Uses easee.set_charger_max_limit (the only service that actually
-        limits charging current — set_charger_dynamic_limit does NOT work).
-        Default/minimum is 6A to avoid runaway 16A charging.
+        Uses set_charger_dynamic_limit (NOT max_limit — max stays at 10A).
+        Range: 6-10A hard capped.
         """
-        # S5: Hard cap at 10A — 16A+ blows the fuse, 32A circuit damage risk
-        amps = max(6, min(10, amps))
-        _LOGGER.info("Easee: set max limit → %dA", amps)
+        await self.ensure_initialized()
+        amps = max(_DYNAMIC_MIN, min(_DYNAMIC_MAX, amps))
+        _LOGGER.info("Easee: set dynamic limit → %dA", amps)
 
         if self.charger_id:
             return await self._safe_call(
-                "easee",
-                "set_charger_max_limit",
-                {
-                    "charger_id": self.charger_id,
-                    "current": amps,
-                },
+                "easee", "set_charger_dynamic_limit",
+                {"charger_id": self.charger_id, "current": amps},
             )
-
-        # Fallback: number entity (may not exist in newer Easee versions)
+        # Fallback: number entity
         return await self._safe_call(
-            "number",
-            "set_value",
-            {
-                "entity_id": f"number.{self.prefix}_dynamic_charger_limit",
-                "value": amps,
-            },
+            "number", "set_value",
+            {"entity_id": f"number.{self.prefix}_dynamic_charger_limit", "value": amps},
         )
 
     async def reset_to_default(self) -> bool:
-        """Reset charger to safe default (6A)."""
-        return await self.set_current(6)
+        """Reset to safe default: dynamic=6A (max stays at 10A)."""
+        return await self.set_current(_DYNAMIC_MIN)
