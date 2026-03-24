@@ -2284,6 +2284,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._cmd_miner(True)
             return
 
+        # ── IT-2062: Miner OFF when EV is charging (night OR day) ──
+        if self._ev_enabled and self.ev_adapter and self.ev_adapter.power_w > 100:
+            if self._miner_on:
+                _LOGGER.info(
+                    "CARMA: EV charging %.0fW — miner OFF to reduce grid load",
+                    self.ev_adapter.power_w,
+                )
+                await self._cmd_miner(False)
+            return
+
         # ── Night: miner OFF (save grid power) — unless heat needed ──
         if is_night and self._miner_on and not miner_heat_useful:
             await self._cmd_miner(False)
