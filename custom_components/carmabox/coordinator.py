@@ -2260,9 +2260,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if ev_soc < 0:
             derating = float(self._cfg.get("ev_soc_derating", 10.0))
             if self._last_known_ev_soc > 0:
-                ev_soc = max(0, self._last_known_ev_soc - derating)
-                _LOGGER.debug("CARMA EV: using last_known %.0f%% - %.0f%% = %.0f%%",
-                              self._last_known_ev_soc, derating, ev_soc)
+                ev_soc = max(0, self._last_known_ev_soc * (1 - derating / 100))
+                _LOGGER.debug("CARMA EV: using last_known %.0f%% × %.0f%% = %.0f%%",
+                              self._last_known_ev_soc, 100 - derating, ev_soc)
             else:
                 # Ultimate fallback: assume 50% (conservative)
                 ev_soc = 50.0
@@ -2272,8 +2272,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Track full charge for weekly full-charge logic
             if ev_soc >= 99:
                 self._ev_last_full_charge_date = datetime.now().strftime("%Y-%m-%d")
-            # Continuous EV plan: estimate tonight SoC = current - 10% (driving)
-            self._ev_tonight_soc = max(0, ev_soc - 10.0)
+            # Continuous EV plan: estimate tonight SoC = current × 0.9 (10% driving)
+            self._ev_tonight_soc = max(0, ev_soc * 0.9)
             ev_capacity = float(self._cfg.get("ev_capacity_kwh", 87.5))
             ev_target = self._calculate_ev_target()
             if self._ev_tonight_soc < ev_target:
