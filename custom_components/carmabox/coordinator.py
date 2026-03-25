@@ -1748,6 +1748,48 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                     return
 
+        # ── IT-2208: Proactive planned discharge ────────────
+        # If plan says discharge this hour, start even if grid < target
+        # This pre-positions the battery for upcoming peaks
+        if self.plan and not is_night:
+            current_plan = None
+            for ph in self.plan:
+                if ph.hour == hour:
+                    current_plan = ph
+                    break
+            if current_plan and current_plan.action == "d" and current_plan.battery_kw < -0.1:
+                planned_w = int(abs(current_plan.battery_kw) * 1000)
+                # Only proactive if not already discharging enough
+                if self._last_command != BatteryCommand.DISCHARGE:
+                    temp_c = self._read_battery_temp()
+                    bat1_kwh = float(self._cfg.get("battery_1_kwh", 15.0))
+                    bat2_kwh = float(self._cfg.get("battery_2_kwh", 5.0))
+                    avail = max(0, (state.battery_soc_1 - self.min_soc) / 100 * bat1_kwh
+                               + max(0, (state.battery_soc_2 - self.min_soc) / 100 * bat2_kwh))
+                    reserve = getattr(self, "_current_reserve_kwh", 0.0)
+                    plan_check = self.safety.check_discharge(
+                        state.battery_soc_1, state.battery_soc_2,
+                        self.min_soc, state.grid_power_w, temp_c,
+                        reserve_kwh=reserve, available_kwh=avail,
+                    )
+                    if plan_check.ok and planned_w >= 100:
+                        reasoning.append(
+                            f"Plan: discharge {planned_w}W kl {hour:02d} "
+                            f"(pris {current_plan.price:.0f} öre, förbereder peak)"
+                        )
+                        await self._cmd_discharge(state, min(planned_w, 3000))
+                        self._track_rule("RULE_2", "planned_discharge")
+                        self._record_decision(
+                            state, "discharge",
+                            f"Planerad urladdning {planned_w}W — "
+                            f"pris {current_plan.price:.0f} öre, plan förbereder peak",
+                            discharge_w=planned_w, reasoning=reasoning,
+                            reasoning_chain=chain,
+                        )
+                        await self._execute_miner(state)
+                        await self._execute_ev(state)
+                        return
+
         # ── RULE 2: Load > target → discharge (even at 100%) ──
         # Hysteresis: if already discharging, keep going until grid drops
         # 10% BELOW target (prevents oscillation at boundary).
