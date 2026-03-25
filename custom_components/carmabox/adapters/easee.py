@@ -23,9 +23,9 @@ from . import EVAdapter
 _LOGGER = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5
-_MAX_LIMIT_FLOOR = 10  # NEVER set max_charger_limit below this
+_MAX_LIMIT_FLOOR = 6  # Safe default — raised to 8/10 only when actively charging
 _DYNAMIC_MIN = 6
-_DYNAMIC_MAX = 10
+_DYNAMIC_MAX = 8  # Max 8A — user preference, reduces Ellevio impact
 
 
 class EaseeAdapter(EVAdapter):
@@ -49,12 +49,16 @@ class EaseeAdapter(EVAdapter):
         if self._initialized:
             return
         self._initialized = True
-        _LOGGER.info("Easee: initializing — max_limit=%dA, smart_charging=off", _MAX_LIMIT_FLOOR)
-        # Set max_limit to floor (never blocks charging)
+        _LOGGER.info("Easee: initializing — max_limit=%dA, dynamic=%dA, smart_charging=off", _MAX_LIMIT_FLOOR, _DYNAMIC_MIN)
+        # Set max_limit to safe floor + dynamic to minimum
         if self.charger_id:
             await self._safe_call(
                 "easee", "set_charger_max_limit",
                 {"charger_id": self.charger_id, "current": _MAX_LIMIT_FLOOR},
+            )
+            await self._safe_call(
+                "easee", "set_charger_dynamic_limit",
+                {"charger_id": self.charger_id, "current": _DYNAMIC_MIN},
             )
         # Disable smart charging (Easee cloud queue blocks us)
         await self._safe_call(
@@ -184,6 +188,12 @@ class EaseeAdapter(EVAdapter):
         """
         await self.ensure_initialized()
         amps = max(_DYNAMIC_MIN, min(_DYNAMIC_MAX, amps))
+        # Raise max_limit if needed (max_limit must be >= dynamic_limit)
+        if amps > _MAX_LIMIT_FLOOR and self.charger_id:
+            await self._safe_call(
+                "easee", "set_charger_max_limit",
+                {"charger_id": self.charger_id, "current": amps},
+            )
         _LOGGER.info("Easee: set dynamic limit → %dA", amps)
 
         if self.charger_id:
