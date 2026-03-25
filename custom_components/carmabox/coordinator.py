@@ -347,6 +347,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not self._miner_entity:
             self._miner_entity = self._detect_miner_entity()
         self._miner_on: bool = False
+        # Opt #5: Flat line controller — rolling grid average
+        self._grid_samples: list[float] = []
+        self._grid_sample_max = 10  # 10 × 30s = 5 min rolling window
         self._ev_last_full_charge_date: str = ""  # ISO date of last 100% charge
 
         # PLAT-962: Household benchmarking data (from hub)
@@ -1453,6 +1456,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Catches cheap hours even in low-price seasons (summer avg ~15 öre)
         dynamic_threshold = self._daily_avg_price * 0.4 if self._daily_avg_price > 0 else 999
         grid_charge_threshold = min(static_threshold, max(5.0, dynamic_threshold))
+
+        # Opt #8: Price arbitrage — if daily spread > 30 öre, charge at bottom 20%
+        if len(self.plan) >= 8:
+            plan_prices = sorted([h.price_ore for h in self.plan if h.price_ore > 0])
+            if len(plan_prices) >= 4:
+                cheapest_4 = sum(plan_prices[:4]) / 4
+                dearest_4 = sum(plan_prices[-4:]) / 4
+                spread = dearest_4 - cheapest_4
+                if spread > 30:
+                    arb_threshold = plan_prices[len(plan_prices) // 5]
+                    if arb_threshold > grid_charge_threshold:
+                        grid_charge_threshold = arb_threshold
+
         grid_charge_max_soc = float(
             self._cfg.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
         )
@@ -1566,6 +1582,43 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning_chain=chain,
                 )
                 return
+
+        # ── Opt #5: Flat Line Controller — proactive grid smoothing ──
+        # Track rolling 5-min average and start discharge BEFORE hitting target
+        self._grid_samples.append(weighted_net / 1000)
+        if len(self._grid_samples) > self._grid_sample_max:
+            self._grid_samples = self._grid_samples[-self._grid_sample_max:]
+        rolling_avg_kw = sum(self._grid_samples) / len(self._grid_samples)
+        
+        # Proactive: if rolling avg > target - 0.3 AND not yet discharging → start early
+        if (
+            rolling_avg_kw > self.target_kw - 0.3
+            and self._last_command != BatteryCommand.DISCHARGE
+            and weight > 0
+        ):
+            preemptive_w = int((rolling_avg_kw - (self.target_kw - 0.5)) * 1000 / weight)
+            if preemptive_w > 50:
+                temp_c = self._read_battery_temp()
+                pre_check = self.safety.check_discharge(
+                    state.battery_soc_1, state.battery_soc_2,
+                    self.min_soc, state.grid_power_w, temp_c,
+                    reserve_kwh=getattr(self, "_current_reserve_kwh", 0.0),
+                    available_kwh=max(0, (state.battery_soc_1 - self.min_soc) / 100 * float(self._cfg.get("battery_1_kwh", 15.0))
+                                     + max(0, (state.battery_soc_2 - self.min_soc) / 100 * float(self._cfg.get("battery_2_kwh", 5.0)))),
+                )
+                if pre_check.ok:
+                    reasoning.append(
+                        f"Flat line: snitt {rolling_avg_kw:.2f} kW → target {self.target_kw:.1f} "
+                        f"→ proaktiv urladdning {preemptive_w}W"
+                    )
+                    await self._cmd_discharge(state, preemptive_w)
+                    self._track_rule("RULE_2", "proactive_flat_line")
+                    self._record_decision(
+                        state, "discharge",
+                        f"Flat line proaktiv {preemptive_w}W — snitt {rolling_avg_kw:.1f} → {self.target_kw:.1f} kW",
+                        discharge_w=preemptive_w, reasoning=reasoning, reasoning_chain=chain,
+                    )
+                    return
 
         # ── RULE 2: Load > target → discharge (even at 100%) ──
         # Hysteresis: if already discharging, keep going until grid drops
