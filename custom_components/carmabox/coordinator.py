@@ -2448,6 +2448,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         d) Export surplus: turn ON
         e) Import + not special conditions: turn OFF
         """
+        # Lazy init: re-read from config if empty (reload may not trigger __init__)
+        if not self._miner_entity:
+            self._miner_entity = str(self._cfg.get("miner_entity", ""))
+            if not self._miner_entity:
+                self._miner_entity = self._detect_miner_entity()
+            if self._miner_entity:
+                _LOGGER.info("CARMA: miner_entity lazy-init → %s", self._miner_entity)
         if not self._miner_entity:
             return
 
