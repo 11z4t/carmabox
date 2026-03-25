@@ -1478,7 +1478,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Opt #8: Price arbitrage — if daily spread > 30 öre, charge at bottom 20%
         if len(self.plan) >= 8:
-            plan_prices = sorted([h.price_ore for h in self.plan if h.price_ore > 0])
+            plan_prices = sorted([h.price for h in self.plan if h.price > 0])
             if len(plan_prices) >= 4:
                 cheapest_4 = sum(plan_prices[:4]) / 4
                 dearest_4 = sum(plan_prices[-4:]) / 4
@@ -1655,8 +1655,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 future_prices = []
                 for ph in self.plan:
                     if ph.hour == (hour + 1) % 24 or ph.hour == (hour + 2) % 24:
-                        if ph.price_ore > 0:
-                            future_prices.append(ph.price_ore)
+                        if ph.price > 0:
+                            future_prices.append(ph.price)
                 if future_prices:
                     min_future = min(future_prices)
                     if min_future < current_price * 0.7:
