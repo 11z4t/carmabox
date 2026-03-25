@@ -470,6 +470,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except ValueError:
             return 99
 
+    def _ellevio_weight(self, hour: int) -> float:
+        """Get Ellevio weight for given hour (0.5 night, 1.0 day)."""
+        from .optimizer.grid_logic import ellevio_weight
+        night_weight = float(self._cfg.get("night_weight", 0.5))
+        return ellevio_weight(hour, night_weight=night_weight)
+
     def _read_cell_temp(self, prefix: str) -> float | None:
         """Read min cell temperature for a battery."""
         entity = f"sensor.goodwe_battery_min_cell_temperature_{prefix}"
