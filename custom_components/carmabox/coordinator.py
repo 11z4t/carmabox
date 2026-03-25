@@ -374,6 +374,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # ── IT-2067: Reserve Target (Solcast-based dynamic min_soc) ─
         self._reserve_target_pct: float = self.min_soc
         self._reserve_last_calc: float = 0.0  # monotonic
+        self._reserve_kwh: float = 0.0  # IT-2075: cached reserve for discharge gating
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -1036,6 +1037,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             pv_daily = solcast.forecast_daily_3d
             reserve = calculate_reserve(pv_daily, daily_consumption, daily_battery_need)
+            self._reserve_kwh = reserve  # IT-2075: cache for discharge gating
             target = calculate_target(
                 battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
                 hourly_loads=consumption[: len(prices)],
@@ -1524,6 +1526,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 effective_min_soc,
                 state.grid_power_w,
                 temp_c,
+                available_kwh=self._available_kwh(),
+                reserve_kwh=self._reserve_kwh,
             )
             if result.ok:
                 pv_note = (
@@ -1594,6 +1598,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 effective_min_soc,
                 state.grid_power_w,
                 temp_c,
+                available_kwh=self._available_kwh(),
+                reserve_kwh=self._reserve_kwh,
             )
             if result.ok:
                 peak_kr = float(self._cfg.get("peak_cost_per_kw", DEFAULT_PEAK_COST_PER_KW))
@@ -2006,6 +2012,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     state.battery_soc_2,
                     self.min_soc,
                     state.grid_power_w,
+                    available_kwh=self._available_kwh(),
+                    reserve_kwh=self._reserve_kwh,
                 )
                 if result.ok:
                     await self._cmd_discharge(state, discharge_w)
@@ -3182,6 +3190,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.min_soc,
             state.grid_power_w,
             temp_c,
+            available_kwh=self._available_kwh(),
+            reserve_kwh=self._reserve_kwh,
         )
         if not discharge_ok.ok:
             _LOGGER.debug("Spike detected but discharge blocked: %s", discharge_ok.reason)
@@ -3337,6 +3347,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
         self._reserve_target_pct = target
         return target
+
+    # ── IT-2075: Available kWh helper ───────────────────────────
+
+    def _available_kwh(self) -> float:
+        """Return battery energy above min SoC in kWh."""
+        state = getattr(self, "data", None)
+        if not state or not hasattr(state, "battery_soc_1"):
+            return 0.0
+        opts = self._cfg or {}
+        bat1 = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
+        bat2 = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
+        total_cap = bat1 + bat2
+        energy = (state.battery_soc_1 / 100 * bat1) + (max(0, state.battery_soc_2) / 100 * bat2)
+        return float(max(0.0, energy - (self.min_soc / 100 * total_cap)))
 
     # ── IT-2067: Dynamic Discharge Limit ─────────────────────────
 
@@ -4160,6 +4184,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.min_soc,
             state.grid_power_w,
             temp_c,
+            available_kwh=self._available_kwh(),
+            reserve_kwh=self._reserve_kwh,
         )
         if not discharge_check.ok:
             _LOGGER.info("SafetyGuard blocked discharge: %s", discharge_check.reason)

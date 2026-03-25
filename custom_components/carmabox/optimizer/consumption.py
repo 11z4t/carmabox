@@ -104,8 +104,8 @@ class ConsumptionProfile:
             profile.weekend = [float(v) for v in weekend]
         sw = data.get("samples_weekday", 0)
         se = data.get("samples_weekend", 0)
-        profile.samples_weekday = int(sw) if isinstance(sw, (int, float, str)) else 0
-        profile.samples_weekend = int(se) if isinstance(se, (int, float, str)) else 0
+        profile.samples_weekday = int(sw) if isinstance(sw, int | float | str) else 0
+        profile.samples_weekend = int(se) if isinstance(se, int | float | str) else 0
         return profile
 
 

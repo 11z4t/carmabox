@@ -117,6 +117,7 @@ def _make_coordinator(
     coord._grid_power_history = _deque(maxlen=120)
     coord._reserve_target_pct = 15.0
     coord._reserve_last_calc = 0.0
+    coord._reserve_kwh = 0.0
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
