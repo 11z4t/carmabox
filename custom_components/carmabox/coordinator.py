@@ -4411,10 +4411,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             for idx, adapter in enumerate(self.inverter_adapters):
                 if stored[idx] <= 0:
                     continue
-                # IT-998: Use peak_shaving mode + low limit to force discharge.
-                # discharge_battery mode does NOT respond to ems_power_limit.
-                # peak_shaving mode actively discharges to keep grid <= limit.
-                ems_ok = await adapter.set_ems_mode("peak_shaving")
+                # IT-998: Use auto mode + low ems_power_limit to force discharge.
+                # peak_shaving was removed from GoodWe integration.
+                # auto mode respects ems_power_limit for grid target.
+                ems_ok = await adapter.set_ems_mode("auto")
                 if not ems_ok:
                     failed = True
                     continue

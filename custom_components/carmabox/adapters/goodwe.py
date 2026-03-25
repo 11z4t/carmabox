@@ -141,7 +141,6 @@ class GoodWeAdapter(InverterAdapter):
             "charge_battery",
             "discharge_battery",
             "battery_standby",
-            "peak_shaving",
             "auto",
         }
     )
