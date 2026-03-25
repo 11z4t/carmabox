@@ -1130,27 +1130,48 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             self.target_kw = target
 
-            # Opt #1 + #6: Dynamic day/night target with smooth transition
+            # Opt #1 + #6 + Tempest: Dynamic target based on illuminance + price
             target_day = float(self._cfg.get("target_kw_day", 2.0))
             target_night = float(self._cfg.get("target_kw_night", 4.0))
             hour_now = datetime.now().hour
             pv_kw = state.pv_power_w / 1000
 
-            # Opt #6: Smooth transition based on PV + price + time
-            if hour_now >= 22 or hour_now < 6:
-                target_cap = target_night  # Deep night
-            elif pv_kw > 0.5 and hour_now >= 7 and hour_now < 20:
-                target_cap = target_day  # PV active → day mode
-            elif hour_now >= 17 and state.current_price > 50:
-                target_cap = target_day  # Evening peak (expensive) → tight target
-            elif hour_now >= 20:
-                # Evening transition 20-22: gradually relax
-                target_cap = target_day + (target_night - target_day) * (hour_now - 20) / 2
-            elif hour_now < 7:
-                # Morning transition 06-07: gradually tighten
-                target_cap = target_night - (target_night - target_day) * (hour_now - 6)
+            # Tempest illuminance for precise day/night detection
+            tempest_lux = None
+            lux_state = self.hass.states.get("sensor.tempest_illuminance")
+            if lux_state and lux_state.state not in ("unavailable", "unknown", ""):
+                try:
+                    tempest_lux = float(lux_state.state)
+                except (ValueError, TypeError):
+                    pass
+
+            if tempest_lux is not None:
+                # Illuminance-driven transition (overrides clock)
+                if tempest_lux > 5000:
+                    target_cap = target_day  # Bright daylight
+                elif tempest_lux < 500:
+                    target_cap = target_night  # Dark / night
+                else:
+                    # Twilight: linear interpolation 500-5000 lx
+                    ratio = (tempest_lux - 500) / 4500
+                    target_cap = target_night - ratio * (target_night - target_day)
+                # Override: evening peak still gets tight target
+                if hour_now >= 17 and state.current_price > 50:
+                    target_cap = target_day
             else:
-                target_cap = target_day
+                # Fallback: clock + PV based (original Opt #6)
+                if hour_now >= 22 or hour_now < 6:
+                    target_cap = target_night
+                elif pv_kw > 0.5 and hour_now >= 7 and hour_now < 20:
+                    target_cap = target_day
+                elif hour_now >= 17 and state.current_price > 50:
+                    target_cap = target_day
+                elif hour_now >= 20:
+                    target_cap = target_day + (target_night - target_day) * (hour_now - 20) / 2
+                elif hour_now < 7:
+                    target_cap = target_night - (target_night - target_day) * (hour_now - 6)
+                else:
+                    target_cap = target_day
             if self.target_kw > target_cap:
                 _LOGGER.debug(
                     "CARMA: target %.1f > cap %.1f (%s) → capped",
