@@ -1081,12 +1081,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             self.target_kw = target
 
-            # Opt #1: Day/night target caps
+            # Opt #1 + #6: Dynamic day/night target with smooth transition
             target_day = float(self._cfg.get("target_kw_day", 2.0))
             target_night = float(self._cfg.get("target_kw_night", 4.0))
             hour_now = datetime.now().hour
-            is_night_now = hour_now >= 22 or hour_now < 6
-            target_cap = target_night if is_night_now else target_day
+            pv_kw = state.pv_power_w / 1000
+
+            # Opt #6: Smooth transition based on PV + price + time
+            if hour_now >= 22 or hour_now < 6:
+                target_cap = target_night  # Deep night
+            elif pv_kw > 0.5 and hour_now >= 7 and hour_now < 20:
+                target_cap = target_day  # PV active → day mode
+            elif hour_now >= 17 and state.current_price > 50:
+                target_cap = target_day  # Evening peak (expensive) → tight target
+            elif hour_now >= 20:
+                # Evening transition 20-22: gradually relax
+                target_cap = target_day + (target_night - target_day) * (hour_now - 20) / 2
+            elif hour_now < 7:
+                # Morning transition 06-07: gradually tighten
+                target_cap = target_night - (target_night - target_day) * (hour_now - 6)
+            else:
+                target_cap = target_day
             if self.target_kw > target_cap:
                 _LOGGER.debug(
                     "CARMA: target %.1f > cap %.1f (%s) → capped",
