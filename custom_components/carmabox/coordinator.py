@@ -1072,6 +1072,39 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         "→ reserve +%.1f kWh (now %.1f)",
                         actual_pv_kw, forecast_now_kw, correction, reserve,
                     )
+            # IT-2081: Tempest solar radiation vs Solcast — independent cross-check
+            tempest_radiation = self.hass.states.get("sensor.tempest_solar_radiation")
+            if tempest_radiation and tempest_radiation.state not in ("unavailable", "unknown", ""):
+                try:
+                    radiation_wm2 = float(tempest_radiation.state)
+                    forecast_kw = solcast.power_now_kw
+                    # Approximate: 1 kWp panel ≈ 1000 W/m² at STC
+                    # Our panels ~10 kWp → at 500 W/m² expect ~5 kW
+                    # Ratio: actual_radiation / expected_for_forecast
+                    if forecast_kw > 0.5 and radiation_wm2 > 10:
+                        expected_wm2 = forecast_kw / 10.0 * 1000  # rough conversion
+                        ratio = radiation_wm2 / expected_wm2 if expected_wm2 > 0 else 1.0
+                        if ratio < 0.5:
+                            # Much less sun than forecast — increase reserve
+                            tempest_correction = reserve * 0.2
+                            reserve += tempest_correction
+                            _LOGGER.info(
+                                "CARMA Tempest: radiation %.0f W/m² vs expected %.0f "
+                                "→ ratio %.2f → reserve +%.1f kWh",
+                                radiation_wm2, expected_wm2, ratio, tempest_correction,
+                            )
+                        elif ratio > 1.5:
+                            # More sun than forecast — decrease reserve (more aggressive discharge)
+                            tempest_reduction = reserve * 0.15
+                            reserve = max(0, reserve - tempest_reduction)
+                            _LOGGER.info(
+                                "CARMA Tempest: radiation %.0f W/m² >> expected %.0f "
+                                "→ ratio %.2f → reserve -%.1f kWh (more aggressive)",
+                                radiation_wm2, expected_wm2, ratio, tempest_reduction,
+                            )
+                except (ValueError, TypeError):
+                    pass
+
             self._current_reserve_kwh = reserve
 
             target = calculate_target(
