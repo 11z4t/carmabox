@@ -462,6 +462,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except ValueError:
             return 99
 
+    def _read_cell_temp(self, prefix: str) -> float | None:
+        """Read min cell temperature for a battery."""
+        entity = f"sensor.goodwe_battery_min_cell_temperature_{prefix}"
+        state = self.hass.states.get(entity)
+        if state and state.state not in ("unavailable", "unknown", ""):
+            try:
+                return float(state.state)
+            except (ValueError, TypeError):
+                pass
+        return None
+
     def _detect_miner_entity(self) -> str:
         """Auto-detect miner switch from appliances config."""
         for app in self._appliances:
@@ -1066,6 +1077,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 reserve_kwh=reserve,
             )
             self.target_kw = target
+
+            # Opt #1: Day/night target caps
+            target_day = float(self._cfg.get("target_kw_day", 2.0))
+            target_night = float(self._cfg.get("target_kw_night", 4.0))
+            hour_now = datetime.now().hour
+            is_night_now = hour_now >= 22 or hour_now < 6
+            target_cap = target_night if is_night_now else target_day
+            if self.target_kw > target_cap:
+                _LOGGER.debug(
+                    "CARMA: target %.1f > cap %.1f (%s) → capped",
+                    self.target_kw, target_cap, "natt" if is_night_now else "dag",
+                )
+                self.target_kw = target_cap
 
             # Trim to same length
             n = min(len(prices), len(pv_forecast), len(consumption))
@@ -2389,12 +2413,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._cmd_miner(False)
             return
 
-        # ── (a) High SoC + daytime → keep ON (batteries support) ──
-        if state.total_battery_soc > 80 and is_daytime:
+        # ── Opt #4: Miner ONLY at PV export (STRICT) ──────────
+        # NEVER run miner during grid import — wastes 400W
+        if state.grid_power_w >= 0:
+            # Importing from grid — miner OFF
+            if self._miner_on:
+                _LOGGER.info(
+                    "CARMA: Grid importing %.0fW — miner OFF (strict export-only)",
+                    state.grid_power_w,
+                )
+                await self._cmd_miner(False)
+            return
+
+        # Exporting — miner can run if export > threshold
+        if abs(state.grid_power_w) > miner_start_w:
             if not self._miner_on:
                 _LOGGER.info(
-                    "CARMA: High battery %.0f%% + daytime → miner ON (battery supports)",
-                    state.total_battery_soc,
+                    "CARMA: PV export %.0fW > %.0f → miner ON",
+                    abs(state.grid_power_w), miner_start_w,
                 )
                 await self._cmd_miner(True)
             return
@@ -4071,6 +4107,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _LOGGER.info("SafetyGuard blocked discharge: %s", discharge_check.reason)
             self._daily_safety_blocks += 1
             return
+
+        # Opt #7: Per-battery temp awareness
+        # Log which batteries can participate
+        cell_temp_k = self._read_cell_temp("kontor")
+        cell_temp_f = self._read_cell_temp("forrad")
+        cold_lock_temp = float(self._cfg.get("cold_lock_temp_c", 10.0))
+        if cell_temp_k is not None and cell_temp_k < cold_lock_temp:
+            _LOGGER.debug("CARMA: Kontor %.1f°C < %.0f → discharge OK but charge blocked", cell_temp_k, cold_lock_temp)
+        if cell_temp_f is not None and cell_temp_f < cold_lock_temp:
+            _LOGGER.debug("CARMA: Forrad %.1f°C < %.0f → discharge OK but charge blocked", cell_temp_f, cold_lock_temp)
 
         _LOGGER.info("CARMA: discharge %dW (target %.1f kW)", watts, self.target_kw)
 
