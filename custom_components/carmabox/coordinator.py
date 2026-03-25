@@ -433,7 +433,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """Entity ID for EV cable locked sensor (for state change listener)."""
         ev_prefix = self._cfg.get("ev_prefix", "")
         if ev_prefix:
-            return f"binary_sensor.{ev_prefix}_cable_locked"
+            return f"binary_sensor.{ev_prefix}_plug"
         return ""
 
     async def on_ev_cable_connected(self) -> None:
