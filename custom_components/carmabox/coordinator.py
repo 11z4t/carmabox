@@ -346,6 +346,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._miner_entity: str = str(self._cfg.get("miner_entity", ""))
         if not self._miner_entity:
             self._miner_entity = self._detect_miner_entity()
+        _LOGGER.info("CARMA: miner_entity=%s (from config=%s)", 
+                     self._miner_entity or "NONE",
+                     self._cfg.get("miner_entity", "NOT_IN_CONFIG"))
         self._miner_on: bool = False
         # Opt #5: Flat line controller — rolling grid average
         self._grid_samples: list[float] = []
