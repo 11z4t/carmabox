@@ -1106,6 +1106,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 except (ValueError, TypeError):
                     pass
 
+            # IT-2080: Tempest pressure trend → weather prediction
+            tempest_pressure = self.hass.states.get("sensor.tempest_pressure")
+            if tempest_pressure and tempest_pressure.state not in ("unavailable", "unknown", ""):
+                try:
+                    import time as _time_mod
+                    pressure_hpa = float(tempest_pressure.state)
+                    now_ts = _time_mod.time()
+                    self._pressure_history.append((now_ts, pressure_hpa))
+                    cutoff = now_ts - 10800  # 3h
+                    self._pressure_history = [(t, p) for t, p in self._pressure_history if t > cutoff]
+                    if len(self._pressure_history) >= 6:
+                        oldest = self._pressure_history[0][1]
+                        newest = self._pressure_history[-1][1]
+                        trend_hpa = newest - oldest
+                        if trend_hpa < -3:
+                            pressure_correction = reserve * 0.15
+                            reserve += pressure_correction
+                            _LOGGER.info(
+                                "CARMA Tempest: pressure falling %.1f hPa/3h → reserve +%.1f kWh",
+                                trend_hpa, pressure_correction,
+                            )
+                except (ValueError, TypeError):
+                    pass
+
             self._current_reserve_kwh = reserve
 
             # IT-2080: Tempest temperature → dynamic house baseload estimate
