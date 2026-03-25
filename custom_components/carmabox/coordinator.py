@@ -353,7 +353,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Opt #5: Flat line controller — rolling grid average
         self._grid_samples: list[float] = []
         self._grid_sample_max = 10  # 10 × 30s = 5 min rolling window
-        self._ev_last_full_charge_date: str = ""  # ISO date of last 100% charge
+        self._ev_last_full_charge_date: str = ""
+        self._ev_tonight_soc: float = -1.0  # ISO date of last 100% charge
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -2271,6 +2272,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Track full charge for weekly full-charge logic
             if ev_soc >= 99:
                 self._ev_last_full_charge_date = datetime.now().strftime("%Y-%m-%d")
+            # Continuous EV plan: estimate tonight SoC = current - 10% (driving)
+            self._ev_tonight_soc = max(0, ev_soc - 10.0)
+            ev_capacity = float(self._cfg.get("ev_capacity_kwh", 87.5))
+            ev_target = self._calculate_ev_target()
+            if self._ev_tonight_soc < ev_target:
+                need_kwh = (ev_target - self._ev_tonight_soc) / 100 * ev_capacity
+                hours_6a = need_kwh / (6 * 230 * 3 / 1000)
+                hours_8a = need_kwh / (8 * 230 * 3 / 1000)
+                _LOGGER.info(
+                    "CARMA EV plan: SoC %.0f%% → tonight ~%.0f%% → target %.0f%% "
+                    "= %.1f kWh (%.1fh@6A, %.1fh@8A)",
+                    ev_soc, self._ev_tonight_soc, ev_target,
+                    need_kwh, hours_6a, hours_8a,
+                )
 
         # ── IT-2066: Appliance detection (disk/tvätt/tork) ─────
         # Read appliance power for pause logic
