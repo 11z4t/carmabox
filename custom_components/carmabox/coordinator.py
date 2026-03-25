@@ -354,7 +354,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._grid_samples: list[float] = []
         self._grid_sample_max = 10  # 10 × 30s = 5 min rolling window
         self._ev_last_full_charge_date: str = ""
-        self._ev_tonight_soc: float = -1.0  # ISO date of last 100% charge
+        self._ev_tonight_soc: float = -1.0
+        self._estimated_house_base_kw: float = 2.0  # ISO date of last 100% charge
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -1106,6 +1107,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     pass
 
             self._current_reserve_kwh = reserve
+
+            # IT-2080: Tempest temperature → dynamic house baseload estimate
+            tempest_temp = self.hass.states.get("sensor.tempest_temperature")
+            if tempest_temp and tempest_temp.state not in ("unavailable", "unknown", ""):
+                try:
+                    outdoor_c = float(tempest_temp.state)
+                    # House needs more power when cold: 1.5 kW base + 0.1 kW per degree below 15°C
+                    dynamic_base_kw = 1.5 + max(0, (15.0 - outdoor_c) * 0.1)
+                    self._estimated_house_base_kw = round(min(4.0, dynamic_base_kw), 2)
+                except (ValueError, TypeError):
+                    pass
 
             target = calculate_target(
                 battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
