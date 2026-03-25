@@ -2381,12 +2381,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self._cmd_ev_stop()
                 return
 
-            # Calculate optimal amps from grid headroom
+            # Calculate optimal amps from grid headroom WITH battery support
             ev_load_kw = state.ev_power_w / 1000
             house_only_kw = max(0, max(0, state.grid_power_w) / 1000 - ev_load_kw)
             weight = night_weight if is_night else 1.0
             ev_max_hw = float(self._cfg.get("ev_night_headroom_kw", DEFAULT_EV_NIGHT_HEADROOM_KW))
             headroom_kw = (self.target_kw / weight - house_only_kw) if weight > 0 else ev_max_hw
+
+            # Weekday night: battery supports EV → more headroom
+            is_weekday = datetime.now().weekday() < 5
+            bat1_kwh = float(self._cfg.get("battery_1_kwh", 15.0))
+            bat2_kwh = float(self._cfg.get("battery_2_kwh", 5.0))
+            bat_available = max(0, (state.battery_soc_1 - self.min_soc) / 100 * bat1_kwh
+                               + max(0, (state.battery_soc_2 - self.min_soc) / 100 * bat2_kwh))
+            reserve = getattr(self, "_current_reserve_kwh", 0.0)
+
+            if is_weekday and is_night and bat_available > reserve + 2.0:
+                # Battery can support: add up to 2.5 kW headroom
+                bat_support_kw = min(2.5, (bat_available - reserve) / 4)  # spread over ~4h
+                headroom_kw += bat_support_kw
+                _LOGGER.debug(
+                    "CARMA EV: weekday night battery support +%.1f kW headroom (bat %.1f kWh avail)",
+                    bat_support_kw, bat_available,
+                )
             optimal_amps = max(0, int(headroom_kw * 1000 / DEFAULT_VOLTAGE))
             optimal_amps = min(optimal_amps, DEFAULT_EV_MAX_AMPS)
 
@@ -2453,8 +2470,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._miner_entity = str(self._cfg.get("miner_entity", ""))
             if not self._miner_entity:
                 self._miner_entity = self._detect_miner_entity()
+            # Hardcoded fallback for known installation
+            if not self._miner_entity:
+                known = self.hass.states.get("switch.shelly1pmg4_a085e3bd1e60")
+                if known and known.state not in ("unavailable", "unknown"):
+                    self._miner_entity = "switch.shelly1pmg4_a085e3bd1e60"
             if self._miner_entity:
-                _LOGGER.info("CARMA: miner_entity lazy-init → %s", self._miner_entity)
+                _LOGGER.info("CARMA: miner_entity resolved → %s", self._miner_entity)
         if not self._miner_entity:
             return
 
