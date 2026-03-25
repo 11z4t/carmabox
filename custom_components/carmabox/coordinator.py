@@ -1585,6 +1585,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     pv_kw,
                 )
                 self._track_rule("RULE_1_8", "proactive_discharge")
+                await self._execute_miner(state)
+                await self._execute_ev(state)
                 self._record_decision(
                     state,
                     "discharge",
