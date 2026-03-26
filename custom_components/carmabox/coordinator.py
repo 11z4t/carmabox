@@ -172,14 +172,35 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # EV executor state (PLAT-949)
         self._ev_enabled: bool = False
         self._last_known_ev_soc: float = -1.0
+        self._last_known_ev_soc_time: float = 0.0  # monotonic timestamp
         # IT-1965: Seed from persistent helper if available
         try:
-            seed = self.hass.states.get("input_number.carma_ev_last_known_soc")
+            seed = self.hass.states.get(
+                "input_number.carma_ev_last_known_soc"
+            )
             if seed and seed.state not in ("unknown", "unavailable", ""):
                 self._last_known_ev_soc = float(seed.state)
-                _LOGGER.info(
-                    "CARMA EV: seeded last_known_soc=%.0f%% from helper", self._last_known_ev_soc
-                )
+                # Use entity last_changed as age estimate
+                if seed.last_changed:
+                    age_s = (
+                        datetime.now(seed.last_changed.tzinfo)
+                        - seed.last_changed
+                    ).total_seconds()
+                    if age_s < 43200:  # < 12h
+                        self._last_known_ev_soc_time = time.monotonic() - age_s
+                    else:
+                        self._last_known_ev_soc = -1.0  # Too old
+                        _LOGGER.info(
+                            "CARMA EV: helper SoC %.0f%% too old (%.0fh)",
+                            float(seed.state), age_s / 3600,
+                        )
+                else:
+                    self._last_known_ev_soc_time = time.monotonic()
+                if self._last_known_ev_soc > 0:
+                    _LOGGER.info(
+                        "CARMA EV: seeded last_known_soc=%.0f%%",
+                        self._last_known_ev_soc,
+                    )
         except Exception:
             pass
         self._ev_current_amps: int = 0
@@ -1085,18 +1106,42 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # IT-1965: Use last known SoC with derating if current unavailable
             ev_soc_for_plan = state.ev_soc
             if ev_soc_for_plan < 0:
-                # Try last known SoC from CARMA state (derated by 10%)
+                # Try last known SoC with derating — max 12h old
                 derating = float(self._cfg.get("ev_soc_derating", 10.0))
-                if hasattr(self, "_last_known_ev_soc") and self._last_known_ev_soc > 0:
-                    ev_soc_for_plan = max(0, self._last_known_ev_soc - derating)
+                age_s = time.monotonic() - self._last_known_ev_soc_time
+                if self._last_known_ev_soc > 0 and age_s < 43200:  # < 12h
+                    ev_soc_for_plan = max(
+                        0, self._last_known_ev_soc - derating
+                    )
                     _LOGGER.info(
-                        "CARMA EV: using last known SoC %.0f%% - %.0f%% derating = %.0f%%",
+                        "CARMA EV: last known SoC %.0f%% (%.0fh ago)"
+                        " - %.0f%% derating = %.0f%%",
                         self._last_known_ev_soc,
+                        age_s / 3600,
                         derating,
                         ev_soc_for_plan,
                     )
+                elif self._last_known_ev_soc > 0:
+                    _LOGGER.warning(
+                        "CARMA EV: last known SoC %.0f%% expired"
+                        " (%.0fh old, max 12h)",
+                        self._last_known_ev_soc,
+                        age_s / 3600,
+                    )
             elif state.ev_soc > 0:
                 self._last_known_ev_soc = state.ev_soc
+                self._last_known_ev_soc_time = time.monotonic()
+                # Persist to HA helper for restart survival
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "input_number",
+                        "set_value",
+                        {
+                            "entity_id": "input_number.carma_ev_last_known_soc",
+                            "value": state.ev_soc,
+                        },
+                    )
+                )
 
             if ev_enabled and ev_soc_for_plan >= 0:
                 ev_demand = calculate_ev_schedule(
