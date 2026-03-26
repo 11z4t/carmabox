@@ -103,6 +103,21 @@ def _make_coordinator(
     coord._ev_initialized = True
     coord._miner_entity = ""
     coord._miner_on = False
+    coord._taper_active = False
+    coord._cold_lock_active = False
+    # IT-2067: Peak tracking, spike, reserve, dynamic discharge
+    from custom_components.carmabox.const import PEAK_RANK_COUNT
+
+    coord._peak_ranks = [0.0] * PEAK_RANK_COUNT
+    coord._peak_month = 3
+    coord._peak_last_update = 0.0
+    coord._spike_active = False
+    coord._spike_activated_at = 0.0
+    coord._spike_cooldown_started = 0.0
+    coord._grid_power_history = _deque(maxlen=120)
+    coord._reserve_target_pct = 15.0
+    coord._reserve_last_calc = 0.0
+    coord._reserve_kwh = 0.0
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
 
     coord.ledger = EnergyLedger()
@@ -140,10 +155,38 @@ def _make_coordinator(
     coord._predictor_loaded = True
     coord._predictor_last_save = 0.0
 
+    # IT-2380: EV daily SoC tracking for predictor
+    coord._ev_soc_day_start = -1.0
+
     # PLAT-972: Self-healing
     coord._ems_consecutive_failures = 0
     coord._ems_pause_until = 0.0
     coord._ev_last_known_enabled = None
+
+    # IT-2378: Intelligent Scheduler
+    from custom_components.carmabox.optimizer.models import SchedulerPlan
+
+    coord.scheduler_plan = SchedulerPlan()
+    coord._scheduler_counter = 0
+    coord._scheduler_learnings = []
+    coord._scheduler_breach_count_month = 0
+    coord._scheduler_store = MagicMock()
+    coord._scheduler_store.async_save = AsyncMock()
+    coord._scheduler_loaded = True
+    coord._scheduler_last_save = 0.0
+    coord._ev_days_since_full = 0
+
+    # Breach Prevention Monitor
+    from custom_components.carmabox.optimizer.models import HourlyMeterState
+
+    coord._meter_state = HourlyMeterState()
+    coord._breach_corrections = []
+    coord._breach_load_shed_active = False
+
+    # Battery standby tracking
+    coord._bat_idle_seconds = 0
+    coord._bat_daily_idle_seconds = 0
+    coord._bat_idle_day = 26
 
     return coord
 
@@ -1234,11 +1277,13 @@ class TestAdapterIntegration:
 
         a1.set_ems_mode.assert_called_once_with("peak_shaving")
         a2.set_ems_mode.assert_called_once_with("peak_shaving")
-        # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
-        # Battery 1 gets 1200/1300 of 1000 = 923W
-        a1.set_discharge_limit.assert_called_once_with(0)
-        # Battery 2 gets remainder = 77W
-        a2.set_discharge_limit.assert_called_once_with(0)
+        # IT-2067: Dynamic discharge limit based on SoC.
+        # avg_soc = (80+20)/2 = 50 → MID tier (1500W)
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
+
+        expected_limit = DISCHARGE_LIMIT_MID_SOC_W
+        a1.set_discharge_limit.assert_called_once_with(expected_limit)
+        a2.set_discharge_limit.assert_called_once_with(expected_limit)
         assert coord._last_command == BatteryCommand.DISCHARGE
 
     @pytest.mark.asyncio
@@ -1796,3 +1841,729 @@ class TestPlanScore:
         ]
         scores = coord.plan_score()
         assert scores["score_today"] == 100.0
+
+
+class TestTaperDetection:
+    """IT-1939: BMS taper detection — never export when SoC < 100%."""
+
+    @pytest.mark.asyncio
+    async def test_taper_detected_when_exporting_during_charge_pv(self) -> None:
+        """Export > 200W while charge_pv + SoC < 100% → taper detected."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting 500W
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord.last_decision.action == "charge_pv_taper"
+
+    @pytest.mark.asyncio
+    async def test_taper_not_detected_when_export_below_threshold(self) -> None:
+        """Export < 200W → no taper (batteries absorbing well)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Exporting only 100W
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_soc_full(self) -> None:
+        """SoC reaches 100% → taper exits."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=100,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_not_exporting(self) -> None:
+        """No longer exporting → taper cleared."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+
+        state = CarmaboxState(
+            grid_power_w=500,  # Importing now
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=1000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_export_low(self) -> None:
+        """Export drops below exit threshold → taper exits."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-50,  # Below TAPER_EXIT_EXPORT_W (100)
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_exit_when_pv_low(self) -> None:
+        """PV drops below exit threshold → taper exits (sun going down)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._taper_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-150,  # Export above exit threshold
+            battery_soc_1=96,
+            battery_soc_2=-1,
+            pv_power_w=300,  # Below TAPER_EXIT_PV_KW (0.5 kW = 500W)
+        )
+        await coord._execute(state)
+        assert coord._taper_active is False
+
+    @pytest.mark.asyncio
+    async def test_taper_activates_miner(self) -> None:
+        """During taper, miner should be turned ON to absorb surplus."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._miner_entity = "switch.miner"
+        coord._miner_on = False
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-800,
+            battery_soc_1=97,
+            battery_soc_2=-1,
+            pv_power_w=4000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord._miner_on is True
+
+    @pytest.mark.asyncio
+    async def test_taper_decision_has_taper_info(self) -> None:
+        """Taper decision should include taper info in reasoning."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-600,
+            battery_soc_1=95,
+            battery_soc_2=-1,
+            pv_power_w=3500,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        d = coord.last_decision
+        assert d.action == "charge_pv_taper"
+        assert "taper" in d.reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_taper_keeps_charge_pv_mode(self) -> None:
+        """Taper should NOT change battery mode — keep charge_pv."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-1500,
+            battery_soc_1=98,
+            battery_soc_2=-1,
+            pv_power_w=5000,
+        )
+        await coord._execute(state)
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+        assert coord._taper_active is True
+
+    @pytest.mark.asyncio
+    async def test_taper_with_dual_battery(self) -> None:
+        """Taper detection works with dual batteries."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-700,
+            battery_soc_1=97,
+            battery_soc_2=96,
+            pv_power_w=4000,
+        )
+        await coord._execute(state)
+        assert coord._taper_active is True
+        assert coord.last_decision.action == "charge_pv_taper"
+
+
+class TestColdLockDetection:
+    """IT-1948: BMS cold lock detection — charging blocked at low cell temp."""
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_detected_when_cell_temp_low(self) -> None:
+        """Cell temp < 10°C + exporting + battery ~0W → cold lock."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,  # Battery not accepting charge
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,  # Below 10°C threshold
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord.last_decision.action == "bms_cold_lock"
+        assert "kall-blockering" in coord.last_decision.reason
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_not_detected_when_cell_temp_ok(self) -> None:
+        """Cell temp > 10°C → normal charge_pv, no cold lock."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Low export (below taper threshold)
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=15.0,  # Above threshold
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_clears_when_temp_rises(self) -> None:
+        """Cold lock clears when cell temp rises above threshold."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._cold_lock_active = True
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=12.0,  # Above threshold now
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_dual_battery_one_cold(self) -> None:
+        """One battery cold + other warm → cold lock (any_cold = True)."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=50,
+            battery_power_1=0,
+            battery_power_2=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,  # Cold
+            battery_cell_temp_2=15.0,  # Warm
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord.last_decision.action == "bms_cold_lock"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_activates_surplus_chain(self) -> None:
+        """During cold lock, miner should be turned ON (surplus chain)."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._miner_entity = "switch.miner"
+        coord._miner_on = False
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-800,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,
+            pv_power_w=4000,
+            battery_cell_temp_1=7.0,
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        assert coord._miner_on is True
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_no_cell_temp_no_lock(self) -> None:
+        """No cell temp data (None) → no cold lock, normal behavior."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-100,  # Low export (below taper threshold)
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            pv_power_w=3000,
+            battery_cell_temp_1=None,  # No data
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is False
+        assert coord.last_decision.action == "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_decision_shows_cell_temps(self) -> None:
+        """Cold lock decision reason includes cell temperatures."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_ems_2": "select.ems2",
+            }
+        )
+        _set_state(coord, "select.ems1", "battery_standby")
+        _set_state(coord, "select.ems2", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,
+            battery_soc_1=50,
+            battery_soc_2=50,
+            battery_power_1=0,
+            battery_power_2=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=8.3,
+            battery_cell_temp_2=10.5,
+        )
+        await coord._execute(state)
+        assert coord._cold_lock_active is True
+        d = coord.last_decision
+        assert "8.3" in d.reason
+        assert "kontor" in d.reason
+
+    @pytest.mark.asyncio
+    async def test_cold_lock_not_taper(self) -> None:
+        """Cold cell temp should trigger cold_lock, NOT taper."""
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        _set_state(coord, "select.ems1", "battery_standby")
+
+        state = CarmaboxState(
+            grid_power_w=-500,  # Exporting > TAPER_EXPORT_THRESHOLD_W
+            battery_soc_1=50,
+            battery_soc_2=-1,
+            battery_power_1=0,
+            pv_power_w=3000,
+            battery_cell_temp_1=5.0,  # Very cold
+        )
+        await coord._execute(state)
+        # Should be cold lock, NOT taper
+        assert coord._cold_lock_active is True
+        assert coord._taper_active is False
+        assert coord.last_decision.action == "bms_cold_lock"
+
+
+# ── IT-2067: Peak Tracking Tests ─────────────────────────────────
+
+
+class TestPeakTracking:
+    """Test rolling top-3 monthly peak tracking."""
+
+    def test_initial_peaks_are_zero(self) -> None:
+        coord = _make_coordinator()
+        assert coord._peak_ranks == [0.0, 0.0, 0.0]
+
+    def test_track_single_peak(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_last_update = 0.0  # Force update
+        coord._track_peaks(5.0)
+        assert coord._peak_ranks[0] == 5.0
+        assert coord._peak_ranks[1] == 0.0
+
+    def test_track_multiple_peaks_sorted(self) -> None:
+        coord = _make_coordinator()
+        # Force updates by setting last_update far in past
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(3.0)
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(5.0)
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(4.0)
+        # Should be sorted descending
+        assert coord._peak_ranks == [5.0, 4.0, 3.0]
+
+    def test_new_peak_pushes_out_lowest(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [8.0, 6.0, 4.0]
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(5.0)
+        assert coord._peak_ranks == [8.0, 6.0, 5.0]
+
+    def test_monthly_reset(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        coord._peak_month = 2  # February — will trigger reset in March
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(1.0)
+        assert coord._peak_ranks[0] == 1.0
+        assert coord._peak_month != 2  # Month updated
+
+    def test_negative_grid_ignored(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        coord._peak_last_update = time.monotonic() - 400
+        coord._track_peaks(-1.0)
+        assert coord._peak_ranks == [0.0, 0.0, 0.0]
+
+
+class TestPeakRiskStatus:
+    """Test peak risk calculation."""
+
+    def test_safe_when_below_threshold(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        assert coord._peak_risk_status(4.0) == "safe"
+
+    def test_warning_near_rank3(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # margin=1.0 default, so warning at >= 5.0
+        assert coord._peak_risk_status(5.5) == "warning"
+
+    def test_risk_at_rank3(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        assert coord._peak_risk_status(6.0) == "risk"
+
+    def test_safe_when_peaks_below_meaningful(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [2.0, 1.0, 0.5]
+        # rank_3 < 3.0 → always safe (normal house load)
+        assert coord._peak_risk_status(2.5) == "safe"
+
+
+class TestAdjustedTarget:
+    """Test dynamic target adjustment based on peak risk."""
+
+    def test_no_adjustment_when_safe(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # grid_kw=1.0, well below rank_3=6.0, safe
+        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=1.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW
+
+        assert target == DEFAULT_TARGET_DAY_KW
+
+    def test_reduced_when_risk(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        # grid_kw=7.0 >= rank_3=6.0 → risk
+        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=7.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW, PEAK_WARNING_MARGIN_KW
+
+        assert target == max(0.5, DEFAULT_TARGET_DAY_KW - PEAK_WARNING_MARGIN_KW)
+
+    def test_night_target_different(self) -> None:
+        coord = _make_coordinator()
+        coord._peak_ranks = [10.0, 8.0, 6.0]
+        target = coord._adjusted_target_kw(is_night=True, current_grid_kw=1.0)
+        from custom_components.carmabox.const import DEFAULT_TARGET_NIGHT_KW
+
+        assert target == DEFAULT_TARGET_NIGHT_KW
+
+
+# ── IT-2067: Appliance Spike Tests ───────────────────────────────
+
+
+class TestApplianceSpikeDetection:
+    """Test appliance spike detection logic."""
+
+    def test_no_spike_on_stable_load(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        base = time.monotonic()
+        # Simulate stable 2000W for 60s
+        for i in range(10):
+            coord._grid_power_history.append((base + i * 6, 2000))
+        assert coord._detect_appliance_spike(2100) is False
+
+    def test_spike_on_sudden_jump(self) -> None:
+        coord = _make_coordinator()
+        import time
+
+        base = time.monotonic()
+        # Stable baseline at 1500W
+        for i in range(5):
+            coord._grid_power_history.append((base + i * 6, 1500))
+        # Sudden jump to 3000W (delta = 1500 > 1000 threshold)
+        assert coord._detect_appliance_spike(3000) is True
+
+    def test_spike_recovery_resets_flag(self) -> None:
+        coord = _make_coordinator()
+        coord._spike_active = True
+        coord._spike_activated_at = 0.0  # Very old → safety timeout
+        import asyncio
+
+        asyncio.get_event_loop().run_until_complete(coord._handle_spike_recovery(1000))
+        assert coord._spike_active is False
+
+
+# ── IT-2067: Dynamic Discharge Limit Tests ────────────────────────
+
+
+class TestDynamicDischargeLimit:
+    """Test SoC-based dynamic discharge limit."""
+
+    def test_high_soc_aggressive(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_HIGH_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_HIGH_SOC_W
+
+    def test_low_soc_conservative(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=25, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_LOW_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_LOW_SOC_W
+
+    def test_very_low_soc(self) -> None:
+        coord = _make_coordinator()
+        coord.data = CarmaboxState(battery_soc_1=15, battery_soc_2=-1)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_VERY_LOW_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_VERY_LOW_SOC_W
+
+    def test_two_batteries_average(self) -> None:
+        coord = _make_coordinator()
+        # Average = (80+40)/2 = 60, which is > 40 but not > 60
+        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=40)
+        limit = coord._dynamic_discharge_limit_w()
+        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
+
+        assert limit == DISCHARGE_LIMIT_MID_SOC_W
+
+
+# ── IT-2067: Reserve Target Tests ─────────────────────────────────
+
+
+class TestReserveTarget:
+    """Test Solcast-based dynamic min SoC."""
+
+    def test_strong_sun_no_offset(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0  # Force recalc
+        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "25.0")
+        target = coord._calculate_reserve_target()
+        # Strong sun (25 kWh > 20 threshold) → base 15% + 0% = 15%
+        assert target == 15.0
+
+    def test_weak_sun_adds_offset(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0
+        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "3.0")
+        target = coord._calculate_reserve_target()
+        # Weak sun (3 kWh < 5 threshold) → base 15% + 10% = 25%
+        assert target == 25.0
+
+    def test_forecast_unavailable_neutral(self) -> None:
+        coord = _make_coordinator()
+        coord._reserve_last_calc = 0.0
+        # No state set → _read_float returns -1 → neutral
+        target = coord._calculate_reserve_target()
+        # Neutral → base 15% + 5% = 20%
+        assert target == 20.0
+
+
+class TestPriceFallingAhead:
+    """IT-2074: Price-aware discharge throttle tests."""
+
+    def _setup_prices(
+        self,
+        coord: CarmaboxCoordinator,
+        today: list[float],
+        tomorrow: list[float] | None = None,
+    ) -> None:
+        """Set up Nordpool price mock on coordinator."""
+        attrs: dict[str, object] = {"today": today}
+        if tomorrow is not None:
+            attrs["tomorrow"] = tomorrow
+            attrs["tomorrow_valid"] = True
+        else:
+            attrs["tomorrow_valid"] = False
+        _set_state(coord, "sensor.nordpool", str(today[0]), attributes=attrs)
+
+    def test_falling_price_detected(self) -> None:
+        """120 öre now, 40 öre in 2h → falling (67% drop)."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        # 24h prices: hour 17=120, hour 18=80, hour 19=40
+        prices = [50.0] * 24
+        prices[17] = 120.0
+        prices[18] = 80.0
+        prices[19] = 40.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
+        assert falling is True
+        assert ratio >= 0.3  # 40/120 = 0.33 → drop = 0.67
+
+    def test_stable_price_not_flagged(self) -> None:
+        """120 öre now, 110 öre in 2h → not falling (< 30% drop)."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        prices = [120.0] * 24
+        prices[18] = 110.0
+        prices[19] = 100.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
+        assert falling is False
+
+    def test_rising_price_not_flagged(self) -> None:
+        """80 öre now, 120 öre in 1h → not falling."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        prices = [80.0] * 24
+        prices[17] = 80.0
+        prices[18] = 120.0
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17)
+        assert falling is False
+        assert ratio == 0.0
+
+    def test_cross_midnight_uses_tomorrow(self) -> None:
+        """Hour 23, tomorrow hour 0 is much cheaper → falling."""
+        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
+        today = [50.0] * 24
+        today[23] = 120.0
+        tomorrow = [30.0] * 24  # Much cheaper
+        self._setup_prices(coord, today, tomorrow)
+
+        falling, ratio = coord._price_falling_ahead(23, lookahead_hours=2)
+        assert falling is True
+        assert ratio >= 0.3
+
+    def test_no_price_entity_returns_false(self) -> None:
+        """No price entity configured → no throttle."""
+        coord = _make_coordinator({})
+        falling, ratio = coord._price_falling_ahead(17)
+        assert falling is False
+        assert ratio == 0.0
+
+    def test_configurable_threshold(self) -> None:
+        """Custom threshold of 50% — 40% drop should NOT trigger."""
+        coord = _make_coordinator(
+            {
+                "price_entity": "sensor.nordpool",
+                "price_drop_throttle_pct": 50.0,
+            }
+        )
+        prices = [100.0] * 24
+        prices[17] = 100.0
+        prices[18] = 65.0  # 35% drop — below 50% threshold
+        self._setup_prices(coord, prices)
+
+        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=1)
+        assert falling is False
+
+
+class TestPriceAwareDischargeThrottle:
+    """IT-2074: Verify RULE_2 throttles discharge when prices fall."""
+
+    @pytest.mark.asyncio
+    async def test_discharge_throttled_when_price_falling(self) -> None:
+        """High load + falling prices → discharge at 50% power."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+                "price_entity": "sensor.nordpool",
+            }
+        )
+
+        # Setup falling prices: hour 17=120, hour 18=40
+        prices = [50.0] * 24
+        prices[17] = 120.0
+        prices[18] = 40.0
+        prices[19] = 30.0
+        attrs = {"today": prices, "tomorrow_valid": False}
+        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
+
+        state = CarmaboxState(
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=-1,
+            current_price=120.0,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 17
+            await coord._execute(state)
+
+        # Should still discharge (peak shaving) but at reduced power
+        assert coord._last_command == BatteryCommand.DISCHARGE
+        # Check that the decision mentions throttle
+        assert (
+            "throttl" in coord.last_decision.reason.lower()
+            or coord.last_decision.discharge_w < 3000
+        )  # Throttled from ~3000W
+
+    @pytest.mark.asyncio
+    async def test_discharge_not_throttled_when_price_stable(self) -> None:
+        """High load + stable prices → full discharge."""
+        coord = _make_coordinator(
+            {
+                "battery_ems_1": "select.ems1",
+                "battery_limit_1": "number.limit1",
+                "price_entity": "sensor.nordpool",
+            }
+        )
+
+        # Stable prices
+        prices = [120.0] * 24
+        attrs = {"today": prices, "tomorrow_valid": False}
+        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
+
+        state = CarmaboxState(
+            grid_power_w=5000,
+            battery_soc_1=80,
+            battery_soc_2=-1,
+            current_price=120.0,
+        )
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = 17
+            await coord._execute(state)
+
+        assert coord._last_command == BatteryCommand.DISCHARGE
+        # Full discharge — no throttle mentioned
+        assert "throttl" not in (coord.last_decision.reason or "").lower()

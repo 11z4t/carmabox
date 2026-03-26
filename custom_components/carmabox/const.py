@@ -63,6 +63,19 @@ DEFAULT_PRICE_EXPENSIVE_ORE = 80.0
 DEFAULT_MINER_START_EXPORT_W = 200  # Start miner when exporting > this
 DEFAULT_MINER_STOP_IMPORT_W = 500  # Stop miner when importing > this
 
+# BMS taper detection (IT-1939)
+TAPER_EXPORT_THRESHOLD_W = 200  # Export > this while charge_pv → taper detected
+TAPER_EXIT_EXPORT_W = 100  # Export < this → exit taper
+TAPER_EXIT_PV_KW = 0.5  # PV < this → exit taper (sun going down)
+TAPER_VP_SURPLUS_W = 500  # Surplus > this → start VP pre-heat/cool
+TAPER_EV_SURPLUS_W = 1000  # Surplus > this → start EV charging
+
+# BMS cold lock detection (IT-1948)
+# When min cell temperature < threshold, BMS blocks ALL charging (lithium plating protection).
+# This is NOT taper — battery accepts ZERO power regardless of EMS mode.
+COLD_LOCK_CELL_TEMP_C = 10.0  # Min cell temp below which BMS blocks charging
+COLD_LOCK_POWER_THRESHOLD_W = 50  # |battery_power| < this confirms cold lock (≈ 0W)
+
 # Watchdog thresholds
 DEFAULT_WATCHDOG_EXPORT_W = 500  # W1: export threshold for charge correction
 DEFAULT_WATCHDOG_DISCHARGE_MIN_W = 200  # W2: minimum discharge to correct
@@ -86,6 +99,41 @@ EXPORT_GUARD_THRESHOLD_W = -1000
 TEMPERATURE_MIN_C = 0
 TEMPERATURE_MAX_C = 45
 MAX_MODE_CHANGES_PER_HOUR = 30  # 0.5/min — prevents oscillation flooding
+
+# ── IT-2067: Peak Tracking ─────────────────────────────────────
+PEAK_UPDATE_INTERVAL_S = 300  # Check for new peaks every 5 min
+PEAK_RANK_COUNT = 3  # Top-N monthly peaks (Ellevio billing)
+PEAK_MIN_MEANINGFUL_KW = 3.0  # Ignore peaks below normal house load
+PEAK_WARNING_MARGIN_KW = 1.0  # Warning threshold = rank_3 - margin
+DEFAULT_TARGET_DAY_KW = 3.0  # Base daytime grid import target
+DEFAULT_TARGET_NIGHT_KW = 5.0  # Base nighttime grid import target
+
+# ── IT-2067: Appliance Spike Detection ─────────────────────────
+SPIKE_DETECTION_THRESHOLD_W = 1000  # Grid power jump > this = spike
+SPIKE_HISTORY_WINDOW_S = 60  # Window for min-power baseline
+SPIKE_PS_LIMIT_W = 1500  # PS limit during spike compensation
+SPIKE_COOLDOWN_S = 60  # Seconds after spike ends before restoring
+SPIKE_SAFETY_TIMEOUT_S = 600  # Force reset if spike_active > 10 min
+SPIKE_DEFAULT_PS_LIMIT_W = 20000  # Normal PS limit (no restriction)
+
+# ── IT-2067: Reserve Target (Solcast-based) ────────────────────
+RESERVE_PV_STRONG_KWH = 20.0  # Strong sun → low reserve
+RESERVE_PV_WEAK_KWH = 5.0  # Weak sun → high reserve
+RESERVE_OFFSET_STRONG_PCT = 0.0  # Add 0% to min_soc on sunny days
+RESERVE_OFFSET_WEAK_PCT = 10.0  # Add 10% on cloudy days
+RESERVE_OFFSET_NEUTRAL_PCT = 5.0  # Add 5% for average days
+
+# ── IT-2067: Dynamic Discharge Limit ──────────────────────────
+# SoC-based: higher SoC = lower PS limit (more aggressive discharge)
+DISCHARGE_LIMIT_HIGH_SOC_W = 1000  # SoC > 60%: aggressive
+DISCHARGE_LIMIT_MID_SOC_W = 1500  # SoC 40-60%: moderate
+DISCHARGE_LIMIT_LOW_SOC_W = 2000  # SoC 20-40%: conservative
+DISCHARGE_LIMIT_VERY_LOW_SOC_W = 3000  # SoC < 20%: very conservative
+DISCHARGE_NIGHT_FACTOR = 2.0  # Night: ×2 (Ellevio weights ×0.5)
+
+# ── IT-2067: Cold Temperature Protection ──────────────────────
+COLD_TEMP_THRESHOLD_C = 4.0  # Below this = cold condition
+COLD_MIN_SOC_PCT = 20.0  # Min SoC when cold (vs 15% normal)
 
 # Appliance categories
 APPLIANCE_CATEGORIES = {
@@ -191,6 +239,23 @@ BATTERY_BRANDS = {
     "tesla": "Tesla Powerwall",
     "other": "Annan",
 }
+
+# ── IT-2378: Intelligent Scheduler ────────────────────────────────
+SCHEDULER_INTERVAL_SECONDS = 900  # 15 min
+SCHEDULER_PLAN_HOURS = 24
+SCHEDULER_CONSTRAINT_MARGIN = 0.85  # Warn at 85% of target
+SCHEDULER_EV_DEPARTURE_HOUR = 6  # Morning departure
+SCHEDULER_APPLIANCE_WINDOW_START = 22  # Dishwasher/laundry typical start
+SCHEDULER_APPLIANCE_WINDOW_END = 1  # Dishwasher/laundry typical end
+SCHEDULER_APPLIANCE_LOAD_KW = 2.0  # Assumed appliance load during window
+SCHEDULER_EV_GRID_CHARGE_SPREAD_ORE = 30.0  # Min price spread for grid charge
+SCHEDULER_BREACH_MINOR_PCT = 0.10  # <10% over = minor
+SCHEDULER_BREACH_MAJOR_PCT = 0.25  # 10-25% over = major, >25% = critical
+SCHEDULER_LEARNING_CONFIDENCE_STEP = 0.2  # Confidence increase per occurrence
+SCHEDULER_MINER_EXPORT_MIN_W = 500  # Min export before miner can run
+SCHEDULER_EV_100_INTERVAL_DAYS = 7  # Days between 100% charges
+SCHEDULER_EV_100_PV_THRESHOLD_KWH = 25.0  # Sunny day threshold for PV-based 100%
+SCHEDULER_MAX_LEARNINGS = 50  # Cap learning entries
 
 # Config keys
 CONF_BATTERIES = "batteries"

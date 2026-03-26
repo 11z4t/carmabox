@@ -60,6 +60,68 @@ class TestDischarge:
         result = guard.check_discharge(soc_1=50, soc_2=50, min_soc=15, grid_power_w=0)
         assert result.ok
 
+    # ── IT-2075: Reserve-aware discharge gating ──────────────────
+
+    def test_block_available_below_reserve(self, guard: SafetyGuard) -> None:
+        """IT-2075: Block discharge when available_kwh < reserve_kwh + 1.0."""
+        result = guard.check_discharge(
+            soc_1=50,
+            soc_2=50,
+            min_soc=15,
+            grid_power_w=2000,
+            available_kwh=3.0,
+            reserve_kwh=3.0,
+        )
+        assert not result.ok
+        assert "reserve" in result.reason
+
+    def test_pass_available_above_reserve(self, guard: SafetyGuard) -> None:
+        """IT-2075: Allow discharge when available_kwh >= reserve_kwh + 1.0."""
+        result = guard.check_discharge(
+            soc_1=50,
+            soc_2=50,
+            min_soc=15,
+            grid_power_w=2000,
+            available_kwh=5.0,
+            reserve_kwh=3.0,
+        )
+        assert result.ok
+
+    def test_pass_reserve_exactly_at_margin(self, guard: SafetyGuard) -> None:
+        """IT-2075: available == reserve + 1.0 should pass (not strictly less)."""
+        result = guard.check_discharge(
+            soc_1=50,
+            soc_2=50,
+            min_soc=15,
+            grid_power_w=2000,
+            available_kwh=4.0,
+            reserve_kwh=3.0,
+        )
+        assert result.ok
+
+    def test_pass_reserve_none_backward_compat(self, guard: SafetyGuard) -> None:
+        """IT-2075: When reserve params not provided, skip the check (backward compat)."""
+        result = guard.check_discharge(
+            soc_1=50,
+            soc_2=50,
+            min_soc=15,
+            grid_power_w=2000,
+        )
+        assert result.ok
+
+    def test_block_reserve_zero_available_low(self, guard: SafetyGuard) -> None:
+        """IT-2075: reserve=0 still requires 1.0 kWh margin."""
+        result = guard.check_discharge(
+            soc_1=50,
+            soc_2=50,
+            min_soc=15,
+            grid_power_w=2000,
+            available_kwh=0.5,
+            reserve_kwh=0.0,
+        )
+        assert not result.ok
+        assert "reserve" in result.reason
+
 
 class TestCharge:
     def test_pass_normal(self, guard: SafetyGuard) -> None:

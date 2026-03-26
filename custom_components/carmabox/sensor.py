@@ -135,6 +135,18 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "safety_blocked": d.safety_blocked,
         "timestamp": d.timestamp,
         "analyze_only": not coord.executor_enabled,
+        "taper_active": coord._taper_active,
+        "cold_lock_active": coord._cold_lock_active,
+        "cell_temp_kontor": (
+            coord.data.battery_cell_temp_1
+            if coord.data and coord.data.battery_cell_temp_1 is not None
+            else None
+        ),
+        "cell_temp_forrad": (
+            coord.data.battery_cell_temp_2
+            if coord.data and coord.data.battery_cell_temp_2 is not None
+            else None
+        ),
     }
     # Last 24h decisions as compact list (max 48 entries)
     attrs["decisions_24h"] = [
@@ -497,7 +509,6 @@ def _rules_value(coord: CarmaboxCoordinator) -> str:
 
 def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     """IT-1937: Rules table with all rules, active state, parameters, and history."""
-    from datetime import datetime
 
     if not coord.data:
         return {"status": "no_data"}
@@ -589,6 +600,97 @@ def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+# ── IT-2378: Intelligent Scheduler sensors ────────────────────────
+
+
+def _scheduler_last_breach_value(coord: CarmaboxCoordinator) -> str:
+    """Last breach description."""
+    breaches = coord.scheduler_plan.breaches
+    if not breaches:
+        return "Inga överträdelser"
+    return breaches[-1].root_cause[:200]
+
+
+def _scheduler_last_breach_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Last breach details."""
+    breaches = coord.scheduler_plan.breaches
+    if not breaches:
+        return {"breach_count_month": coord.scheduler_plan.breach_count_month}
+    b = breaches[-1]
+    return {
+        "timestamp": b.timestamp,
+        "hour": b.hour,
+        "actual_weighted_kw": b.actual_weighted_kw,
+        "target_kw": b.target_kw,
+        "loads_active": b.loads_active,
+        "root_cause": b.root_cause,
+        "remediation": b.remediation,
+        "severity": b.severity,
+        "breach_count_month": coord.scheduler_plan.breach_count_month,
+        "learnings": [
+            {"pattern": lr.pattern, "action": lr.action, "confidence": lr.confidence}
+            for lr in (coord.scheduler_plan.learnings or [])[:10]
+        ],
+    }
+
+
+def _scheduler_breach_count_value(coord: CarmaboxCoordinator) -> int:
+    """Monthly breach count."""
+    return coord.scheduler_plan.breach_count_month
+
+
+def _scheduler_24h_plan_value(coord: CarmaboxCoordinator) -> str:
+    """24h plan status summary."""
+    plan = coord.scheduler_plan
+    if not plan.slots:
+        return "Ingen plan"
+    violations = sum(1 for s in plan.slots if not s.constraint_ok)
+    if violations:
+        return f"Plan aktiv — {violations} varning(ar)"
+    return "Plan aktiv — alla timmar OK"
+
+
+def _scheduler_24h_plan_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Full 24h scheduler plan for dashboard."""
+    plan = coord.scheduler_plan
+    slots_data = []
+    for s in plan.slots:
+        slots_data.append(
+            {
+                "h": s.hour,
+                "a": s.action,
+                "bat_kw": s.battery_kw,
+                "ev_kw": s.ev_kw,
+                "ev_a": s.ev_amps,
+                "miner": s.miner_on,
+                "grid": s.grid_kw,
+                "w_kw": s.weighted_kw,
+                "pv": s.pv_kw,
+                "load": s.consumption_kw,
+                "price": s.price,
+                "soc": s.battery_soc,
+                "ev_soc": s.ev_soc,
+                "ok": s.constraint_ok,
+                "reason": s.reasoning,
+            }
+        )
+    return {
+        "target_weighted_kw": plan.target_weighted_kw,
+        "max_weighted_kw": plan.max_weighted_kw,
+        "total_ev_kwh": plan.total_ev_kwh,
+        "ev_soc_at_06": plan.ev_soc_at_06,
+        "total_charge_kwh": plan.total_charge_kwh,
+        "total_discharge_kwh": plan.total_discharge_kwh,
+        "estimated_cost_kr": plan.estimated_cost_kr,
+        "slots": slots_data,
+    }
+
+
+def _scheduler_ev_full_charge_value(coord: CarmaboxCoordinator) -> str:
+    """Next planned EV 100% charge date."""
+    return coord.scheduler_plan.ev_next_full_charge_date or "Ej planerad"
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -649,9 +751,7 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        value_fn=lambda coord: round(coord.data.total_battery_soc, 0)
-        if coord.data
-        else 0,
+        value_fn=lambda coord: round(coord.data.total_battery_soc, 0) if coord.data else 0,
     ),
     CarmaboxSensorDescription(
         key="grid_import",
@@ -769,6 +869,87 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         value_fn=_energy_ledger_value,
         extra_attrs_fn=_energy_ledger_attrs,
     ),
+    # ── IT-2378: Intelligent Scheduler ────────────────────────
+    CarmaboxSensorDescription(
+        key="scheduler_last_breach",
+        translation_key="scheduler_last_breach",
+        icon="mdi:alert-circle",
+        value_fn=_scheduler_last_breach_value,
+        extra_attrs_fn=_scheduler_last_breach_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="scheduler_breach_count_month",
+        translation_key="scheduler_breach_count_month",
+        icon="mdi:counter",
+        state_class=SensorStateClass.TOTAL,
+        value_fn=_scheduler_breach_count_value,
+    ),
+    CarmaboxSensorDescription(
+        key="scheduler_24h_plan",
+        translation_key="scheduler_24h_plan",
+        icon="mdi:calendar-clock",
+        value_fn=_scheduler_24h_plan_value,
+        extra_attrs_fn=_scheduler_24h_plan_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="scheduler_ev_next_full_charge",
+        translation_key="scheduler_ev_next_full_charge",
+        icon="mdi:car-electric",
+        value_fn=_scheduler_ev_full_charge_value,
+    ),
+    CarmaboxSensorDescription(
+        key="battery_idle_today",
+        translation_key="battery_idle_today",
+        icon="mdi:battery-clock-outline",
+        native_unit_of_measurement="min",
+        state_class=SensorStateClass.TOTAL_INCREASING,
+        value_fn=lambda coord: coord._bat_daily_idle_seconds // 60,
+    ),
+    CarmaboxSensorDescription(
+        key="battery_utilization_score",
+        translation_key="battery_utilization_score",
+        icon="mdi:battery-charging-high",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda coord: (
+            coord.scheduler_plan.idle_analysis.score if coord.scheduler_plan.idle_analysis else 0
+        ),
+        extra_attrs_fn=lambda coord: (
+            {
+                "idle_hours_today": ia.idle_hours_today,
+                "idle_pct": ia.idle_pct,
+                "missed_charge_kwh": ia.missed_charge_kwh,
+                "missed_discharge_kwh": ia.missed_discharge_kwh,
+                "missed_savings_kr": ia.missed_savings_kr,
+                "opportunities": ia.opportunities,
+            }
+            if (ia := coord.scheduler_plan.idle_analysis)
+            else {}
+        ),
+    ),
+    CarmaboxSensorDescription(
+        key="breach_monitor_projected",
+        translation_key="breach_monitor_projected",
+        icon="mdi:chart-timeline-variant",
+        native_unit_of_measurement="kW",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda coord: coord.hourly_meter_projected,
+    ),
+    CarmaboxSensorDescription(
+        key="breach_monitor_pct",
+        translation_key="breach_monitor_pct",
+        icon="mdi:gauge",
+        native_unit_of_measurement="%",
+        state_class=SensorStateClass.MEASUREMENT,
+        value_fn=lambda coord: coord.hourly_meter_pct,
+        extra_attrs_fn=lambda coord: {
+            "load_shed_active": coord.breach_monitor_active,
+            "samples_this_hour": len(coord._meter_state.samples),
+            "peak_sample_kw": coord._meter_state.peak_sample,
+            "warning_issued": coord._meter_state.warning_issued,
+            "active_corrections": len(coord.get_active_corrections()),
+        },
+    ),
 )
 
 
@@ -792,9 +973,7 @@ def _appliance_attrs_factory(
         members = [app for app in coord._appliances if app.get("category") == category]
         return {
             "energy_today_kwh": round(energy_wh / 1000, 2),
-            "appliances": [
-                {"entity_id": m["entity_id"], "name": m["name"]} for m in members
-            ],
+            "appliances": [{"entity_id": m["entity_id"], "name": m["name"]} for m in members],
         }
 
     return _attrs
@@ -836,14 +1015,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up CARMA Box sensors from EntityDescription."""
     coordinator: CarmaboxCoordinator = entry.runtime_data
-    entities = [
-        CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS
-    ]
+    entities = [CarmaboxSensor(coordinator, entry, desc) for desc in SENSOR_DESCRIPTIONS]
 
     # PLAT-943: Add per-category appliance sensors
-    appliances = list(
-        entry.options.get("appliances") or entry.data.get("appliances") or []
-    )
+    appliances = list(entry.options.get("appliances") or entry.data.get("appliances") or [])
     for desc in _build_appliance_descriptions(appliances):
         entities.append(CarmaboxSensor(coordinator, entry, desc))
 

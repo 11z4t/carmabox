@@ -6,7 +6,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.carmabox.hub import HubSyncClient
+from custom_components.carmabox.hub import (
+    HubSyncClient,
+    _sign_mqtt_payload,
+    _verify_mqtt_envelope,
+)
 from custom_components.carmabox.optimizer.report import ReportCollector
 from custom_components.carmabox.optimizer.savings import SavingsState
 
@@ -267,3 +271,140 @@ class TestInitialState:
         client = _make_client()
         assert client.is_mqtt_connected is False
         assert client.last_sync is None
+
+
+# ── MQTT HMAC Signing Tests ─────────────────────────────────────
+
+
+TEST_HMAC_KEY = "a" * 64  # 32-byte hex key for testing
+
+
+class TestMQTTPayloadSigning:
+    def test_sign_creates_envelope(self) -> None:
+        envelope = _sign_mqtt_payload({"temp": 22}, TEST_HMAC_KEY)
+        assert envelope["payload"] == {"temp": 22}
+        assert "ts" in envelope
+        assert "nonce" in envelope
+        assert "sig" in envelope
+        assert len(envelope["sig"]) == 64
+
+    def test_sign_verify_roundtrip(self) -> None:
+        data = {"grid_kw": 1.5, "soc": 80}
+        envelope = _sign_mqtt_payload(data, TEST_HMAC_KEY)
+        valid, payload = _verify_mqtt_envelope(envelope, TEST_HMAC_KEY)
+        assert valid is True
+        assert payload == data
+
+    def test_wrong_key_fails(self) -> None:
+        envelope = _sign_mqtt_payload({"x": 1}, TEST_HMAC_KEY)
+        valid, _ = _verify_mqtt_envelope(envelope, "b" * 64)
+        assert valid is False
+
+    def test_tampered_payload_fails(self) -> None:
+        envelope = _sign_mqtt_payload({"amount": 100}, TEST_HMAC_KEY)
+        envelope["payload"]["amount"] = 999
+        valid, _ = _verify_mqtt_envelope(envelope, TEST_HMAC_KEY)
+        assert valid is False
+
+    def test_missing_sig_fails(self) -> None:
+        envelope = _sign_mqtt_payload({"x": 1}, TEST_HMAC_KEY)
+        del envelope["sig"]
+        valid, _ = _verify_mqtt_envelope(envelope, TEST_HMAC_KEY)
+        assert valid is False
+
+    def test_list_payload(self) -> None:
+        data = [{"hour": 0}, {"hour": 1}]
+        envelope = _sign_mqtt_payload(data, TEST_HMAC_KEY)
+        valid, payload = _verify_mqtt_envelope(envelope, TEST_HMAC_KEY)
+        assert valid is True
+        assert payload == data
+
+
+class TestMQTTPublishSigned:
+    def test_publish_with_hmac_key_signs_payload(self) -> None:
+        """When mqtt_hmac_key is set, publish wraps data in signed envelope."""
+        import json
+
+        client = _make_client(mqtt_hmac_key=TEST_HMAC_KEY)
+        client._mqtt_connected = True
+        client._mqtt_client = MagicMock()
+
+        client.publish_telemetry({"grid_kw": 1.5})
+
+        call_args = client._mqtt_client.publish.call_args
+        topic = call_args[0][0]
+        raw = json.loads(call_args[0][1])
+
+        assert topic == "carmabox/box_test123/telemetry"
+        assert "sig" in raw
+        assert "payload" in raw
+        assert raw["payload"]["grid_kw"] == 1.5
+
+        # Verify the signature is valid
+        valid, payload = _verify_mqtt_envelope(raw, TEST_HMAC_KEY)
+        assert valid is True
+        assert payload == {"grid_kw": 1.5}
+
+    def test_publish_without_hmac_key_sends_raw(self) -> None:
+        """Without mqtt_hmac_key, publish sends raw JSON (backward compat)."""
+        import json
+
+        client = _make_client()  # No hmac key
+        client._mqtt_connected = True
+        client._mqtt_client = MagicMock()
+
+        client.publish_telemetry({"grid_kw": 1.5})
+
+        call_args = client._mqtt_client.publish.call_args
+        raw = json.loads(call_args[0][1])
+        assert "sig" not in raw
+        assert raw["grid_kw"] == 1.5
+
+    def test_publish_plan_signed(self) -> None:
+        import json
+
+        client = _make_client(mqtt_hmac_key=TEST_HMAC_KEY)
+        client._mqtt_connected = True
+        client._mqtt_client = MagicMock()
+
+        plan = [{"hour": 0, "action": "charge"}]
+        client.publish_plan(plan)
+
+        raw = json.loads(client._mqtt_client.publish.call_args[0][1])
+        assert "sig" in raw
+        valid, payload = _verify_mqtt_envelope(raw, TEST_HMAC_KEY)
+        assert valid is True
+        assert payload == plan
+
+
+class TestRegisterStoresHmacKey:
+    @pytest.mark.asyncio
+    async def test_register_stores_hmac_key(self) -> None:
+        client = _make_client(mqtt_username="", mqtt_token="")
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(
+            return_value={
+                "mqtt_username": "box_abc123",
+                "mqtt_token": "secret_token",
+                "wss_url": "wss://hub.carmabox.se/mqtt",
+                "topic_prefix": "carmabox/box_abc123",
+                "mqtt_hmac_key": TEST_HMAC_KEY,
+            }
+        )
+        mock_session = MagicMock()
+        mock_session.post = MagicMock(
+            return_value=AsyncMock(
+                __aenter__=AsyncMock(return_value=mock_resp),
+                __aexit__=AsyncMock(return_value=False),
+            )
+        )
+
+        with patch(
+            "custom_components.carmabox.hub.async_get_clientsession",
+            return_value=mock_session,
+        ):
+            result = await client.register({"price_area": "SE3"})
+
+        assert result is not None
+        assert client.mqtt_hmac_key == TEST_HMAC_KEY
