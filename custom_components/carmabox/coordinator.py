@@ -1271,7 +1271,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if tempest_radiation and tempest_radiation.state not in ("unavailable", "unknown", ""):
                 try:
                     radiation_wm2 = float(tempest_radiation.state)
-                    forecast_kw = solcast.power_now_kw
+                    forecast_kw = getattr(solcast, "power_now_kw", 0.0) or 0.0
                     # Approximate: 1 kWp panel ≈ 1000 W/m² at STC
                     # Our panels ~10 kWp → at 500 W/m² expect ~5 kW
                     # Ratio: actual_radiation / expected_for_forecast
