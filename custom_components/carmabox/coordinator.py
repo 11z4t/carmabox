@@ -173,22 +173,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.idle_analysis = None
         self.ev_next_full_charge_date = None
         self.scheduler_plan = self  # alias: sensor.py uses coord.scheduler_plan.X
-
-    @property
-    def slots(self):
-        """Convert HourPlan → SchedulerHourSlot-compatible for sensor.py."""
-        from .optimizer.models import SchedulerHourSlot
-        return [
-            SchedulerHourSlot(
-                hour=p.hour, action=p.action, battery_kw=p.battery_kw,
-                ev_kw=p.ev_kw, ev_amps=0, miner_on=False,
-                grid_kw=p.grid_kw, weighted_kw=p.weighted_kw,
-                pv_kw=p.pv_kw, consumption_kw=p.consumption_kw,
-                price=p.price, battery_soc=p.battery_soc,
-                ev_soc=p.ev_soc, constraint_ok=True, reasoning="",
-            )
-            for p in self.plan
-        ]
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
@@ -845,6 +829,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self.benchmark_data = data
         except Exception:
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
+
+    @property
+    def slots(self):
+        """Convert HourPlan → SchedulerHourSlot-compatible for sensor.py."""
+        from .optimizer.models import SchedulerHourSlot
+        return [
+            SchedulerHourSlot(
+                hour=p.hour, action=p.action, battery_kw=p.battery_kw,
+                ev_kw=p.ev_kw, ev_amps=0, miner_on=False,
+                grid_kw=p.grid_kw, weighted_kw=p.weighted_kw,
+                pv_kw=p.pv_kw, consumption_kw=p.consumption_kw,
+                price=p.price, battery_soc=p.battery_soc,
+                ev_soc=p.ev_soc, constraint_ok=True, reasoning="",
+            )
+            for p in self.plan
+        ]
 
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
