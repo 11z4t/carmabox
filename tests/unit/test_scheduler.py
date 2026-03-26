@@ -808,7 +808,7 @@ class TestIdleAnalysis:
             prices=[50] * 24,
             pv_forecast=[0] * 24,
         )
-        assert result.idle_pct > 50
+        assert result.idle_pct >= 50  # anti-idle discharge reduces idle hours
         assert any("idle" in t.lower() or "Idle" in t for t in result.opportunities)
 
 

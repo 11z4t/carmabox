@@ -164,6 +164,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         self.notifier = CarmaNotifier(hass, self._cfg)
         self.plan: list[HourPlan] = []
+        self._taper_active: bool = False
+        # Compatibility attributes for sensor.py (scheduler_plan.X)
+        self.breaches: list = []
+        self.breach_count_month: int = 0
+        self.learnings: list = []
+        self.idle_analysis = None
+        self.ev_next_full_charge_date = None
+        self.scheduler_plan = self  # alias: sensor.py uses coord.scheduler_plan.X
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
