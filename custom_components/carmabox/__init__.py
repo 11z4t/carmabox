@@ -7,6 +7,7 @@ electricity costs and peak power charges.
 
 from __future__ import annotations
 
+import importlib
 import logging
 import sys
 from pathlib import Path
@@ -19,6 +20,20 @@ from homeassistant.helpers.event import (
 )
 
 from .const import DOMAIN, PLATFORMS
+
+# IT-2466: Invalidate module cache on reload to pick up hotfixes
+for _mod in [
+    "custom_components.carmabox.coordinator",
+    "custom_components.carmabox.optimizer.scheduler",
+    "custom_components.carmabox.optimizer.models",
+    "custom_components.carmabox.optimizer.predictor",
+]:
+    if _mod in sys.modules:
+        try:
+            importlib.reload(sys.modules[_mod])
+        except Exception:  # noqa: BLE001
+            pass
+
 from .coordinator import CarmaboxCoordinator
 
 CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
