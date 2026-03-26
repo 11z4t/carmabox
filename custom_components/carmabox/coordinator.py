@@ -878,11 +878,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._async_save_consumption()
             await self._async_save_predictor()
             await self._async_fetch_benchmarking()
+            self._consecutive_errors = 0
             return state
 
         except Exception as err:
-            _LOGGER.error("CARMA Box update failed: %s", err, exc_info=True)
-            raise UpdateFailed(f"Update failed: {err}") from err
+            self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            _LOGGER.error(
+                "CARMA Box update failed (%d consecutive): %s",
+                self._consecutive_errors, err, exc_info=True,
+            )
+            # Degraded mode: return last known state instead of crashing
+            # Only raise UpdateFailed after 10 consecutive errors (5 min)
+            if self._consecutive_errors >= 10:
+                _LOGGER.error("CARMA Box: 10 consecutive failures — marking unavailable")
+                raise UpdateFailed(f"Update failed: {err}") from err
+            # Return last state — sensors stay available, decisions continue
+            _LOGGER.warning("CARMA Box: degraded mode — using last known state")
+            return state
 
     def _collect_state(self) -> CarmaboxState:
         """Collect current state from all HA entities.
