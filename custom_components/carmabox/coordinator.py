@@ -173,6 +173,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.idle_analysis = None
         self.ev_next_full_charge_date = None
         self.scheduler_plan = self  # alias: sensor.py uses coord.scheduler_plan.X
+        # PlanSummary-compatible attributes for sensor.py
+        self.target_weighted_kw: float = 2.0
+        self.max_weighted_kw: float = 0.0
+        self.total_charge_kwh: float = 0.0
+        self.total_discharge_kwh: float = 0.0
+        self.total_ev_kwh: float = 0.0
+        self.estimated_cost_kr: float = 0.0
+        self.ev_soc_at_06: int | None = None
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
