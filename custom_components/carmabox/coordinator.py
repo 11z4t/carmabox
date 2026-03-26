@@ -4604,8 +4604,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         total_samples = getattr(self, "_bat_total_samples", 0)
         self._bat_total_samples = total_samples + 1
         if bat_power > 100:
-            self._bat_active_samples = active_samples + 1
-        active_pct = round(self._bat_active_samples / max(1, self._bat_total_samples) * 100, 1)
+            active_samples += 1
+        self._bat_active_samples = active_samples
+        active_pct = round(active_samples / max(1, self._bat_total_samples) * 100, 1)
         idle_pct = 100 - active_pct
 
         # Arbitrage profit
