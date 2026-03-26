@@ -165,6 +165,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.notifier = CarmaNotifier(hass, self._cfg)
         self.plan: list[HourPlan] = []
         self._taper_active: bool = False
+        self._cold_lock_active: bool = False
         # Compatibility attributes for sensor.py (scheduler_plan.X)
         self.breaches: list = []
         self.breach_count_month: int = 0
