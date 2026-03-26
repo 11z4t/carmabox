@@ -1364,6 +1364,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 except (ValueError, TypeError):
                     pass
 
+            ellevio_tak = float(opts.get("ellevio_tak_kw", 4.0))
             target = calculate_target(
                 battery_kwh_available=battery_kwh - (self.min_soc / 100 * total_bat_kwh),
                 hourly_loads=consumption[: len(prices)],
@@ -1373,6 +1374,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 ],
                 reserve_kwh=reserve,
             )
+            # Target must respect Ellevio subscription limit — never go below
+            # a safe margin so EV charging + house load can fit under the cap
+            target = max(target, ellevio_tak * 0.85)
             self.target_kw = target
 
             # Opt #1 + #6 + Tempest: Dynamic target based on illuminance + price
