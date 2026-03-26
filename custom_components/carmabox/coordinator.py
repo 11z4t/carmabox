@@ -1145,7 +1145,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     fallback_profile=base,
                 )
                 # Pad to match prices length (predict_24h returns exactly 24)
-                consumption = consumption + base
+                consumption = (consumption or base[start_hour:]) + base
             else:
                 consumption = base[start_hour:] + base
 
