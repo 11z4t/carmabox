@@ -313,6 +313,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._ems_pause_until: float = 0.0  # monotonic time
         self._ev_last_known_enabled: bool | None = None
 
+        # ── IT-2465: Method isolation — disable failing non-critical methods
+        self._disabled_methods: dict[str, float] = {}  # method_name → re-enable time
+        _DISABLE_DURATION_S = 300  # 5 minutes
+
         # ── Breach Prevention Monitor ──────────────────────────────
         self._meter_state = HourlyMeterState()
         self._breach_corrections: list[BreachCorrection] = []
@@ -916,16 +920,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._check_plan_correction(state)
 
             # Breach Prevention Monitor — runs every cycle (30s)
-            self._update_hourly_meter(state)
+            self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
             await self._execute(state)
             await self._watchdog(state)
-            self._track_shadow(state)
-            self._track_savings(state)
-            self._track_appliances()
-            self._track_battery_idle(state)
-            self._feed_predictor_ml(state)
-            self._check_daily_goals(state)
+            # IT-2465: Non-critical methods wrapped with isolation
+            self._safe_call("track_shadow", self._track_shadow, state)
+            self._safe_call("track_savings", self._track_savings, state)
+            self._safe_call("track_appliances", self._track_appliances)
+            self._safe_call("track_battery_idle", self._track_battery_idle, state)
+            self._safe_call("feed_predictor_ml", self._feed_predictor_ml, state)
+            self._safe_call("check_daily_goals", self._check_daily_goals, state)
             await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
@@ -949,6 +954,36 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Return last state — sensors stay available, decisions continue
             _LOGGER.warning("CARMA Box: degraded mode — using last known state")
             return state
+
+    def _safe_call(self, method_name: str, fn, *args, **kwargs) -> None:
+        """IT-2465: Call a non-critical method with isolation.
+
+        If the method raises, disable it for 5 minutes instead of
+        crashing the entire coordinator. Re-enables automatically.
+        """
+        # Check if method is disabled
+        re_enable_at = self._disabled_methods.get(method_name, 0)
+        if re_enable_at > 0:
+            if time.monotonic() < re_enable_at:
+                return  # Still disabled
+            # Re-enable
+            del self._disabled_methods[method_name]
+            _LOGGER.info(
+                "IT-2465: Re-enabling %s after cooldown", method_name
+            )
+
+        try:
+            fn(*args, **kwargs)
+        except Exception:
+            self._disabled_methods[method_name] = (
+                time.monotonic() + 300  # 5 min cooldown
+            )
+            _LOGGER.error(
+                "IT-2465: %s crashed — disabled for 5 min. "
+                "Coordinator continues.",
+                method_name,
+                exc_info=True,
+            )
 
     def _collect_state(self) -> CarmaboxState:
         """Collect current state from all HA entities.
