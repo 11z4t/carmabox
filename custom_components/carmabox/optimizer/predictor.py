@@ -139,6 +139,57 @@ class ConsumptionPredictor:
                 return fallback_profile[start_hour:] + fallback_profile[:start_hour]
             return [2.0] * 24
 
+    def add_appliance_event(self, hour: int, weekday: int, appliance: str) -> None:
+        """Track when appliances run for pattern learning."""
+        key = f"app_{appliance}_{weekday}_{hour}"
+        if key not in self.history:
+            self.history[key] = []
+        self.history[key].append(1.0)
+        if len(self.history[key]) > 30:
+            self.history[key] = self.history[key][-30:]
+
+    def predict_appliance_risk(self, hour: int, weekday: int) -> dict[str, float]:
+        """Predict probability of each appliance running at given hour.
+        
+        Returns: {"disk": 0.8, "tvatt": 0.1, "tork": 0.05}
+        """
+        risks = {}
+        for app in ("disk", "tvatt", "tork"):
+            key = f"app_{app}_{weekday}_{hour}"
+            samples = len(self.history.get(key, []))
+            # Total nights tracked for this weekday
+            total_key = f"app_total_{weekday}"
+            total = len(self.history.get(total_key, [])) or 30
+            risks[app] = min(1.0, samples / max(1, total))
+        return risks
+
+    def get_disk_typical_hours(self, weekday: int) -> list[int]:
+        """Return hours where disk runs > 30% of the time."""
+        result = []
+        for h in range(24):
+            risk = self.predict_appliance_risk(h, weekday)
+            if risk.get("disk", 0) > 0.3:
+                result.append(h)
+        return result or [23, 0]  # Fallback
+
+    def add_breach_event(self, hour: int, weekday: int, goal: str, excess_kw: float) -> None:
+        """Learn from goal breaches to avoid them in future."""
+        key = f"breach_{goal}_{weekday}_{hour}"
+        if key not in self.history:
+            self.history[key] = []
+        self.history[key].append(excess_kw)
+        if len(self.history[key]) > 30:
+            self.history[key] = self.history[key][-30:]
+
+    def get_breach_risk_hours(self, weekday: int, goal: str = "ellevio") -> list[int]:
+        """Return hours with history of goal breaches."""
+        result = []
+        for h in range(24):
+            key = f"breach_{goal}_{weekday}_{h}"
+            if len(self.history.get(key, [])) >= 2:  # 2+ breaches = risky
+                result.append(h)
+        return result
+
         predictions = []
         for i in range(24):
             h = (start_hour + i) % 24
