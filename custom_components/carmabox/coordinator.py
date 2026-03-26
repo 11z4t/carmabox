@@ -355,7 +355,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._grid_sample_max = 10  # 10 × 30s = 5 min rolling window
         self._ev_last_full_charge_date: str = ""
         self._ev_tonight_soc: float = -1.0
-        self._estimated_house_base_kw: float = 2.0  # ISO date of last 100% charge
+        self._estimated_house_base_kw: float = 2.0
+        self._daily_goals: dict = {}
+        # Breach statistics: {goal_name: [dates]} — escalates if repeated
+        self._breach_history: dict[str, list[str]] = {}
+        self._breach_escalation: dict[str, int] = {}  # 0=normal, 1=warning, 2=critical  # ISO date of last 100% charge
 
         # PLAT-962: Household benchmarking data (from hub)
         self.benchmark_data: dict[str, Any] | None = None
@@ -874,7 +878,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._track_shadow(state)
             self._track_savings(state)
             self._track_appliances()
-            await self._async_save_savings()
+            self._check_daily_goals(state)
+        await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
             await self._async_fetch_benchmarking()
@@ -3926,6 +3931,201 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     temperature_c=temp_c,
                 )
             )
+
+    def _check_daily_goals(self, state) -> dict:
+        """Check daily goals and generate root cause if breached.
+        
+        Goals:
+        1. Ellevio: never exceed target (2 kW day / 4 kW night)
+        2. EV SoC >= 75% at 06:00 daily
+        3. EV SoC = 100% within 7 days
+        4. Minimize PV export (maximize self-consumption)
+        
+        Returns dict with goal status + root cause if breached.
+        """
+        from datetime import datetime
+        now = datetime.now()
+        results = {}
+        
+        # Goal 1: Ellevio max timmedel
+        ell_max = self.hass.states.get("sensor.ellevio_dagens_max")
+        target_day = float(self._cfg.get("target_kw_day", 2.0))
+        target_night = float(self._cfg.get("target_kw_night", 4.0))
+        if ell_max and ell_max.state not in ("unavailable", "unknown"):
+            try:
+                max_kw = float(ell_max.state)
+                results["ellevio_max_kw"] = max_kw
+                results["ellevio_target_kw"] = target_day
+                results["ellevio_goal_met"] = max_kw <= target_day + 0.1
+                if not results["ellevio_goal_met"]:
+                    results["ellevio_breach_kw"] = round(max_kw - target_day, 2)
+                    results["ellevio_root_cause"] = (
+                        "EV+disk overlap" if max_kw > 5 else
+                        "EV 10A burst" if max_kw > 4 else
+                        "High base load" if max_kw > 3 else
+                        "Unknown"
+                    )
+                    _LOGGER.warning(
+                        "CARMA GOAL BREACH: Ellevio max %.2f kW > target %.1f (cause: %s)",
+                        max_kw, target_day, results["ellevio_root_cause"],
+                    )
+            except (ValueError, TypeError):
+                pass
+        
+        # Goal 2: EV SoC >= 75% at 06:00
+        if now.hour == 6 and now.minute < 15:
+            ev_soc = state.ev_soc if state.ev_soc >= 0 else self._last_known_ev_soc
+            results["ev_soc_at_06"] = ev_soc
+            results["ev_goal_met"] = ev_soc >= 75 or ev_soc < 0  # unknown = no car
+            if not results["ev_goal_met"] and ev_soc >= 0:
+                results["ev_root_cause"] = (
+                    "Charging stopped by HA restart" if ev_soc > 60 else
+                    "Insufficient charging time" if ev_soc > 40 else
+                    "Car not connected"
+                )
+                _LOGGER.warning(
+                    "CARMA GOAL BREACH: EV SoC %.0f%% < 75%% at 06:00 (cause: %s)",
+                    ev_soc, results["ev_root_cause"],
+                )
+        
+        # Goal 3: EV 100% within 7 days
+        days_since = self._days_since_full_charge()
+        results["ev_days_since_full"] = days_since
+        results["ev_full_charge_goal_met"] = days_since <= 7
+        if days_since > 5:
+            _LOGGER.info(
+                "CARMA: EV full charge due in %d days (last full: %s)",
+                7 - days_since, self._ev_last_full_charge_date or "unknown",
+            )
+        
+        # Goal 4: PV self-consumption
+        ledger = self.hass.states.get("sensor.carma_box_energy_ledger")
+        if ledger:
+            attrs = ledger.attributes or {}
+            total_solar = attrs.get("total_solar_kwh", 0)
+            total_export = attrs.get("total_export_kwh", 0)
+            if total_solar > 1:
+                self_consumption_pct = round((1 - total_export / total_solar) * 100, 1)
+                results["pv_self_consumption_pct"] = self_consumption_pct
+                results["pv_goal_met"] = self_consumption_pct >= 80
+                results["pv_export_kwh"] = total_export
+                if not results["pv_goal_met"]:
+                    results["pv_root_cause"] = (
+                        "Batteries cold locked" if total_export > 5 else
+                        "Battery full + no EV" if total_export > 2 else
+                        "Normal surplus"
+                    )
+        
+        # Track breach statistics + escalation
+        today = datetime.now().strftime("%Y-%m-%d")
+        for goal in ["ellevio", "ev", "pv"]:
+            met_key = f"{goal}_goal_met"
+            if met_key in results and not results[met_key]:
+                history = self._breach_history.setdefault(goal, [])
+                if today not in history:
+                    history.append(today)
+                # Keep 30 days
+                self._breach_history[goal] = history[-30:]
+                # Count breaches in last 7 days
+                recent = [d for d in history if d >= (datetime.now() - __import__("datetime").timedelta(days=7)).strftime("%Y-%m-%d")]
+                if len(recent) >= 3:
+                    self._breach_escalation[goal] = 2  # CRITICAL
+                    _LOGGER.error(
+                        "CARMA ESCALATION: %s goal breached %d times in 7 days → CRITICAL",
+                        goal, len(recent),
+                    )
+                elif len(recent) >= 2:
+                    self._breach_escalation[goal] = 1  # WARNING
+                    _LOGGER.warning(
+                        "CARMA ESCALATION: %s goal breached %d times in 7 days → WARNING",
+                        goal, len(recent),
+                    )
+                else:
+                    self._breach_escalation[goal] = 0  # Normal (first time)
+        
+        results["breach_escalation"] = dict(self._breach_escalation)
+        results["breach_history_7d"] = {
+            goal: len([d for d in dates if d >= (datetime.now() - __import__("datetime").timedelta(days=7)).strftime("%Y-%m-%d")])
+            for goal, dates in self._breach_history.items()
+        }
+
+        # Goal 5: Electricity cost optimization
+        ledger_state = self.hass.states.get("sensor.carma_box_energy_ledger")
+        if ledger_state:
+            la = ledger_state.attributes or {}
+            total_cost = la.get("total_cost_kr", 0)
+            without_bat = la.get("without_battery_kr", 0)
+            if without_bat > 0.5:
+                savings_pct = round((1 - total_cost / without_bat) * 100, 1)
+                results["cost_savings_pct"] = savings_pct
+                results["cost_actual_kr"] = round(total_cost, 2)
+                results["cost_without_kr"] = round(without_bat, 2)
+                results["cost_goal_met"] = savings_pct >= 15
+                if not results["cost_goal_met"]:
+                    results["cost_root_cause"] = (
+                        "Batterier ej aktiva (cold lock?)" if savings_pct < 5 else
+                        "Laddar vid dyra timmar" if savings_pct < 10 else
+                        "Liten prisspread idag"
+                    )
+
+        # Goal 6: Battery utilization
+        bat1_kwh = float(self._cfg.get("battery_1_kwh", 15.0))
+        bat2_kwh = float(self._cfg.get("battery_2_kwh", 5.0))
+        total_cap = bat1_kwh + bat2_kwh
+        usable_cap = total_cap * (1 - self.min_soc / 100)
+
+        # Track daily SoC min/max for swing
+        soc_now = state.total_battery_soc
+        day_min = getattr(self, "_bat_day_min_soc", soc_now)
+        day_max = getattr(self, "_bat_day_max_soc", soc_now)
+        self._bat_day_min_soc = min(day_min, soc_now)
+        self._bat_day_max_soc = max(day_max, soc_now)
+
+        swing_pct = self._bat_day_max_soc - self._bat_day_min_soc
+        swing_kwh = swing_pct / 100 * total_cap
+        capacity_util = round(swing_kwh / usable_cap * 100, 1) if usable_cap > 0 else 0
+
+        # Track active hours (|power| > 100W)
+        bat_power = abs(state.battery_power_1 + state.battery_power_2)
+        active_samples = getattr(self, "_bat_active_samples", 0)
+        total_samples = getattr(self, "_bat_total_samples", 0)
+        self._bat_total_samples = total_samples + 1
+        if bat_power > 100:
+            self._bat_active_samples = active_samples + 1
+        active_pct = round(self._bat_active_samples / max(1, self._bat_total_samples) * 100, 1)
+        idle_pct = 100 - active_pct
+
+        # Arbitrage profit
+        bat_saving = la.get("battery_net_saving_kr", 0) if ledger_state else 0
+
+        # Combined score
+        econ_score = min(1.0, abs(bat_saving) / 5.0) if bat_saving != 0 else 0  # 5 kr = perfect
+        active_score = active_pct / 100
+        cap_score = capacity_util / 100
+
+        battery_score = round(
+            0.30 * econ_score +
+            0.30 * active_score +
+            0.40 * cap_score, 2
+        ) * 100
+
+        results["battery_score"] = battery_score
+        results["battery_swing_pct"] = swing_pct
+        results["battery_swing_kwh"] = round(swing_kwh, 1)
+        results["battery_idle_pct"] = idle_pct
+        results["battery_active_pct"] = active_pct
+        results["battery_arbitrage_kr"] = round(bat_saving, 2) if isinstance(bat_saving, (int, float)) else 0
+        results["battery_goal_met"] = battery_score >= 40
+        if not results["battery_goal_met"]:
+            results["battery_root_cause"] = (
+                "Cold lock (cell temp < 10°C)" if swing_pct < 5 else
+                "Batterier vilar (ingen arbitrage-möjlighet?)" if idle_pct > 80 else
+                "Låg prisspread (ej lönsamt att cykla)"
+            )
+
+        # Store for insight mail
+        self._daily_goals = results
+        return results
 
     async def _self_heal_goodwe_entries(self) -> None:
         """PLAT-972: Self-healing — check GoodWe config entries and reload if needed."""
