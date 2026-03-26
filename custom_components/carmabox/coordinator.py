@@ -1377,6 +1377,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Target must respect Ellevio subscription limit — never go below
             # a safe margin so EV charging + house load can fit under the cap
             target = max(target, ellevio_tak * 0.85)
+            _LOGGER.warning(
+                "PLAN DEBUG: bat_soc1=%.1f bat_soc2=%.1f total=%.1f cap=%.1f target=%.1f prices[0:3]=%s",
+                state.battery_soc_1, state.battery_soc_2,
+                state.total_battery_soc, total_bat_kwh, target,
+                prices[:3],
+            )
             self.target_kw = target
 
             # Opt #1 + #6 + Tempest: Dynamic target based on illuminance + price
