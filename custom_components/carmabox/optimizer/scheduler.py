@@ -759,7 +759,15 @@ def _apply_corrections(
 
         elif corr.action == "shift_ev":
             # Move EV from source hour to target hour (idx = destination)
-            params = dict(p.split("=") for p in corr.param.split(",") if "=" in p)
+            # V2: Safe param parsing
+            try:
+                params = dict(
+                    p.split("=", 1)
+                    for p in corr.param.split(",")
+                    if "=" in p
+                )
+            except (ValueError, TypeError):
+                params = {}
             shift_from = int(params.get("shift_from", corr.source_breach_hour))
             from_idx = (shift_from - start_hour) % 24
             if from_idx < num_hours and ev_schedule[from_idx][0] > 0:
@@ -777,7 +785,14 @@ def _apply_corrections(
 
         elif corr.action == "add_discharge":
             # Add battery discharge at this hour
-            params = dict(p.split("=") for p in corr.param.split(",") if "=" in p)
+            try:
+                params = dict(
+                    p.split("=", 1)
+                    for p in corr.param.split(",")
+                    if "=" in p
+                )
+            except (ValueError, TypeError):
+                params = {}
             discharge_kw = float(params.get("discharge_kw", "2.0"))
             discharge_kw = min(discharge_kw, max_discharge_kw)
             avail_kwh = (battery_soc_pct - battery_min_soc) / 100 * battery_cap_kwh
@@ -1116,8 +1131,9 @@ def analyze_idle_time(
     be doing useful work (charging from cheap grid, discharging during peaks,
     absorbing PV surplus).
     """
-    hours_elapsed = max(1, datetime.now().hour)
-    idle_pct = round(idle_minutes_today / (hours_elapsed * 60) * 100, 0)
+    hours_elapsed = max(1, datetime.now().hour or 1)
+    # K4: Clamp idle_pct to 0-100
+    idle_pct = min(100.0, round(idle_minutes_today / (hours_elapsed * 60) * 100, 0))
 
     missed_charge = 0.0
     missed_discharge = 0.0
@@ -1131,20 +1147,24 @@ def analyze_idle_time(
             continue
 
         price = slot.price
+        # V6: Use per-slot SoC instead of global snapshot
+        soc = slot.battery_soc
 
         # Missed PV charge: PV surplus > 0.5 kW but battery idle
         pv_surplus = slot.pv_kw - slot.consumption_kw
-        if pv_surplus > 0.5 and battery_soc_pct < 95:
+        if pv_surplus > 0.5 and soc < 95:
             surplus = min(pv_surplus, 3.0)  # Max 3kW charge rate
             missed_charge += surplus
 
         # Missed cheap charge: price < 20 öre and battery not full
-        if price < 20 and battery_soc_pct < 80:
+        if price < 20 and soc < 80:
             missed_charge += 2.0  # Could charge 2 kW
 
         # Missed discharge: price > avg*1.3 and battery has energy
-        if price > avg_price * 1.3 and battery_soc_pct > battery_min_soc + 10:
-            avail = min(2.0, (battery_soc_pct - battery_min_soc) / 100 * battery_cap_kwh)
+        if price > avg_price * 1.3 and soc > battery_min_soc + 10:
+            avail = min(
+                2.0, (soc - battery_min_soc) / 100 * battery_cap_kwh
+            )
             missed_discharge += avail
             missed_savings_kr += avail * price / 100
 

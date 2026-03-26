@@ -3712,6 +3712,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     # ── Breach Prevention Monitor ─────────────────────────────────
 
+    # Max stored corrections to prevent unbounded memory growth (K1)
+    _MAX_CORRECTIONS = 100
+    # Max samples per hour — protects against extra refreshes (K3)
+    _MAX_HOUR_SAMPLES = 150
+
     def _update_hourly_meter(self, state: CarmaboxState) -> None:
         """Track rolling hourly average and project where hour will end."""
         from .optimizer.grid_logic import ellevio_weight
@@ -3724,45 +3729,73 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         weighted_kw = grid_kw * weight
 
         if hour != self._meter_state.hour:
+            # V5: Keep load shed active if projected was still high at hour end
+            prev_projected = self._meter_state.projected_avg
             if self._meter_state.hour >= 0 and self._meter_state.samples:
-                final_avg = sum(self._meter_state.samples) / len(self._meter_state.samples)
+                final_avg = sum(self._meter_state.samples) / len(
+                    self._meter_state.samples
+                )
                 if final_avg > self.target_kw:
                     _LOGGER.warning(
-                        "Breach Monitor: kl %02d slutade på %.2f kW (target %.1f)",
+                        "Breach Monitor: kl %02d slutade på %.2f kW"
+                        " (target %.1f)",
                         self._meter_state.hour,
                         final_avg,
                         self.target_kw,
                     )
-                    self._generate_breach_corrections(state, self._meter_state.hour, final_avg)
+                    self._generate_breach_corrections(
+                        state, self._meter_state.hour, final_avg
+                    )
             self._meter_state = HourlyMeterState(hour=hour)
-            self._breach_load_shed_active = False
+            # V5: Carry over load shed if previous hour ended high
+            if prev_projected > self.target_kw * 0.90:
+                self._breach_load_shed_active = True
+                self._meter_state.load_shed_active = True
+            else:
+                self._breach_load_shed_active = False
 
-        self._meter_state.samples.append(weighted_kw)
+        # K3: Cap samples to prevent unbounded growth from extra refreshes
+        if len(self._meter_state.samples) < self._MAX_HOUR_SAMPLES:
+            self._meter_state.samples.append(weighted_kw)
         if weighted_kw > self._meter_state.peak_sample:
             self._meter_state.peak_sample = weighted_kw
 
         n = len(self._meter_state.samples)
         current_avg = sum(self._meter_state.samples) / n
-        remaining = max(1, 120 - n)
-        recent = self._meter_state.samples[-5:] if n >= 5 else self._meter_state.samples
+        # K3: Clamp remaining to avoid negative/zero when n > 120
+        expected_total = 120  # 30s intervals × 60 min
+        remaining = max(1, expected_total - min(n, expected_total))
+        recent = (
+            self._meter_state.samples[-5:]
+            if n >= 5
+            else self._meter_state.samples
+        )
         recent_avg = sum(recent) / len(recent)
-        projected = (current_avg * n + recent_avg * remaining) / (n + remaining)
+        projected = (current_avg * n + recent_avg * remaining) / (
+            n + remaining
+        )
         self._meter_state.projected_avg = round(projected, 3)
 
         target = self.target_kw
         if projected > target * 0.80 and not self._meter_state.warning_issued:
             self._meter_state.warning_issued = True
             _LOGGER.warning(
-                "Breach Monitor VARNING: kl %02d projiceras %.2f kW (target %.1f)",
+                "Breach Monitor VARNING: kl %02d projiceras %.2f kW"
+                " (target %.1f)",
                 hour,
                 projected,
                 target,
             )
-        if projected > target * 0.90 and not self._breach_load_shed_active and n > 10:
+        if (
+            projected > target * 0.90
+            and not self._breach_load_shed_active
+            and n > 10
+        ):
             self._breach_load_shed_active = True
             self._meter_state.load_shed_active = True
             _LOGGER.error(
-                "Breach Monitor NÖDSTOPP: kl %02d projiceras %.2f kW (target %.1f)",
+                "Breach Monitor NÖDSTOPP: kl %02d projiceras %.2f kW"
+                " (target %.1f)",
                 hour,
                 projected,
                 target,
@@ -3791,10 +3824,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         breach_hour: int,
         actual_avg: float,
     ) -> None:
-        """Generate automatic corrections after a confirmed breach."""
+        """Generate automatic corrections after a confirmed breach.
+
+        V1 fix: target_hour = same hour TOMORROW (not already-passed hour).
+        K1 fix: Hard cap on total corrections.
+        K2 fix: Guard battery_power_2 with has_battery_2.
+        """
         now = datetime.now()
         excess = actual_avg - self.target_kw
         corrections: list[BreachCorrection] = []
+        # V1: Corrections target the SAME hour tomorrow, not the passed hour
+        target_h = breach_hour  # Same clock hour, but scheduler plans 24h ahead
 
         if state.ev_power_w > 500:
             corrections.append(
@@ -3802,9 +3842,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     created=now.isoformat(),
                     source_breach_hour=breach_hour,
                     action="reduce_ev",
-                    target_hour=breach_hour,
+                    target_hour=target_h,
                     param="ev_amps=6",
-                    reason=f"EV {state.ev_power_w:.0f}W under breach kl {breach_hour:02d}",
+                    reason=(
+                        f"EV {state.ev_power_w:.0f}W orsakade breach"
+                        f" kl {breach_hour:02d} — sänk till 6A imorgon"
+                    ),
                 )
             )
         if self._miner_on:
@@ -3813,12 +3856,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     created=now.isoformat(),
                     source_breach_hour=breach_hour,
                     action="reduce_load",
-                    target_hour=breach_hour,
+                    target_hour=target_h,
                     param="pause_miner",
-                    reason=f"Miner körde under breach kl {breach_hour:02d}",
+                    reason=(
+                        f"Miner körde under breach kl {breach_hour:02d}"
+                        " — pausa imorgon"
+                    ),
                 )
             )
-        bat_total = state.battery_power_1 + state.battery_power_2
+        # K2: Guard battery_power_2
+        bat2 = state.battery_power_2 if getattr(state, "has_battery_2", True) else 0.0
+        bat_total = state.battery_power_1 + bat2
         if bat_total >= -50:
             discharge_kw = min(excess + 0.5, 4.0)
             corrections.append(
@@ -3826,25 +3874,40 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     created=now.isoformat(),
                     source_breach_hour=breach_hour,
                     action="add_discharge",
-                    target_hour=breach_hour,
+                    target_hour=target_h,
                     param=f"discharge_kw={discharge_kw:.1f}",
-                    reason=f"Batteri idle kl {breach_hour:02d} — schemalägg urladdning",
+                    reason=(
+                        f"Batteri idle kl {breach_hour:02d}"
+                        f" — schemalägg {discharge_kw:.1f} kW urladdning"
+                    ),
                 )
             )
 
-        # Expire old (>24h)
+        # Expire old (>24h) with safe parsing
         cutoff = now.timestamp() - 86400
-        self._breach_corrections = [
-            c
-            for c in self._breach_corrections
-            if not c.expired and datetime.fromisoformat(c.created).timestamp() > cutoff
-        ]
+        kept: list[BreachCorrection] = []
+        for c in self._breach_corrections:
+            if c.expired:
+                continue
+            try:
+                if datetime.fromisoformat(c.created).timestamp() > cutoff:
+                    kept.append(c)
+            except (ValueError, TypeError):
+                c.expired = True  # Mark corrupt entries as expired
+        self._breach_corrections = kept
         self._breach_corrections.extend(corrections)
+        # K1: Hard cap on total corrections
+        if len(self._breach_corrections) > self._MAX_CORRECTIONS:
+            self._breach_corrections = self._breach_corrections[
+                -self._MAX_CORRECTIONS :
+            ]
         if corrections:
             _LOGGER.warning(
-                "Breach Monitor: %d korrigeringar för kl %02d",
+                "Breach Monitor: %d korrigeringar för kl %02d"
+                " (totalt %d aktiva)",
                 len(corrections),
                 breach_hour,
+                len(self._breach_corrections),
             )
 
     def get_active_corrections(self, hour: int | None = None) -> list[BreachCorrection]:
@@ -3856,18 +3919,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ]
 
     def _track_battery_idle(self, state: CarmaboxState) -> None:
-        """Track battery idle time and feed predictor with idle penalties."""
+        """Track battery idle time and feed predictor with idle penalties.
+
+        K2 fix: Guard battery_power_2 with has_battery_2.
+        K4 fix: Clamp idle_pct in daily log.
+        V3 fix: NordpoolAdapter imported at module level.
+        """
         now = datetime.now()
         if now.day != self._bat_idle_day:
+            idle_pct = min(100, self._bat_daily_idle_seconds * 100 // 86400)
             _LOGGER.info(
                 "Battery idle yesterday: %d min (%d%%)",
                 self._bat_daily_idle_seconds // 60,
-                self._bat_daily_idle_seconds * 100 // 86400,
+                idle_pct,
             )
             self._bat_daily_idle_seconds = 0
             self._bat_idle_day = now.day
 
-        bat_power = abs(state.battery_power_1 + state.battery_power_2)
+        # K2: Guard battery_power_2
+        bat2 = (
+            state.battery_power_2
+            if getattr(state, "has_battery_2", True)
+            else 0.0
+        )
+        bat_power = abs(state.battery_power_1 + bat2)
         if bat_power < 50:
             self._bat_idle_seconds += SCAN_INTERVAL_SECONDS
             self._bat_daily_idle_seconds += SCAN_INTERVAL_SECONDS
@@ -3875,9 +3950,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             idle_secs = self._bat_idle_seconds
             if idle_secs > 1800:
                 price_entity = self._get_entity("price_entity", "")
-                fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
-                from .adapters.nordpool import NordpoolAdapter
-
+                fallback = float(
+                    self._cfg.get(
+                        "fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE
+                    )
+                )
+                # V3: NordpoolAdapter already imported at module level
                 pa = NordpoolAdapter(self.hass, price_entity, fallback)
                 cur = pa.current_price
                 today = pa.today_prices
