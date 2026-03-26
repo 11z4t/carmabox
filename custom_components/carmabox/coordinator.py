@@ -2456,6 +2456,36 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 except (ValueError, TypeError):
                     pass
 
+        # ── IT-2064+: Smart EV pause during appliances ────────
+        # If appliances running AND enough time to reach target → pause EV
+        if self._ev_enabled and self.ev_adapter and self.ev_adapter.power_w > 100:
+            _app_total = 0.0
+            for app_eid in ("sensor.98_shelly_plug_s_power",
+                            "sensor.102_shelly_plug_g3_power",
+                            "sensor.103_shelly_plug_g3_power"):
+                app_st = self.hass.states.get(app_eid)
+                if app_st and app_st.state not in ("unavailable", "unknown", ""):
+                    try:
+                        _app_total += float(app_st.state)
+                    except (ValueError, TypeError):
+                        pass
+            if _app_total > 500 and is_night:
+                # Check if we have enough time to reach target without this hour
+                hours_left = (6 - hour) % 24 if hour >= 22 else (6 - hour)
+                if hours_left < 0:
+                    hours_left += 24
+                ev_kw_rate = 4.14  # 6A 3-fas
+                ev_capacity = float(self._cfg.get("ev_capacity_kwh", 87.5))
+                ev_need_kwh = max(0, (ev_target - ev_soc) / 100 * ev_capacity)
+                ev_hours_needed = ev_need_kwh / ev_kw_rate if ev_kw_rate > 0 else 999
+                if hours_left > ev_hours_needed + 1.5:  # 1.5h margin for disk
+                    _LOGGER.info(
+                        "CARMA EV: appliances %.0fW — pausing (%.1fh needed, %.0fh left, margin OK)",
+                        _app_total, ev_hours_needed, hours_left,
+                    )
+                    await self._cmd_ev_stop()
+                    return
+
         # ── IT-2064: Ellevio emergency brake ──────────────────
         # If weighted grid > tak * 0.95 AND EV is charging → reduce immediately
         if self._ev_enabled and self.ev_adapter and self.ev_adapter.power_w > 100:
