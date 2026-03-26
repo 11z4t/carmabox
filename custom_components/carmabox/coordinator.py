@@ -1729,6 +1729,32 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 return
 
+        # ── Ellevio timmedel awareness ─────────────────────
+        # Read actual Ellevio weighted timmedel (accumulated, not momentary)
+        _ellevio_current = 0.0
+        _ellevio_prognos = 0.0
+        _ellevio_tak = float(self._cfg.get("ellevio_tak_kw", 4.0))
+        
+        ell_curr = self.hass.states.get("sensor.ellevio_viktad_timmedel_pagaende")
+        if ell_curr and ell_curr.state not in ("unavailable", "unknown", ""):
+            try:
+                _ellevio_current = float(ell_curr.state)
+            except (ValueError, TypeError):
+                pass
+        ell_prog = self.hass.states.get("sensor.ellevio_viktad_prognos_timmedel")
+        if ell_prog and ell_prog.state not in ("unavailable", "unknown", ""):
+            try:
+                _ellevio_prognos = float(ell_prog.state)
+            except (ValueError, TypeError):
+                pass
+
+        # If timmedel prognos approaching tak → aggressive action
+        if _ellevio_prognos > _ellevio_tak * 0.85:
+            _LOGGER.warning(
+                "CARMA Ellevio: prognos %.2f kW > %.0f%% of tak %.1f → aggressive discharge",
+                _ellevio_prognos, 85, _ellevio_tak,
+            )
+
         # ── Opt #5: Flat Line Controller — proactive grid smoothing ──
         # Track rolling 5-min average and start discharge BEFORE hitting target
         self._grid_samples.append(weighted_net / 1000)
@@ -2498,14 +2524,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self._cmd_ev_stop()
                     return
 
-        # ── IT-2064: Ellevio emergency brake ──────────────────
-        # If weighted grid > tak * 0.95 AND EV is charging → reduce immediately
+        # ── IT-2064: Ellevio emergency brake (uses prognos timmedel) ──
+        # Uses actual Ellevio prognos (accumulated) instead of momentary grid
         if self._ev_enabled and self.ev_adapter and self.ev_adapter.power_w > 100:
-            weight = self._ellevio_weight(hour)
-            grid_kw = max(0, state.grid_power_w) / 1000
-            weighted_kw = grid_kw * weight
             tak_kw = float(self._cfg.get("ellevio_tak_kw", 4.0))
-            if weighted_kw > tak_kw * 0.95:
+            # Prefer Ellevio prognos sensor (accumulated timmedel)
+            weighted_kw = _ellevio_prognos if _ellevio_prognos > 0 else (
+                max(0, state.grid_power_w) / 1000 * self._ellevio_weight(hour)
+            )
+            if weighted_kw > tak_kw * 0.85:
                 # Emergency: reduce to 6A or stop
                 if self._ev_current_amps > 6:
                     _LOGGER.warning(
