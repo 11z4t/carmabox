@@ -153,10 +153,38 @@ def _make_coordinator(
     coord._predictor_loaded = True
     coord._predictor_last_save = 0.0
 
+    # IT-2380: EV daily SoC tracking for predictor
+    coord._ev_soc_day_start = -1.0
+
     # PLAT-972: Self-healing
     coord._ems_consecutive_failures = 0
     coord._ems_pause_until = 0.0
     coord._ev_last_known_enabled = None
+
+    # IT-2378: Intelligent Scheduler
+    from custom_components.carmabox.optimizer.models import SchedulerPlan
+
+    coord.scheduler_plan = SchedulerPlan()
+    coord._scheduler_counter = 0
+    coord._scheduler_learnings = []
+    coord._scheduler_breach_count_month = 0
+    coord._scheduler_store = MagicMock()
+    coord._scheduler_store.async_save = AsyncMock()
+    coord._scheduler_loaded = True
+    coord._scheduler_last_save = 0.0
+    coord._ev_days_since_full = 0
+
+    # Breach Prevention Monitor
+    from custom_components.carmabox.optimizer.models import HourlyMeterState
+
+    coord._meter_state = HourlyMeterState()
+    coord._breach_corrections = []
+    coord._breach_load_shed_active = False
+
+    # Battery standby tracking
+    coord._bat_idle_seconds = 0
+    coord._bat_daily_idle_seconds = 0
+    coord._bat_idle_day = 26
 
     return coord
 

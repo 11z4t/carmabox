@@ -107,6 +107,16 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     # PLAT-965: Predictor
     coord.predictor = ConsumptionPredictor()
 
+    # Breach Prevention Monitor
+    from custom_components.carmabox.optimizer.models import HourlyMeterState
+
+    coord._meter_state = HourlyMeterState()
+    coord._breach_corrections = []
+    coord._breach_load_shed_active = False
+    coord._bat_idle_seconds = 0
+    coord._bat_daily_idle_seconds = 0
+    coord._bat_idle_day = 26
+
     return coord
 
 

@@ -85,6 +85,7 @@ from .const import (
     RESERVE_PV_STRONG_KWH,
     RESERVE_PV_WEAK_KWH,
     SCAN_INTERVAL_SECONDS,
+    SCHEDULER_INTERVAL_SECONDS,
     SPIKE_COOLDOWN_S,
     SPIKE_DEFAULT_PS_LIMIT_W,
     SPIKE_DETECTION_THRESHOLD_W,
@@ -102,7 +103,17 @@ from .optimizer.consumption import ConsumptionProfile, calculate_house_consumpti
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.hourly_ledger import EnergyLedger
-from .optimizer.models import CarmaboxState, Decision, HourActual, HourPlan, ShadowComparison
+from .optimizer.models import (
+    BreachCorrection,
+    BreachLearning,
+    CarmaboxState,
+    Decision,
+    HourActual,
+    HourlyMeterState,
+    HourPlan,
+    SchedulerPlan,
+    ShadowComparison,
+)
 from .optimizer.planner import generate_plan
 from .optimizer.predictor import ConsumptionPredictor, HourSample
 from .optimizer.report import (
@@ -122,6 +133,12 @@ from .optimizer.savings import (
     reset_if_new_month,
     state_from_dict,
     state_to_dict,
+)
+from .optimizer.scheduler import (
+    analyze_breach,
+    analyze_idle_time,
+    generate_scheduler_plan,
+    update_learnings,
 )
 from .repairs import (
     SAFETY_BLOCK_THRESHOLD,
@@ -148,6 +165,10 @@ RUNTIME_STORE_KEY = "carmabox_runtime"
 
 LEDGER_STORE_VERSION = 1
 LEDGER_STORE_KEY = "carmabox_ledger"
+
+# IT-2378: Intelligent Scheduler persistence
+SCHEDULER_STORE_VERSION = 1
+SCHEDULER_STORE_KEY = "carmabox_scheduler"
 
 # Self-healing constants (PLAT-972)
 SELF_HEALING_MAX_FAILURES = 3
@@ -271,6 +292,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._predictor_loaded = False
         self._predictor_last_save: float = 0.0
 
+        # IT-2380: EV daily SoC tracking for predictor
+        self._ev_soc_day_start: float = -1.0
+
         # CARMA-P0-FIXES Task 4: Runtime persistence
         self._runtime_store: Store[dict[str, Any]] = Store(
             hass, RUNTIME_STORE_VERSION, RUNTIME_STORE_KEY
@@ -357,6 +381,28 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # IT-1948: BMS cold lock detection — tracks when BMS blocks ALL charging
         # because min cell temperature is below lithium plating protection threshold
         self._cold_lock_active: bool = False
+
+        # ── IT-2378: Intelligent Scheduler ──────────────────────────
+        self.scheduler_plan: SchedulerPlan = SchedulerPlan()
+        self._scheduler_counter = (SCHEDULER_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
+        self._scheduler_learnings: list[BreachLearning] = []
+        self._scheduler_breach_count_month: int = 0
+        self._scheduler_store: Store[dict[str, Any]] = Store(
+            hass, SCHEDULER_STORE_VERSION, SCHEDULER_STORE_KEY
+        )
+        self._scheduler_loaded = False
+        self._scheduler_last_save: float = 0.0
+        self._ev_days_since_full: int = 0
+
+        # ── Breach Prevention Monitor ──────────────────────────────
+        self._meter_state = HourlyMeterState()
+        self._breach_corrections: list[BreachCorrection] = []
+        self._breach_load_shed_active: bool = False
+
+        # ── Battery standby tracking (IT-2378) ─────────────────────
+        self._bat_idle_seconds: int = 0
+        self._bat_daily_idle_seconds: int = 0
+        self._bat_idle_day: int = init_now.day
 
         # ── IT-2067: Peak Tracking (rolling top-3 monthly peaks) ───
         self._peak_ranks: list[float] = [0.0] * PEAK_RANK_COUNT
@@ -754,6 +800,72 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Failed to save predictor", exc_info=True)
 
+    async def _async_restore_scheduler(self) -> None:
+        """Restore scheduler learnings from persistent storage (IT-2378)."""
+        try:
+            data = await self._scheduler_store.async_load()
+            if data and isinstance(data, dict):
+                self._scheduler_learnings = [
+                    BreachLearning(**lr) for lr in data.get("learnings", [])
+                ]
+                self._scheduler_breach_count_month = data.get("breach_count_month", 0)
+                self._ev_days_since_full = data.get("ev_days_since_full", 0)
+                # Restore breach corrections
+                import contextlib
+
+                for cd in data.get("corrections", []):
+                    with contextlib.suppress(TypeError, KeyError):
+                        self._breach_corrections.append(BreachCorrection(**cd))
+                _LOGGER.info(
+                    "Restored scheduler: %d learnings, %d breaches this month, %d corrections",
+                    len(self._scheduler_learnings),
+                    self._scheduler_breach_count_month,
+                    len(self._breach_corrections),
+                )
+        except Exception:
+            _LOGGER.warning("Failed to restore scheduler, starting fresh", exc_info=True)
+
+    async def _async_save_scheduler(self) -> None:
+        """Persist scheduler learnings (rate-limited to every 5 minutes, IT-2378)."""
+        import time
+
+        now = time.monotonic()
+        if now - self._scheduler_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._scheduler_last_save = now
+        try:
+            data = {
+                "learnings": [
+                    {
+                        "pattern": lr.pattern,
+                        "hour": lr.hour,
+                        "description": lr.description,
+                        "action": lr.action,
+                        "confidence": lr.confidence,
+                        "occurrences": lr.occurrences,
+                    }
+                    for lr in self._scheduler_learnings
+                ],
+                "breach_count_month": self._scheduler_breach_count_month,
+                "ev_days_since_full": self._ev_days_since_full,
+                "corrections": [
+                    {
+                        "created": c.created,
+                        "source_breach_hour": c.source_breach_hour,
+                        "action": c.action,
+                        "target_hour": c.target_hour,
+                        "param": c.param,
+                        "reason": c.reason,
+                        "applied": c.applied,
+                    }
+                    for c in self._breach_corrections
+                    if not c.expired
+                ],
+            }
+            await self._scheduler_store.async_save(data)
+        except Exception:
+            _LOGGER.debug("Failed to save scheduler state", exc_info=True)
+
     async def _async_fetch_benchmarking(self) -> None:
         """PLAT-962: Fetch benchmarking data from hub (rate-limited to every hour)."""
         import time
@@ -797,11 +909,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if not self._ledger_loaded:
                 self._ledger_loaded = True
                 await self._async_restore_ledger()
+            if not self._scheduler_loaded:
+                self._scheduler_loaded = True
+                await self._async_restore_scheduler()
 
             old_month = self.savings.month
             self.savings = reset_if_new_month(self.savings, now)
             if self.savings.month != old_month:
                 self._ellevio_monthly_hourly_peaks = []
+                self._scheduler_breach_count_month = 0  # IT-2378: reset monthly
             self.report_collector = reset_report_month(self.report_collector, now)
             self._reset_daily_counters_if_new_day(now)
             if not self._avg_price_initialized:
@@ -836,17 +952,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._generate_plan(state)
                 self._check_repair_issues()
 
+            # IT-2378: Intelligent Scheduler (every 15 min)
+            self._scheduler_counter += 1
+            if self._scheduler_counter >= SCHEDULER_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS:
+                self._scheduler_counter = 0
+                self._generate_scheduler_plan(state)
+
             # Plan self-correction — adjust if actual deviates >50% from plan for 3+ cycles
             self._check_plan_correction(state)
 
+            # Breach Prevention Monitor — runs every cycle (30s)
+            self._update_hourly_meter(state)
+
             await self._execute(state)
             await self._watchdog(state)
+            self.check_scheduler_breach(state)  # IT-2378
             self._track_shadow(state)
             self._track_savings(state)
             self._track_appliances()
+            self._track_battery_idle(state)
             await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
+            await self._async_save_scheduler()  # IT-2378
             await self._async_fetch_benchmarking()
             return state
 
@@ -1104,6 +1232,462 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         except Exception:
             _LOGGER.exception("Plan generation failed — keeping old plan")
+
+    def _generate_scheduler_plan(self, state: CarmaboxState) -> None:
+        """Generate intelligent scheduler plan (IT-2378). Runs every 15 min."""
+        try:
+            now = datetime.now()
+            start_hour = now.hour
+            opts = self._cfg
+
+            # Collect prices
+            price_entity = self._get_entity("price_entity", "")
+            fallback_price = float(opts.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+            price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
+            today_prices = price_adapter.today_prices
+            tomorrow_prices = price_adapter.tomorrow_prices
+            prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
+
+            # Collect PV forecast
+            solcast = SolcastAdapter(self.hass)
+            pv_today = solcast.today_hourly_kw
+            pv_tomorrow = solcast.tomorrow_hourly_kw
+            pv_forecast = pv_today[start_hour:] + pv_tomorrow
+            pv_daily = solcast.forecast_daily_3d
+
+            # Consumption profile
+            base = self.consumption_profile.get_profile_for_date(now)
+            if self.predictor.is_trained:
+                consumption = self.predictor.predict_24h(
+                    start_hour=start_hour,
+                    weekday=now.weekday(),
+                    month=now.month,
+                    fallback_profile=base,
+                )
+                consumption = consumption + base
+
+                # IT-2380: Apply ML corrections to consumption forecast
+                outdoor_entity = opts.get(
+                    "outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature"
+                )
+                outdoor_temp = self._read_float_or_none(outdoor_entity)
+                for i in range(len(consumption)):
+                    abs_h = (start_hour + i) % 24
+
+                    # Apply plan feedback correction factor
+                    correction = self.predictor.get_correction_factor(abs_h)
+                    consumption[i] *= correction
+
+                    # Apply temperature adjustment if temp data available
+                    if outdoor_temp is not None:
+                        temp_adj = self.predictor.get_temp_adjustment(abs_h, outdoor_temp)
+                        consumption[i] *= temp_adj
+
+                    # Add appliance risk buffer (0.5 kW per high-risk hour)
+                    appl_risk = self.predictor.predict_appliance_risk(abs_h, now.weekday())
+                    if appl_risk > 0.3:
+                        consumption[i] += 0.5 * appl_risk
+
+                    consumption[i] = round(consumption[i], 2)
+            else:
+                consumption = base[start_hour:] + base
+
+            # Battery config
+            bat1_kwh = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
+            bat2_kwh = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
+            total_bat_kwh = bat1_kwh + bat2_kwh
+            battery_efficiency = float(opts.get("battery_efficiency", DEFAULT_BATTERY_EFFICIENCY))
+            night_weight = float(opts.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+
+            # EV config
+            ev_enabled = opts.get("ev_enabled", False)
+            ev_capacity = float(opts.get("ev_capacity_kwh", 98))
+            ev_morning_target = float(opts.get("ev_night_target_soc", 75))
+            daily_consumption = float(
+                opts.get("daily_consumption_kwh", DEFAULT_DAILY_CONSUMPTION_KWH)
+            )
+
+            n = min(len(prices), len(pv_forecast), len(consumption), 24)
+
+            # IT-2380: Use ML-predicted EV usage if available
+            if self.predictor.is_trained and ev_enabled:
+                predicted_ev_kwh = self.predictor.predict_ev_usage(now.weekday())
+                if predicted_ev_kwh > 0:
+                    # Add predicted EV usage to daily consumption estimate
+                    daily_consumption = daily_consumption + predicted_ev_kwh
+
+            # IT-2380: Enrich learnings with breach risk hours
+            breach_risk_hours = (
+                self.predictor.get_breach_risk_hours(now.weekday())
+                if self.predictor.is_trained
+                else []
+            )
+            _disk_hours = (
+                self.predictor.get_disk_typical_hours() if self.predictor.is_trained else []
+            )
+            # Add synthetic learnings for breach risk hours not already covered
+            enriched_learnings = list(self._scheduler_learnings)
+            existing_patterns = {lr.pattern for lr in enriched_learnings}
+            for bh in breach_risk_hours[:3]:
+                pattern = f"ml_breach_risk_{bh}"
+                if pattern not in existing_patterns:
+                    enriched_learnings.append(
+                        BreachLearning(
+                            pattern=pattern,
+                            hour=bh,
+                            description=f"ML: historisk breach-risk kl {bh}",
+                            action="reduce_load",
+                            confidence=0.4,
+                            occurrences=1,
+                        )
+                    )
+
+            self.scheduler_plan = generate_scheduler_plan(
+                start_hour=start_hour,
+                num_hours=n,
+                hourly_prices=prices[:n],
+                hourly_pv=pv_forecast[:n],
+                hourly_loads=consumption[:n],
+                pv_forecast_daily=pv_daily,
+                battery_soc_pct=state.total_battery_soc,
+                battery_cap_kwh=total_bat_kwh,
+                battery_min_soc=self.min_soc,
+                battery_efficiency=battery_efficiency,
+                max_discharge_kw=float(opts.get("max_discharge_kw", DEFAULT_MAX_DISCHARGE_KW)),
+                max_grid_charge_kw=float(
+                    opts.get("max_grid_charge_kw", DEFAULT_MAX_GRID_CHARGE_KW)
+                ),
+                grid_charge_price_threshold=float(
+                    opts.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
+                ),
+                grid_charge_max_soc=float(
+                    opts.get("grid_charge_max_soc", DEFAULT_GRID_CHARGE_MAX_SOC)
+                ),
+                ev_enabled=ev_enabled,
+                ev_soc_pct=state.ev_soc,
+                ev_capacity_kwh=ev_capacity if ev_enabled else 0.0,
+                ev_morning_target_soc=ev_morning_target,
+                ev_days_since_full=self._ev_days_since_full,
+                target_weighted_kw=self.target_kw,
+                night_weight=night_weight,
+                learnings=enriched_learnings,
+                breach_count_month=self._scheduler_breach_count_month,
+                pv_tomorrow_kwh=solcast.tomorrow_kwh,
+                daily_consumption_kwh=daily_consumption,
+                corrections=self._breach_corrections,
+            )
+
+            # Battery idle analysis
+            self.scheduler_plan.idle_analysis = analyze_idle_time(
+                slots=self.scheduler_plan.slots,
+                idle_minutes_today=self._bat_daily_idle_seconds // 60,
+                battery_soc_pct=state.total_battery_soc,
+                battery_min_soc=self.min_soc,
+                battery_cap_kwh=total_bat_kwh,
+                prices=prices[:n],
+                pv_forecast=pv_forecast[:n],
+            )
+            idle = self.scheduler_plan.idle_analysis
+
+            _LOGGER.info(
+                "Scheduler plan: %d slots, max_weighted=%.1f kW, "
+                "EV=%.1f kWh, charge=%.1f/discharge=%.1f kWh, "
+                "constraints_ok=%d/%d, bat_util=%d%%",
+                len(self.scheduler_plan.slots),
+                self.scheduler_plan.max_weighted_kw,
+                self.scheduler_plan.total_ev_kwh,
+                self.scheduler_plan.total_charge_kwh,
+                self.scheduler_plan.total_discharge_kwh,
+                sum(1 for s in self.scheduler_plan.slots if s.constraint_ok),
+                len(self.scheduler_plan.slots),
+                idle.score if idle else 0,
+            )
+            if idle and idle.opportunities:
+                _LOGGER.info("Idle reduction: %s", " | ".join(idle.opportunities))
+            self._runtime_dirty = True
+
+        except Exception:
+            _LOGGER.exception("Scheduler plan generation failed — keeping old plan")
+
+    # ── Breach Prevention Monitor ─────────────────────────────────
+
+    def _update_hourly_meter(self, state: CarmaboxState) -> None:
+        """Track rolling hourly average and project where hour will end.
+
+        Called every 30s. Uses weighted kW samples to build a running
+        average for the current hour. If projected average approaches
+        target, triggers proactive load shedding.
+        """
+        now = datetime.now()
+        hour = now.hour
+        night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        weight = ellevio_weight(hour, night_weight=night_weight)
+        grid_kw = max(0, state.grid_power_w) / 1000
+        weighted_kw = grid_kw * weight
+
+        # Hour rollover — finalize previous hour
+        if hour != self._meter_state.hour:
+            if self._meter_state.hour >= 0 and self._meter_state.samples:
+                final_avg = sum(self._meter_state.samples) / len(self._meter_state.samples)
+                target = self.target_kw
+                if final_avg > target:
+                    # Breach confirmed at hour end — generate corrections
+                    _LOGGER.warning(
+                        "Breach Monitor: kl %02d slutade på %.2f kW (target %.1f kW) — "
+                        "genererar korrigeringar",
+                        self._meter_state.hour,
+                        final_avg,
+                        target,
+                    )
+                    self._generate_breach_corrections(state, self._meter_state.hour, final_avg)
+
+            # Reset for new hour
+            self._meter_state = HourlyMeterState(hour=hour)
+            self._breach_load_shed_active = False
+
+        # Add sample
+        self._meter_state.samples.append(weighted_kw)
+        if weighted_kw > self._meter_state.peak_sample:
+            self._meter_state.peak_sample = weighted_kw
+
+        # Project: current avg + remaining minutes at current rate
+        n = len(self._meter_state.samples)
+        current_avg = sum(self._meter_state.samples) / n
+        remaining_samples = max(1, 120 - n)  # 120 × 30s = 1 hour
+        # Projection: blend current avg with latest 5 samples
+        recent = self._meter_state.samples[-5:] if n >= 5 else self._meter_state.samples
+        recent_avg = sum(recent) / len(recent)
+        projected = (current_avg * n + recent_avg * remaining_samples) / (n + remaining_samples)
+        self._meter_state.projected_avg = round(projected, 3)
+
+        target = self.target_kw
+
+        # WARNING at 80% — log + prepare
+        if projected > target * 0.80 and not self._meter_state.warning_issued:
+            self._meter_state.warning_issued = True
+            _LOGGER.warning(
+                "Breach Monitor VARNING: kl %02d timmedel projiceras till %.2f kW "
+                "(target %.1f kW, %d%% utnyttjat) — %d samples, %d min kvar",
+                hour,
+                projected,
+                target,
+                int(projected / target * 100),
+                n,
+                (120 - n) // 2,
+            )
+
+        # EMERGENCY at 90% — activate load shedding
+        if projected > target * 0.90 and not self._breach_load_shed_active and n > 10:
+            self._breach_load_shed_active = True
+            self._meter_state.load_shed_active = True
+            _LOGGER.error(
+                "Breach Monitor NÖDSTOPP: kl %02d projiceras %.2f kW (target %.1f kW) — "
+                "aktiverar load shedding. Aktiva laster: grid=%.0fW, EV=%.0fW, "
+                "bat=%+.0fW/%+.0fW, PV=%.0fW",
+                hour,
+                projected,
+                target,
+                state.grid_power_w,
+                state.ev_power_w,
+                state.battery_power_1,
+                state.battery_power_2,
+                state.pv_power_w,
+            )
+            # Feed predictor with breach risk
+            self.predictor.add_breach_event(
+                hour=hour,
+                weekday=now.weekday(),
+                excess_kw=round(projected - target, 2),
+            )
+
+    @property
+    def breach_monitor_active(self) -> bool:
+        """True if load shedding is currently active due to projected breach."""
+        return self._breach_load_shed_active
+
+    @property
+    def hourly_meter_projected(self) -> float:
+        """Current projected hourly weighted average (kW)."""
+        return self._meter_state.projected_avg
+
+    @property
+    def hourly_meter_pct(self) -> float:
+        """Current projected hour as % of target."""
+        if self.target_kw <= 0:
+            return 0.0
+        return round(self._meter_state.projected_avg / self.target_kw * 100, 1)
+
+    def _generate_breach_corrections(
+        self, state: CarmaboxState, breach_hour: int, actual_avg: float
+    ) -> None:
+        """Generate automatic corrections after a confirmed breach.
+
+        Analyzes what caused the breach and creates BreachCorrection entries
+        that the scheduler applies in the next plan to prevent recurrence.
+        """
+        now = datetime.now()
+        excess = actual_avg - self.target_kw
+        corrections: list[BreachCorrection] = []
+
+        # 1. EV was charging during breach hour → reduce/shift EV
+        if state.ev_power_w > 500:
+            corrections.append(
+                BreachCorrection(
+                    created=now.isoformat(),
+                    source_breach_hour=breach_hour,
+                    action="reduce_ev",
+                    target_hour=breach_hour,
+                    param="ev_amps=6",
+                    reason=f"EV laddade {state.ev_power_w:.0f}W under breach kl {breach_hour:02d} "
+                    f"— sänk till 6A",
+                )
+            )
+            # Also suggest shifting EV to cheaper/emptier hour
+            alt_hour = (breach_hour + 2) % 24
+            corrections.append(
+                BreachCorrection(
+                    created=now.isoformat(),
+                    source_breach_hour=breach_hour,
+                    action="shift_ev",
+                    target_hour=alt_hour,
+                    param=f"shift_from={breach_hour},shift_to={alt_hour}",
+                    reason=f"Flytta EV-laddning från kl {breach_hour:02d} till {alt_hour:02d} "
+                    f"för att undvika Ellevio-topp",
+                )
+            )
+
+        # 2. Miner was on → stop miner
+        if self._miner_on:
+            corrections.append(
+                BreachCorrection(
+                    created=now.isoformat(),
+                    source_breach_hour=breach_hour,
+                    action="reduce_load",
+                    target_hour=breach_hour,
+                    param="pause_miner",
+                    reason=f"Miner körde under breach kl {breach_hour:02d} "
+                    f"— pausa miner vid hög last",
+                )
+            )
+
+        # 3. Battery was idle or charging → should have been discharging
+        bat_total = state.battery_power_1 + state.battery_power_2
+        if bat_total >= -50:  # Not discharging (or charging)
+            discharge_kw = min(excess + 0.5, 4.0)  # Extra margin
+            corrections.append(
+                BreachCorrection(
+                    created=now.isoformat(),
+                    source_breach_hour=breach_hour,
+                    action="add_discharge",
+                    target_hour=breach_hour,
+                    param=f"discharge_kw={discharge_kw:.1f}",
+                    reason=f"Batteri stöttade inte hushållet kl {breach_hour:02d} "
+                    f"(var {'laddar' if bat_total > 50 else 'idle'}) — "
+                    f"schemalägg {discharge_kw:.1f} kW urladdning",
+                )
+            )
+
+        # 4. Appliance overlap detected
+        high_appliances = [
+            (cat, power) for cat, power in self.appliance_power.items() if power > 500
+        ]
+        if high_appliances and (state.ev_power_w > 500 or bat_total > 100):
+            for cat, power in high_appliances:
+                corrections.append(
+                    BreachCorrection(
+                        created=now.isoformat(),
+                        source_breach_hour=breach_hour,
+                        action="shift_appliance",
+                        target_hour=breach_hour,
+                        param=f"appliance={cat},power={power:.0f}W",
+                        reason=f"{cat} ({power:.0f}W) körde samtidigt som "
+                        f"{'EV' if state.ev_power_w > 500 else 'batteriladdning'} "
+                        f"kl {breach_hour:02d} — undvik överlapp",
+                    )
+                )
+
+        # Expire old corrections (>24h)
+        cutoff = now.timestamp() - 86400
+        self._breach_corrections = [
+            c
+            for c in self._breach_corrections
+            if not c.expired and datetime.fromisoformat(c.created).timestamp() > cutoff
+        ]
+
+        # Add new corrections
+        self._breach_corrections.extend(corrections)
+
+        if corrections:
+            _LOGGER.warning(
+                "Breach Monitor: %d korrigeringar genererade för kl %02d: %s",
+                len(corrections),
+                breach_hour,
+                " | ".join(c.reason for c in corrections),
+            )
+
+    def get_active_corrections(self, hour: int | None = None) -> list[BreachCorrection]:
+        """Get active (non-expired, non-applied) corrections, optionally filtered by hour."""
+        return [
+            c
+            for c in self._breach_corrections
+            if not c.expired and not c.applied and (hour is None or c.target_hour == hour)
+        ]
+
+    def check_scheduler_breach(self, state: CarmaboxState) -> None:
+        """Check for Ellevio target breach and update learnings (IT-2378).
+
+        Called from _execute after each cycle. Compares actual weighted
+        against target and records breaches with root cause analysis.
+        """
+        w = ellevio_weight(datetime.now().hour)
+        actual_weighted = max(0, state.grid_power_w) / 1000 * w
+
+        if actual_weighted <= self.target_kw:
+            return
+
+        # Breach detected
+        breach = analyze_breach(
+            hour=datetime.now().hour,
+            actual_weighted_kw=actual_weighted,
+            target_kw=self.target_kw,
+            house_load_kw=max(
+                0, state.grid_power_w + state.pv_power_w / 1000 - state.ev_power_w / 1000
+            )
+            / 1000
+            if state.grid_power_w > 0
+            else 0,
+            ev_kw=max(0, state.ev_power_w) / 1000,
+            ev_amps=int(state.ev_current_a),
+            battery_kw=(state.battery_power_1 + max(0, state.battery_power_2)) / 1000,
+            pv_kw=state.pv_power_w / 1000,
+            miner_on=self._miner_on,
+            appliance_loads={
+                cat: power / 1000 for cat, power in self.appliance_power.items() if power > 300
+            },
+        )
+
+        self.scheduler_plan.breaches.append(breach)
+        self._scheduler_breach_count_month += 1
+        self.scheduler_plan.breach_count_month = self._scheduler_breach_count_month
+
+        # Update learning profile
+        self._scheduler_learnings = update_learnings(self._scheduler_learnings, breach)
+        self.scheduler_plan.learnings = self._scheduler_learnings
+
+        # IT-2380: Feed predictor with breach event for risk learning
+        self.predictor.add_breach_event(
+            hour=breach.hour,
+            weekday=datetime.now().weekday(),
+            excess_kw=round(actual_weighted - self.target_kw, 2),
+        )
+
+        _LOGGER.warning(
+            "Ellevio breach kl %d: %.1f kW (target %.1f kW) — %s",
+            breach.hour,
+            breach.actual_weighted_kw,
+            breach.target_kw,
+            breach.root_cause,
+        )
 
     async def _execute(self, state: CarmaboxState) -> None:
         """Execute current action based on state.
@@ -1560,6 +2144,57 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     reasoning_chain=chain,
                 )
                 return
+
+        # ── RULE 1.9: Breach Monitor emergency load shedding ──
+        # When projected hourly avg > 90% of target, aggressively reduce load.
+        # This overrides normal threshold checks to prevent breach completion.
+        if self._breach_load_shed_active and weight > 0:
+            # Emergency: stop miner, reduce EV, force discharge
+            if self._miner_on:
+                _LOGGER.warning("Breach Monitor: stoppar miner (nödläge)")
+                await self._cmd_miner(False)
+                self._miner_on = False
+            # Reduce EV to minimum if charging
+            if state.ev_power_w > 500:
+                corrections = self.get_active_corrections(hour)
+                ev_corrections = [c for c in corrections if c.action == "reduce_ev"]
+                if ev_corrections:
+                    _LOGGER.warning("Breach Monitor: sänker EV till 6A (nödläge)")
+                    # EV reduction handled by execute cycle naturally
+            # Force discharge even if grid < target (to pull down hourly average)
+            remaining = self._meter_state.projected_avg - self.target_kw * 0.85
+            if remaining > 0 and state.total_battery_soc > effective_min_soc:
+                emergency_w = int(remaining * 1000 / weight)
+                emergency_w = max(200, min(emergency_w, 5000))
+                result = self.safety.check_discharge(
+                    state.battery_soc_1,
+                    state.battery_soc_2,
+                    effective_min_soc,
+                    state.grid_power_w,
+                    temp_c,
+                    available_kwh=self._available_kwh(),
+                    reserve_kwh=self._reserve_kwh,
+                )
+                if result.ok:
+                    step_breach = (
+                        f"Breach Monitor nödurladdning {emergency_w}W — "
+                        f"timmedel projicerat {self._meter_state.projected_avg:.2f} kW, "
+                        f"target {self.target_kw:.1f} kW"
+                    )
+                    reasoning.append(step_breach)
+                    chain.append({"step": "resultat", "label": "Resultat", "detail": step_breach})
+                    await self._cmd_discharge(state, emergency_w)
+                    self._record_decision(
+                        state,
+                        "discharge",
+                        f"BREACH NÖDURLADDNING {emergency_w}W — "
+                        f"projicerat {self._meter_state.projected_avg:.2f} kW, "
+                        f"SoC {state.total_battery_soc:.0f}%",
+                        discharge_w=emergency_w,
+                        reasoning=reasoning,
+                        reasoning_chain=chain,
+                    )
+                    return
 
         # ── RULE 2: Load > target → discharge (even at 100%) ──
         # Hysteresis: if already discharging, keep going until grid drops
@@ -2933,6 +3568,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         today = now.strftime("%Y-%m-%d")
         if today != self._current_date:
             _LOGGER.info("CARMA: new day %s — resetting daily counters", today)
+
+            # IT-2380: Record daily EV usage before resetting
+            ev_soc_now = self._read_float(self._get_entity("ev_soc_entity", ""), -1)
+            if self._ev_soc_day_start >= 0 and ev_soc_now >= 0:
+                soc_delta = self._ev_soc_day_start - ev_soc_now
+                ev_cap = float(self._cfg.get("ev_capacity_kwh", 98))
+                yesterday_weekday = (now.weekday() - 1) % 7
+                self.predictor.add_ev_usage(
+                    weekday=yesterday_weekday,
+                    soc_delta_pct=soc_delta,
+                    capacity_kwh=ev_cap,
+                )
+            self._ev_soc_day_start = ev_soc_now
+
             self._daily_discharge_kwh = 0.0
             self._daily_safety_blocks = 0
             self._daily_plans = 0
@@ -3074,6 +3723,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
         self.appliance_power = category_power
+
+        # IT-2380: Feed predictor with appliance events (>500W)
+        now = datetime.now()
+        for cat, power_w in category_power.items():
+            if power_w > 500 and cat in ("disk", "tvatt", "tork"):
+                self.predictor.add_appliance_event(
+                    category=cat,
+                    power_kw=round(power_w / 1000, 2),
+                    hour=now.hour,
+                    weekday=now.weekday(),
+                )
 
     # ── IT-2067: Peak Tracking System ─────────────────────────────
 
@@ -3510,6 +4170,57 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if len(self.shadow_log) > 48:
             self.shadow_log = self.shadow_log[-48:]
 
+    def _track_battery_idle(self, state: CarmaboxState) -> None:
+        """Track battery idle time and feed predictor with idle penalties (IT-2378).
+
+        Runs every 30s. When batteries sit idle (< 50W combined) during hours
+        with price spread potential, records idle penalty for ML to learn from.
+        """
+        now = datetime.now()
+
+        # Reset daily counter at midnight
+        if now.day != self._bat_idle_day:
+            _LOGGER.info(
+                "Battery idle yesterday: %d min (%d%% of day)",
+                self._bat_daily_idle_seconds // 60,
+                self._bat_daily_idle_seconds * 100 // 86400,
+            )
+            self._bat_daily_idle_seconds = 0
+            self._bat_idle_day = now.day
+
+        bat_power = abs(state.battery_power_1 + state.battery_power_2)
+        if bat_power < 50:  # < 50W = effectively idle
+            self._bat_idle_seconds += SCAN_INTERVAL_SECONDS
+            self._bat_daily_idle_seconds += SCAN_INTERVAL_SECONDS
+        else:
+            idle_secs = self._bat_idle_seconds
+            if idle_secs > 1800:  # > 30 min idle streak
+                # Check if there was price opportunity during idle
+                price_entity = self._get_entity("price_entity", "")
+                fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
+                price_adapter = NordpoolAdapter(self.hass, price_entity, fallback)
+                current_price = price_adapter.current_price
+                today = price_adapter.today_prices
+                avg_price = sum(today) / len(today) if today else 0
+                if current_price and avg_price:
+                    spread = abs(current_price - avg_price)
+                    if spread > 15:  # Significant spread → idle was costly
+                        _LOGGER.info(
+                            "Battery idle penalty: %d min, spread %.0f öre"
+                            " (current %.0f, avg %.0f)",
+                            idle_secs // 60,
+                            spread,
+                            current_price,
+                            avg_price,
+                        )
+                        self.predictor.add_idle_penalty(
+                            hour=now.hour,
+                            weekday=now.weekday(),
+                            idle_minutes=idle_secs // 60,
+                            price_spread_ore=spread,
+                        )
+            self._bat_idle_seconds = 0
+
     def _track_savings(self, state: CarmaboxState) -> None:
         """Track savings data from current state."""
         hour = datetime.now().hour
@@ -3709,6 +4420,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if len(self.hourly_actuals) > 48:
                 self.hourly_actuals = self.hourly_actuals[-48:]
 
+            # IT-2380: Feed predictor with plan vs actual feedback
+            if planned:
+                self.predictor.add_plan_feedback(
+                    hour=now_obj.hour,
+                    planned_kw=planned.grid_kw,
+                    actual_kw=round(grid_kw, 2),
+                )
+
         # Update consumption learning (once per hour to match 7-day learning period)
         now = datetime.now()
         if now.hour != self._consumption_last_hour:
@@ -3736,6 +4455,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     temperature_c=temp_c,
                 )
             )
+
+            # IT-2380: Feed predictor with temperature → consumption correlation
+            outdoor_entity = self._cfg.get(
+                "outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature"
+            )
+            outdoor_temp = self._read_float_or_none(outdoor_entity)
+            if outdoor_temp is not None:
+                self.predictor.add_temperature_sample(
+                    hour=now.hour,
+                    outdoor_temp_c=outdoor_temp,
+                    consumption_kw=house_kw,
+                )
 
     async def _self_heal_goodwe_entries(self) -> None:
         """PLAT-972: Self-healing — check GoodWe config entries and reload if needed."""

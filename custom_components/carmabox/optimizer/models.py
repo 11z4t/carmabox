@@ -225,6 +225,147 @@ class HouseholdProfile:
 
 
 @dataclass
+class SchedulerHourSlot:
+    """One hour in the intelligent scheduler plan (IT-2378)."""
+
+    hour: int  # 0-23
+    action: str  # 'c'=charge_pv, 'g'=grid_charge, 'd'=discharge, 'i'=idle
+    battery_kw: float  # + charge, - discharge
+    ev_kw: float  # EV charge power (kW, 0 = off)
+    ev_amps: int  # EV amps (0 = off)
+    miner_on: bool  # Miner state
+    grid_kw: float  # Expected net grid import
+    weighted_kw: float  # Ellevio-weighted grid
+    pv_kw: float
+    consumption_kw: float
+    price: float  # öre/kWh
+    battery_soc: int  # Expected SoC at end of hour
+    ev_soc: int  # Expected EV SoC at end of hour
+    constraint_ok: bool  # True if weighted < target * 0.85
+    reasoning: str  # Human-readable Swedish explanation
+
+
+@dataclass
+class BreachRecord:
+    """Record of an Ellevio target breach for root cause analysis (IT-2378)."""
+
+    timestamp: str  # ISO format
+    hour: int
+    actual_weighted_kw: float
+    target_kw: float
+    loads_active: list[str]  # e.g. ['ev:8A', 'dishwasher:2kW', 'house:1.5kW']
+    root_cause: str  # Swedish: why it happened
+    remediation: str  # Swedish: what to do next time
+    severity: str  # 'minor' (<10% over), 'major' (10-25%), 'critical' (>25%)
+
+
+@dataclass
+class BreachLearning:
+    """Learned pattern from breaches to avoid repetition (IT-2378)."""
+
+    pattern: str  # e.g. 'ev+dishwasher_23'
+    hour: int
+    description: str  # Swedish
+    action: str  # e.g. 'pause_ev', 'reduce_ev_amps', 'shift_ev'
+    confidence: float  # 0.0-1.0 (increases with repeated breaches)
+    occurrences: int
+
+
+@dataclass
+class BreachCorrection:
+    """Automatic correction generated after breach (applied to prevent recurrence)."""
+
+    created: str  # ISO timestamp
+    source_breach_hour: int  # Hour when breach occurred
+    action: str  # 'reduce_ev', 'shift_ev', 'add_discharge', 'reduce_load', 'shift_appliance'
+    target_hour: int  # Hour to apply correction
+    param: str  # e.g. 'ev_amps=6', 'discharge_kw=2', 'pause_miner'
+    reason: str  # Swedish — why this correction
+    applied: bool = False  # Set to True when scheduler uses it
+    expired: bool = False  # Set to True after 24h
+
+
+@dataclass
+class HourlyMeterState:
+    """Rolling state for hourly Ellevio meter tracking."""
+
+    hour: int = -1
+    samples: list[float] = field(default_factory=list)  # Weighted kW samples (30s each)
+    projected_avg: float = 0.0  # Where this hour will end up
+    warning_issued: bool = False  # 80% warning sent
+    load_shed_active: bool = False  # Emergency load shedding active
+    peak_sample: float = 0.0  # Highest sample this hour
+
+
+@dataclass
+class SchedulerPlan:
+    """Complete 24h scheduler plan (IT-2378)."""
+
+    slots: list[SchedulerHourSlot] = field(default_factory=list)
+    start_hour: int = 0
+    target_weighted_kw: float = 2.0
+    max_weighted_kw: float = 0.0
+    total_ev_kwh: float = 0.0
+    ev_soc_at_06: int = 0
+    total_charge_kwh: float = 0.0
+    total_discharge_kwh: float = 0.0
+    estimated_cost_kr: float = 0.0
+    ev_next_full_charge_date: str = ""  # ISO date
+    breaches: list[BreachRecord] = field(default_factory=list)
+    breach_count_month: int = 0
+    learnings: list[BreachLearning] = field(default_factory=list)
+    evening_strategy: MultiPeriodStrategy | None = None  # IT-2381
+    idle_analysis: IdleAnalysis | None = None  # Battery idle reduction
+
+
+@dataclass
+class IdleAnalysis:
+    """Analysis of battery idle time with reduction recommendations."""
+
+    idle_hours_today: int = 0  # Hours batteries were idle today
+    idle_pct: float = 0.0  # Idle % of day so far
+    missed_charge_kwh: float = 0.0  # PV that went to export instead of battery
+    missed_discharge_kwh: float = 0.0  # Expensive hours where battery could've discharged
+    missed_savings_kr: float = 0.0  # SEK lost to idle time
+    opportunities: list[str] = field(default_factory=list)  # Reduction tips
+    score: int = 0  # 0-100 utilization score (100=fully utilized)
+
+
+@dataclass
+class MultiPeriodStrategy:
+    """Result of multi-period evening/night optimization (IT-2381).
+
+    Compares: (A) discharge battery evening + grid recharge night
+    vs (B) save battery evening + use tomorrow.
+    """
+
+    # Strategy choice
+    chosen: str = "A"  # 'A' = discharge+recharge, 'B' = save for tomorrow
+    confidence: float = 0.0  # 0-1, higher = more confident
+
+    # Strategy A: discharge evening + grid recharge night
+    a_evening_savings_kr: float = 0.0  # Avoided grid import evening
+    a_night_recharge_cost_kr: float = 0.0  # Grid charge cost at night
+    a_ev_night_cost_kr: float = 0.0  # EV grid charge cost
+    a_total_cost_kr: float = 0.0  # Net cost of strategy A
+
+    # Strategy B: save battery + use tomorrow
+    b_evening_import_cost_kr: float = 0.0  # Grid import cost evening
+    b_tomorrow_savings_kr: float = 0.0  # Battery saves tomorrow (peak avoidance)
+    b_ev_night_cost_kr: float = 0.0  # EV grid charge cost (same)
+    b_total_cost_kr: float = 0.0  # Net cost of strategy B
+
+    # Decision inputs
+    battery_kwh_available: float = 0.0
+    evening_avg_price_ore: float = 0.0
+    night_avg_price_ore: float = 0.0
+    tomorrow_peak_price_ore: float = 0.0
+    pv_tomorrow_kwh: float = 0.0
+    ev_need_kwh: float = 0.0
+    reasoning: str = ""  # Swedish explanation
+
+
+@dataclass
 class BenchmarkData:
     """Benchmarking comparison data from hub."""
 

@@ -240,6 +240,23 @@ BATTERY_BRANDS = {
     "other": "Annan",
 }
 
+# ── IT-2378: Intelligent Scheduler ────────────────────────────────
+SCHEDULER_INTERVAL_SECONDS = 900  # 15 min
+SCHEDULER_PLAN_HOURS = 24
+SCHEDULER_CONSTRAINT_MARGIN = 0.85  # Warn at 85% of target
+SCHEDULER_EV_DEPARTURE_HOUR = 6  # Morning departure
+SCHEDULER_APPLIANCE_WINDOW_START = 22  # Dishwasher/laundry typical start
+SCHEDULER_APPLIANCE_WINDOW_END = 1  # Dishwasher/laundry typical end
+SCHEDULER_APPLIANCE_LOAD_KW = 2.0  # Assumed appliance load during window
+SCHEDULER_EV_GRID_CHARGE_SPREAD_ORE = 30.0  # Min price spread for grid charge
+SCHEDULER_BREACH_MINOR_PCT = 0.10  # <10% over = minor
+SCHEDULER_BREACH_MAJOR_PCT = 0.25  # 10-25% over = major, >25% = critical
+SCHEDULER_LEARNING_CONFIDENCE_STEP = 0.2  # Confidence increase per occurrence
+SCHEDULER_MINER_EXPORT_MIN_W = 500  # Min export before miner can run
+SCHEDULER_EV_100_INTERVAL_DAYS = 7  # Days between 100% charges
+SCHEDULER_EV_100_PV_THRESHOLD_KWH = 25.0  # Sunny day threshold for PV-based 100%
+SCHEDULER_MAX_LEARNINGS = 50  # Cap learning entries
+
 # Config keys
 CONF_BATTERIES = "batteries"
 CONF_EV = "ev"
