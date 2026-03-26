@@ -258,6 +258,96 @@ class ConsumptionPredictor:
             return 10.0  # Default 10% drop
         return sum(samples) / len(samples)
 
+    def add_battery_cycle(self, charge_price_ore: float, discharge_price_ore: float, kwh: float) -> None:
+        """Learn battery cycle economics.
+        
+        Tracks: at what price spread is cycling profitable?
+        Over time: knows optimal charge/discharge thresholds.
+        """
+        spread = discharge_price_ore - charge_price_ore
+        profit_kr = kwh * spread / 100
+        key = "bat_cycles"
+        if key not in self.history:
+            self.history[key] = []
+        self.history[key].append({
+            "spread": spread,
+            "profit_kr": profit_kr,
+            "kwh": kwh,
+        })
+        if len(self.history[key]) > 90:  # 90 days
+            self.history[key] = self.history[key][-90:]
+
+    def get_battery_economics(self) -> dict:
+        """Get learned battery economics.
+        
+        Returns: avg profit/kWh, best hours to charge/discharge,
+        minimum profitable spread.
+        """
+        cycles = self.history.get("bat_cycles", [])
+        if len(cycles) < 7:
+            return {"avg_profit_per_kwh_kr": 0.5, "min_spread_ore": 20, "learned": False}
+        
+        profitable = [c for c in cycles if c["profit_kr"] > 0]
+        unprofitable = [c for c in cycles if c["profit_kr"] <= 0]
+        
+        avg_profit = sum(c["profit_kr"] for c in profitable) / max(1, len(profitable))
+        avg_kwh = sum(c["kwh"] for c in profitable) / max(1, len(profitable))
+        
+        # Find minimum spread that was profitable
+        spreads = sorted([c["spread"] for c in profitable])
+        min_profitable_spread = spreads[len(spreads) // 5] if spreads else 20  # 20th percentile
+        
+        return {
+            "avg_profit_per_kwh_kr": round(avg_profit / max(0.1, avg_kwh), 3),
+            "min_spread_ore": round(max(5, min_profitable_spread), 1),
+            "total_cycles": len(cycles),
+            "profitable_pct": round(len(profitable) / max(1, len(cycles)) * 100, 1),
+            "total_profit_kr": round(sum(c["profit_kr"] for c in cycles), 2),
+            "learned": True,
+        }
+
+    def add_idle_penalty(self, hours_idle: int, missed_spread_ore: float) -> None:
+        """Track cost of NOT cycling battery when spread existed.
+        
+        Teaches ML that idle batteries during high spread = lost money.
+        """
+        key = "bat_idle_cost"
+        if key not in self.history:
+            self.history[key] = []
+        # Estimated lost profit: available_kwh × spread / 100
+        self.history[key].append({
+            "hours": hours_idle,
+            "missed_spread": missed_spread_ore,
+        })
+        if len(self.history[key]) > 90:
+            self.history[key] = self.history[key][-90:]
+
+    def should_cycle_battery(self, current_spread_ore: float, available_kwh: float) -> dict:
+        """ML recommendation: should we cycle battery now?
+        
+        Based on learned economics:
+        - If spread > min_profitable_spread → YES, cycle
+        - If spread < min → NO, wait for better opportunity
+        - Confidence increases with more data
+        """
+        econ = self.get_battery_economics()
+        min_spread = econ.get("min_spread_ore", 20)
+        
+        if current_spread_ore >= min_spread:
+            expected_profit = available_kwh * current_spread_ore / 100
+            return {
+                "recommend": "cycle",
+                "confidence": min(0.95, econ["total_cycles"] / 100),
+                "expected_profit_kr": round(expected_profit, 2),
+                "reason": f"spread {current_spread_ore:.0f} >= learned min {min_spread:.0f} ore",
+            }
+        else:
+            return {
+                "recommend": "wait",
+                "confidence": min(0.95, econ["total_cycles"] / 100),
+                "reason": f"spread {current_spread_ore:.0f} < learned min {min_spread:.0f} ore",
+            }
+
     def get_breach_risk_hours(self, weekday: int, goal: str = "ellevio") -> list[int]:
         """Return hours with history of goal breaches."""
         result = []
