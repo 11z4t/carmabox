@@ -181,6 +181,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.total_ev_kwh: float = 0.0
         self.estimated_cost_kr: float = 0.0
         self.ev_soc_at_06: int | None = None
+        # Runtime attributes referenced throughout coordinator
+        self._pressure_history: list[tuple[float, float]] = []
+        self._current_reserve_kwh: float = 0.0
+        self._consecutive_errors: int = 0
+        self._bat_active_samples: int = 0
+        self._bat_total_samples: int = 0
+        self._bat_day_min_soc: float = 100.0
+        self._bat_day_max_soc: float = 0.0
+        self._ev_usage_tracked_today: bool = False
+        self._last_feedback_hour: int = -1
+        self._peak_hour_samples: list[tuple[float, float]] = []
+        self._peak_last_hour: int = -1
+        self._MAX_CORRECTIONS: int = 100
+        self._MAX_HOUR_SAMPLES: int = 150
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
@@ -1258,7 +1272,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             hour_now = datetime.now().hour
             if 10 <= hour_now <= 15:
                 actual_pv_kw = state.pv_power_w / 1000
-                forecast_now_kw = solcast.power_now_kw
+                forecast_now_kw = getattr(solcast, "power_now_kw", 0.0) or 0.0
                 if forecast_now_kw > 1.0 and actual_pv_kw < forecast_now_kw * 0.5:
                     correction = reserve * 0.3  # increase reserve by 30%
                     reserve += correction
