@@ -388,14 +388,14 @@ class HubSyncClient:
         return self._mqtt_publish(f"{self.topic_prefix}/savings", savings_breakdown(savings), qos=1)
 
     def publish_status(self, version: str = "1.0.0", error_count: int = 0) -> bool:
-        """Publish heartbeat status via MQTT."""
+        """Publish heartbeat status via MQTT (retained for watchdog polling)."""
         status_data = {
             "timestamp": datetime.now().isoformat(),
             "version": version,
             "connected": True,
             "error_count": error_count,
         }
-        return self._mqtt_publish(f"{self.topic_prefix}/status", status_data, qos=0)
+        return self._mqtt_publish(f"{self.topic_prefix}/status", status_data, qos=1, retain=True)
 
     # ── HTTPS Fallback ──────────────────────────────────────
 

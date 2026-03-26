@@ -878,23 +878,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     await self.ev_adapter.ensure_initialized()
             self.safety.update_heartbeat()
 
-            # External heartbeat: write to NAS for independent monitoring (LXC 506)
+            # External heartbeat: write to /config/ for independent monitoring (LXC 506)
+            # IT-2467: Changed from /mnt/solutions/ (not mounted in HA container)
             try:
                 import json as _json
 
                 _hb = {
                     "timestamp": datetime.now().isoformat(),
                     "state": self._last_command.value if self._last_command else "starting",
-                    "soc": round(state.total_battery_soc, 0),
-                    "grid_w": round(state.grid_power_w, 0),
                     "target_kw": round(self.target_kw, 2),
                     "ev_enabled": self._ev_enabled,
                     "version": "4.6.0",
                 }
-                with open("/mnt/solutions/Root/platform/global/carmabox-heartbeat.json", "w") as _f:
+                with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
             except Exception:
-                pass  # NAS unavailable — non-critical
+                pass  # non-critical
+
+            # IT-2467: MQTT heartbeat for external watchdog
+            try:
+                _hub = getattr(self, "_hub", None)
+                if _hub:
+                    _hub.publish_status(version="4.6.0")
+            except Exception:
+                pass  # non-critical
 
             # License check (every 6h — Hub handshake)
             await self._check_license()
