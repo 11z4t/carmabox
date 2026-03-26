@@ -77,6 +77,34 @@ def generate_plan(
     min_soc_kwh = battery_min_soc / 100 * battery_cap_kwh
     max_charge_kwh = grid_charge_max_soc / 100 * battery_cap_kwh
 
+    # ── Price-aware arbitrage thresholds ─────────────────────────
+    valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
+    median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
+    discharge_price_threshold = max(40.0, median_price * 0.9)
+
+    # ── Solar refill: find sunrise (first hour with PV > 1kW) ────
+    sunrise_slot = num_hours
+    for si in range(num_hours):
+        pv_si = hourly_pv[si] if si < len(hourly_pv) else 0.0
+        if pv_si > 1.0:
+            sunrise_slot = si
+            break
+
+    # ── Pre-sunrise drain target ─────────────────────────────────
+    # Strong solar expected → drain to min_soc by sunrise
+    total_pv_after_sunrise = sum(
+        hourly_pv[j] if j < len(hourly_pv) else 0.0
+        for j in range(sunrise_slot, num_hours)
+    )
+    solar_confident = total_pv_after_sunrise > 25.0
+    solar_moderate = total_pv_after_sunrise > 15.0
+    sunrise_target_pct = (
+        battery_min_soc if solar_confident
+        else 30.0 if solar_moderate
+        else 50.0
+    )
+    sunrise_target_kwh = sunrise_target_pct / 100 * battery_cap_kwh
+
     for i in range(num_hours):
         abs_h = (start_hour + i) % 24
         w = ellevio_weight(abs_h, night_weight)
@@ -88,9 +116,11 @@ def generate_plan(
         net = load + ev - pv
         battery_kw = 0.0
         action = "i"
+        available = soc_kwh - min_soc_kwh
+        before_sunrise = i < sunrise_slot
 
         if net < -0.5:
-            # Solar surplus — charge battery from PV
+            # P1: Solar surplus — charge battery from PV
             surplus = abs(net)
             charge = min(surplus, battery_cap_kwh - soc_kwh)
             if charge > 0.3:
@@ -99,25 +129,51 @@ def generate_plan(
                 action = "c"
 
         elif price <= grid_charge_price_threshold and soc_kwh < max_charge_kwh:
-            # Very cheap price — charge from grid
+            # P2: Very cheap price — charge from grid
             headroom = max_charge_kwh - soc_kwh
             charge_kw = min(max_grid_charge_kw, headroom)
             if charge_kw > 0.3:
                 battery_kw = charge_kw
                 soc_kwh += charge_kw * battery_efficiency
                 action = "g"
-                # Grid charge: battery_kw already accounts for the charge load
-                # net stays unchanged — grid = net + battery_kw handles it
 
         elif w > 0 and net * w > target_weighted_kw:
-            # Load above target — discharge battery
+            # P3: Ellevio constraint — discharge
             need = (net * w - target_weighted_kw) / w
-            available = soc_kwh - min_soc_kwh
             if available > 0.3:
                 discharge = min(need, available, max_discharge_kw)
                 battery_kw = -discharge
                 soc_kwh -= discharge
                 action = "d"
+
+        elif net > 0.3 and available > 0.3 and price >= discharge_price_threshold:
+            # P4: Price arbitrage — discharge to replace grid import
+            discharge = min(net * 0.7, available, max_discharge_kw * 0.6)
+            if discharge > 0.2:
+                battery_kw = -discharge
+                soc_kwh -= discharge
+                action = "d"
+
+        elif (before_sunrise and available > 0.3 and net > 0.1
+              and soc_kwh > sunrise_target_kwh + 0.5):
+            # P5: Pre-sunrise drain — empty before solar refill
+            remaining_slots = max(1, sunrise_slot - i)
+            remaining_drain = max(0, soc_kwh - sunrise_target_kwh)
+            target_drain = remaining_drain / remaining_slots
+            discharge = min(max(target_drain, net), available, max_discharge_kw)
+            if discharge > 0.2:
+                battery_kw = -discharge
+                soc_kwh -= discharge
+                action = "d"
+
+        # P7: Anti-idle — if battery >80% and no action, discharge slowly
+        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3:
+            if available > 0.3:
+                idle_discharge = min(net * 0.5, available, 1.5)
+                if idle_discharge > 0.2:
+                    battery_kw = -idle_discharge
+                    soc_kwh -= idle_discharge
+                    action = "d"
 
         # Clamp SoC to valid range
         soc_kwh = max(0.0, min(soc_kwh, battery_cap_kwh))
