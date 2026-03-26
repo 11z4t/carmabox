@@ -181,6 +181,83 @@ class ConsumptionPredictor:
         if len(self.history[key]) > 30:
             self.history[key] = self.history[key][-30:]
 
+    def add_plan_feedback(self, hour: int, weekday: int,
+                         planned_kw: float, actual_kw: float) -> None:
+        """Learn from plan vs actual deviation.
+        
+        Over time, adjusts predictions to be more accurate.
+        """
+        key = f"feedback_{weekday}_{hour}"
+        if key not in self.history:
+            self.history[key] = []
+        # Store ratio: actual/planned (>1 = underestimated, <1 = overestimated)
+        if planned_kw > 0.5:
+            ratio = actual_kw / planned_kw
+            self.history[key].append(ratio)
+            if len(self.history[key]) > 30:
+                self.history[key] = self.history[key][-30:]
+
+    def get_correction_factor(self, hour: int, weekday: int) -> float:
+        """Get learned correction factor for this hour/weekday.
+        
+        Returns multiplier: 1.0 = accurate, 1.2 = typically 20% higher than predicted.
+        """
+        key = f"feedback_{weekday}_{hour}"
+        ratios = self.history.get(key, [])
+        if len(ratios) < 5:
+            return 1.0  # Not enough data
+        # Weighted average of recent ratios (newer = heavier)
+        weights = [math.exp(i * 0.15) for i in range(len(ratios))]
+        total_w = sum(weights)
+        return sum(r * w for r, w in zip(ratios, weights)) / total_w
+
+    def add_temperature_sample(self, temp_c: float, consumption_kw: float, hour: int) -> None:
+        """Learn temperature → consumption correlation."""
+        # Bucket temperature in 5°C ranges
+        bucket = int(temp_c / 5) * 5
+        key = f"temp_{bucket}_{hour}"
+        if key not in self.history:
+            self.history[key] = []
+        self.history[key].append(consumption_kw)
+        if len(self.history[key]) > 30:
+            self.history[key] = self.history[key][-30:]
+
+    def get_temp_adjustment(self, temp_c: float, hour: int) -> float:
+        """Get temperature-based consumption adjustment.
+        
+        Returns predicted kW adjustment (positive = more consumption).
+        """
+        bucket = int(temp_c / 5) * 5
+        key = f"temp_{bucket}_{hour}"
+        samples = self.history.get(key, [])
+        if len(samples) < 3:
+            return 0.0  # Not enough data
+        avg_at_temp = sum(samples) / len(samples)
+        # Compare to overall average at this hour
+        overall_key = f"temp_10_{hour}"  # 10°C as baseline
+        baseline = self.history.get(overall_key, [])
+        if not baseline:
+            return 0.0
+        avg_baseline = sum(baseline) / len(baseline)
+        return avg_at_temp - avg_baseline  # + = more consumption at this temp
+
+    def add_ev_usage(self, weekday: int, soc_change_pct: float) -> None:
+        """Learn daily EV usage patterns (SoC drop per day)."""
+        key = f"ev_usage_{weekday}"
+        if key not in self.history:
+            self.history[key] = []
+        self.history[key].append(abs(soc_change_pct))
+        if len(self.history[key]) > 30:
+            self.history[key] = self.history[key][-30:]
+
+    def predict_ev_usage(self, weekday: int) -> float:
+        """Predict how much EV SoC will drop today (%)."""
+        key = f"ev_usage_{weekday}"
+        samples = self.history.get(key, [])
+        if len(samples) < 3:
+            return 10.0  # Default 10% drop
+        return sum(samples) / len(samples)
+
     def get_breach_risk_hours(self, weekday: int, goal: str = "ellevio") -> list[int]:
         """Return hours with history of goal breaches."""
         result = []
