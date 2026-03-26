@@ -878,7 +878,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._track_shadow(state)
             self._track_savings(state)
             self._track_appliances()
-            self._check_daily_goals(state)
+            self._feed_predictor_ml(state)
+        self._check_daily_goals(state)
         await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
@@ -3931,6 +3932,58 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     temperature_c=temp_c,
                 )
             )
+
+    def _feed_predictor_ml(self, state) -> None:
+        """Feed all ML data to predictor every cycle."""
+        from datetime import datetime
+        now = datetime.now()
+        hour = now.hour
+        weekday = now.weekday()
+        
+        # Appliance events
+        for eid, name in [
+            ("sensor.98_shelly_plug_s_power", "disk"),
+            ("sensor.102_shelly_plug_g3_power", "tvatt"),
+            ("sensor.103_shelly_plug_g3_power", "tork"),
+        ]:
+            st = self.hass.states.get(eid)
+            if st and st.state not in ("unavailable", "unknown", ""):
+                try:
+                    if float(st.state) > 500:
+                        self.predictor.add_appliance_event(hour, weekday, name)
+                except (ValueError, TypeError):
+                    pass
+        
+        # Temperature correlation
+        temp_state = self.hass.states.get("sensor.tempest_temperature")
+        if temp_state and temp_state.state not in ("unavailable", "unknown", ""):
+            try:
+                temp_c = float(temp_state.state)
+                house_kw = getattr(self, "_estimated_house_base_kw", 2.0)
+                self.predictor.add_temperature_sample(temp_c, house_kw, hour)
+            except (ValueError, TypeError):
+                pass
+        
+        # Plan feedback (once per hour)
+        if hasattr(self, "_last_feedback_hour") and self._last_feedback_hour == hour:
+            pass
+        else:
+            self._last_feedback_hour = hour
+            for ph in self.plan:
+                if ph.hour == hour:
+                    actual_grid = max(0, state.grid_power_w) / 1000
+                    self.predictor.add_plan_feedback(hour, weekday, ph.grid_kw, actual_grid)
+                    break
+        
+        # EV usage (once per day at 22:00)
+        if hour == 22 and not getattr(self, "_ev_usage_tracked_today", False):
+            self._ev_usage_tracked_today = True
+            if self._last_known_ev_soc > 0 and state.ev_soc > 0:
+                drop = self._last_known_ev_soc - state.ev_soc
+                if drop > 0:
+                    self.predictor.add_ev_usage(weekday, drop)
+        elif hour == 0:
+            self._ev_usage_tracked_today = False
 
     def _check_daily_goals(self, state) -> dict:
         """Check daily goals and generate root cause if breached.
