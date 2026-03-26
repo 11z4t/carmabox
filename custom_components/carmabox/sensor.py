@@ -138,13 +138,13 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "taper_active": coord._taper_active,
         "cold_lock_active": coord._cold_lock_active,
         "cell_temp_kontor": (
-            coord.data.battery_cell_temp_1
-            if coord.data and coord.data.battery_cell_temp_1 is not None
+            coord.data.battery_min_cell_temp_1
+            if coord.data and hasattr(coord.data, 'battery_min_cell_temp_1')
             else None
         ),
         "cell_temp_forrad": (
-            coord.data.battery_cell_temp_2
-            if coord.data and coord.data.battery_cell_temp_2 is not None
+            coord.data.battery_min_cell_temp_2
+            if coord.data and hasattr(coord.data, 'battery_min_cell_temp_2')
             else None
         ),
     }
