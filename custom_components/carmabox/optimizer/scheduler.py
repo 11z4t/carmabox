@@ -328,7 +328,53 @@ def _schedule_battery(
 
     # Find price median for charge/discharge decisions
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
-    _median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
+    median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
+
+    # ── Price-aware arbitrage thresholds ─────────────────────────
+    # Discharge when price is above median × factor, replacing grid import
+    # Idle batteries = wasted investment — actively use them!
+    discharge_price_threshold = max(40.0, median_price * 0.9)
+    # Aggressive discharge: price well above median
+    aggressive_discharge_threshold = max(60.0, median_price * 1.3)
+
+    # ── Solar refill analysis ────────────────────────────────────
+    # If tomorrow has strong solar, we can drain deeper tonight
+    tomorrow_pv_kwh = 0.0
+    if pv_forecast_daily and len(pv_forecast_daily) > 1:
+        tomorrow_pv_kwh = pv_forecast_daily[1]
+    elif pv_forecast_daily and len(pv_forecast_daily) == 1:
+        tomorrow_pv_kwh = pv_forecast_daily[0]
+
+    # Strong solar tomorrow → drain to min_soc by sunrise (08:00)
+    # Moderate solar → drain to 30% by sunrise
+    solar_confident = tomorrow_pv_kwh > 25.0
+    solar_moderate = tomorrow_pv_kwh > 15.0
+    sunrise_target_pct = (
+        battery_min_soc if solar_confident
+        else 30.0 if solar_moderate
+        else 50.0
+    )
+    sunrise_target_kwh = sunrise_target_pct / 100 * battery_cap_kwh
+
+    # ── Find sunrise hour (first hour with PV > 1kW) ────────────
+    sunrise_slot = num_hours  # default: never
+    for si in range(num_hours):
+        pv_si = hourly_pv[si] if si < len(hourly_pv) else 0.0
+        if pv_si > 1.0:
+            sunrise_slot = si
+            break
+
+    # ── Calculate drain budget: how much to discharge before sunrise
+    drain_budget_kwh = max(0, soc_kwh - sunrise_target_kwh)
+    slots_to_sunrise = max(1, sunrise_slot)
+
+    _LOGGER.debug(
+        "Arbitrage: median=%.0f, discharge_thr=%.0f, aggressive_thr=%.0f, "
+        "tomorrow_pv=%.1f kWh, sunrise_slot=%d, drain_budget=%.1f kWh, "
+        "sunrise_target=%.0f%%",
+        median_price, discharge_price_threshold, aggressive_discharge_threshold,
+        tomorrow_pv_kwh, sunrise_slot, drain_budget_kwh, sunrise_target_pct,
+    )
 
     for i in range(num_hours):
         abs_h = (start_hour + i) % 24
@@ -341,6 +387,9 @@ def _schedule_battery(
         net = load + ev - pv  # Positive = importing, negative = exporting
         battery_kw = 0.0
         action = "i"
+
+        available = soc_kwh - effective_min_kwh
+        before_sunrise = i < sunrise_slot
 
         # Priority 1: Solar surplus → charge from PV
         if net < -0.5:
@@ -360,26 +409,67 @@ def _schedule_battery(
                 soc_kwh += charge_kw * battery_efficiency
                 action = "g"
 
-        # Priority 3: High price or load above target → discharge
+        # Priority 3: Ellevio constraint — load above target → discharge
         elif w > 0 and net * w > target_weighted_kw * SCHEDULER_CONSTRAINT_MARGIN:
             need = (net * w - target_weighted_kw * SCHEDULER_CONSTRAINT_MARGIN) / w
-            available = soc_kwh - effective_min_kwh
             if available > 0.3:
                 discharge = min(need, available, max_discharge_kw)
                 battery_kw = -discharge
                 soc_kwh -= discharge
                 action = "d"
 
-        # Priority 4: EV charging support — discharge battery to support EV under target
+        # Priority 4: Price arbitrage — discharge to replace grid import
+        # Idle batteries = expensive batteries. Use them!
+        elif net > 0.3 and available > 0.3 and price >= discharge_price_threshold:
+            # Replace grid import with battery power
+            if price >= aggressive_discharge_threshold:
+                # Aggressive: discharge up to full load replacement
+                discharge = min(net, available, max_discharge_kw)
+            else:
+                # Normal: discharge to cover part of load
+                discharge = min(net * 0.7, available, max_discharge_kw * 0.6)
+            if discharge > 0.2:
+                battery_kw = -discharge
+                soc_kwh -= discharge
+                action = "d"
+
+        # Priority 5: Pre-sunrise drain — empty battery before solar refill
+        # Don't let batteries sit full when sun will fill them for free
+        elif (before_sunrise and drain_budget_kwh > 0.5
+              and available > 0.3 and net > 0.1):
+            # Spread drain evenly across remaining pre-sunrise slots
+            remaining_slots = max(1, sunrise_slot - i)
+            remaining_drain = max(0, soc_kwh - sunrise_target_kwh)
+            target_drain = remaining_drain / remaining_slots
+            discharge = min(
+                max(target_drain, net),  # at least cover house load
+                available,
+                max_discharge_kw,
+            )
+            if discharge > 0.2:
+                battery_kw = -discharge
+                soc_kwh -= discharge
+                action = "d"
+
+        # Priority 6: EV charging support — discharge to support EV
         elif ev > 0 and w > 0:
             total_load = net * w
             if total_load > target_weighted_kw * 0.7:
                 support_need = (total_load - target_weighted_kw * 0.7) / w
-                available = soc_kwh - effective_min_kwh
                 if available > 0.3 and support_need > 0.2:
                     discharge = min(support_need, available, max_discharge_kw)
                     battery_kw = -discharge
                     soc_kwh -= discharge
+                    action = "d"
+
+        # Priority 7: Anti-idle — if battery is >80% and no action taken,
+        # discharge a small amount to cover house load (avoid idle waste)
+        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3:
+            if available > 0.3:
+                idle_discharge = min(net * 0.5, available, 1.5)
+                if idle_discharge > 0.2:
+                    battery_kw = -idle_discharge
+                    soc_kwh -= idle_discharge
                     action = "d"
 
         soc_kwh = max(0.0, min(soc_kwh, battery_cap_kwh))
