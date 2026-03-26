@@ -51,6 +51,21 @@ class ScheduleInput:
     disk_hours: list = field(default_factory=lambda: [23, 0])
 
 
+def _detect_season_mode(inp: ScheduleInput) -> str:
+    """Detect season mode from solar forecast.
+    
+    summer: avg PV > 25 kWh/day → batteries fill daily, aggressive night discharge
+    winter: avg PV < 10 kWh/day → conserve battery, grid charge at cheap hours  
+    transition: between → balanced
+    """
+    total_pv = sum(inp.pv) if inp.pv else 0
+    if total_pv > 25:
+        return "summer"
+    elif total_pv < 10:
+        return "winter"
+    return "transition"
+
+
 def generate(inp: ScheduleInput) -> list:
     slots = []
     for i in range(24):
