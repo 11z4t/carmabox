@@ -1893,7 +1893,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "CARMA: target %.1f > cap %.1f (%s) → capped",
                     self.target_kw,
                     target_cap,
-                    "natt" if is_night_now else "dag",
+                    "natt" if (hour_now >= 22 or hour_now < 6) else "dag",
                 )
                 self.target_kw = target_cap
 
