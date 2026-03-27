@@ -863,6 +863,248 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
 
+    async def _execute_v2(self, state: CarmaboxState) -> None:
+        """V2 executor — plan-driven, uses core modules.
+
+        Flow: Plan Executor → Battery Balancer → Surplus Chain
+        Grid Guard already ran (Layer 0).
+        """
+        from .core.plan_executor import (
+            ExecutorState,
+            PlanAction,
+            execute_plan_hour,
+            calculate_ev_amps,
+            check_replan_needed,
+        )
+        from .core.battery_balancer import (
+            BatteryInfo,
+            calculate_proportional_discharge,
+        )
+        from .core.surplus_chain import (
+            SurplusConsumer,
+            ConsumerType,
+            SurplusConfig,
+            allocate_surplus,
+            should_reduce_consumers,
+        )
+
+        now = datetime.now()
+        hour = now.hour
+        opts = self._cfg
+
+        # ── Find plan action for current hour ───────────────────
+        planned = next((p for p in self.plan if p.hour == hour), None)
+        plan_action = None
+        if planned:
+            plan_action = PlanAction(
+                hour=planned.hour,
+                action=planned.action,
+                battery_kw=planned.battery_kw,
+                grid_kw=planned.grid_kw,
+                price=planned.price,
+                battery_soc=planned.battery_soc,
+                ev_soc=planned.ev_soc,
+            )
+
+        # ── Build executor state ────────────────────────────────
+        weight = 0.5 if (hour >= 22 or hour < 6) else 1.0
+        headroom = self._grid_guard.headroom_kw if self._grid_guard_result else 1.0
+        ev_connected = (
+            self.ev_adapter and self.ev_adapter.cable_locked
+        ) if self.ev_adapter else False
+
+        exec_state = ExecutorState(
+            grid_import_w=max(0, state.grid_power_w),
+            pv_power_w=state.pv_power_w,
+            battery_soc_1=state.battery_soc_1,
+            battery_soc_2=state.battery_soc_2,
+            battery_power_1=state.battery_power_1,
+            battery_power_2=state.battery_power_2,
+            ev_power_w=state.ev_power_w,
+            ev_soc=state.ev_soc,
+            ev_connected=ev_connected,
+            current_price=self._read_float(
+                opts.get("price_entity", ""), 50.0
+            ),
+            target_kw=self.target_kw,
+            ellevio_weight=weight,
+            headroom_kw=headroom,
+        )
+
+        # ── Plan Executor decides ───────────────────────────────
+        from .core.plan_executor import ExecutorConfig
+        ev_phase = int(opts.get("ev_phase_count", 3))
+        exec_cfg = ExecutorConfig(
+            ev_phase_count=ev_phase,
+            ev_min_amps=int(opts.get("ev_min_amps", 6)),
+            ev_max_amps=int(opts.get("ev_max_amps", 16)),
+            grid_charge_price_threshold=float(
+                opts.get("grid_charge_price_threshold", 15.0)
+            ),
+        )
+        cmd = execute_plan_hour(plan_action, exec_state, exec_cfg)
+
+        _LOGGER.debug(
+            "V2 EXEC: bat=%s %dW, ev=%s %dA, reason=%s",
+            cmd.battery_action, cmd.battery_discharge_w,
+            cmd.ev_action, cmd.ev_amps, cmd.reason,
+        )
+
+        # ── Execute battery command ─────────────────────────────
+        if cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
+            # Proportional split
+            bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
+            bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
+            min_soc = float(opts.get("battery_min_soc", 15.0))
+            temp1 = getattr(state, "battery_min_cell_temp_1", 15.0) or 15.0
+            temp2 = getattr(state, "battery_min_cell_temp_2", 15.0) or 15.0
+
+            bats = [
+                BatteryInfo("kontor", state.battery_soc_1, bat1_kwh, temp1,
+                            min_soc=min_soc),
+                BatteryInfo("forrad", state.battery_soc_2, bat2_kwh, temp2,
+                            min_soc=min_soc),
+            ]
+            bal = calculate_proportional_discharge(bats, cmd.battery_discharge_w)
+
+            adapters = self.inverter_adapters
+            for i, alloc in enumerate(bal.allocations):
+                if i < len(adapters) and alloc.watts > 50:
+                    await adapters[i].set_ems_mode("discharge_pv")
+                    await adapters[i].set_fast_charging(on=False)
+                    # Set EMS power limit to control discharge rate
+                    await self.hass.services.async_call(
+                        "number", "set_value",
+                        {
+                            "entity_id": f"number.goodwe_{adapters[i].prefix}_ems_power_limit",
+                            "value": alloc.watts,
+                        },
+                    )
+                elif i < len(adapters):
+                    await adapters[i].set_ems_mode("battery_standby")
+                    await adapters[i].set_fast_charging(on=False)
+
+        elif cmd.battery_action == "charge_pv":
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("charge_pv")
+                await adapter.set_fast_charging(on=False)
+
+        elif cmd.battery_action == "grid_charge":
+            self._fast_charge_authorized = True
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("charge_pv")
+                await adapter.set_fast_charging(
+                    on=True, power_pct=100, soc_target=100,
+                )
+
+        elif cmd.battery_action == "standby":
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("battery_standby")
+                await adapter.set_fast_charging(on=False)
+
+        # ── Execute EV command ──────────────────────────────────
+        if cmd.ev_action == "start" and cmd.ev_amps >= 6:
+            if not self._ev_enabled:
+                await self._cmd_ev_start(cmd.ev_amps)
+            elif cmd.ev_amps != self._ev_current_amps:
+                await self._cmd_ev_adjust(cmd.ev_amps)
+        elif cmd.ev_action == "stop":
+            if self._ev_enabled:
+                await self._cmd_ev_stop()
+
+        # ── Surplus chain (when exporting) ──────────────────────
+        if state.grid_power_w < -100:  # Exporting
+            surplus_w = abs(state.grid_power_w)
+            consumers = self._build_surplus_consumers(state)
+            if not hasattr(self, "_surplus_hysteresis"):
+                from .core.surplus_chain import HysteresisState
+                self._surplus_hysteresis = HysteresisState()
+
+            result = allocate_surplus(
+                surplus_w, consumers,
+                self._surplus_hysteresis,
+                SurplusConfig(start_delay_s=60, stop_delay_s=180),
+            )
+            await self._execute_surplus_allocations(result.allocations)
+
+        # ── Replan check ────────────────────────────────────────
+        if not hasattr(self, "_replan_deviation_count"):
+            self._replan_deviation_count = 0
+
+        needs_replan, self._replan_deviation_count = check_replan_needed(
+            plan_action, exec_state, self._replan_deviation_count,
+        )
+        if needs_replan:
+            _LOGGER.info("V2 EXEC: Avvikelse → omplanering")
+            self._plan_counter = PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS
+
+    def _build_surplus_consumers(self, state: CarmaboxState) -> list:
+        """Build surplus consumer list from HA entities."""
+        from .core.surplus_chain import SurplusConsumer, ConsumerType
+        opts = self._cfg
+        ev_phase = int(opts.get("ev_phase_count", 3))
+
+        consumers = []
+        # EV — highest PV surplus priority
+        ev_power = state.ev_power_w
+        consumers.append(SurplusConsumer(
+            "ev", "EV", priority=1, type=ConsumerType.VARIABLE,
+            min_w=230 * ev_phase * 6, max_w=230 * ev_phase * 16,
+            current_w=ev_power, is_running=ev_power > 100,
+            phase_count=ev_phase,
+        ))
+        # Battery — charge from surplus
+        bat_power = abs(min(0, state.battery_power_1)) + abs(min(0, state.battery_power_2))
+        bat_full = state.battery_soc_1 >= 99 and (state.battery_soc_2 < 0 or state.battery_soc_2 >= 99)
+        consumers.append(SurplusConsumer(
+            "battery", "Batteri", priority=2, type=ConsumerType.VARIABLE,
+            min_w=300, max_w=6000, current_w=bat_power,
+            is_running=bat_power > 100 and not bat_full,
+        ))
+        # Miner
+        miner_w = self._read_float("sensor.shelly1pmg4_a085e3bd1e60_power")
+        consumers.append(SurplusConsumer(
+            "miner", "Miner", priority=5, type=ConsumerType.ON_OFF,
+            min_w=400, max_w=500, current_w=miner_w,
+            is_running=miner_w > 50,
+            entity_switch="switch.shelly1pmg4_a085e3bd1e60",
+        ))
+        return consumers
+
+    async def _execute_surplus_allocations(self, allocations: list) -> None:
+        """Execute surplus chain allocations."""
+        for alloc in allocations:
+            if alloc.action == "none":
+                continue
+            try:
+                if alloc.id == "miner":
+                    if alloc.action == "start":
+                        await self.hass.services.async_call(
+                            "switch", "turn_on",
+                            {"entity_id": "switch.shelly1pmg4_a085e3bd1e60"},
+                        )
+                    elif alloc.action == "stop":
+                        await self.hass.services.async_call(
+                            "switch", "turn_off",
+                            {"entity_id": "switch.shelly1pmg4_a085e3bd1e60"},
+                        )
+                elif alloc.id == "ev":
+                    if alloc.action == "start" and alloc.target_w >= 4140:
+                        amps = int(alloc.target_w / (230 * 3))
+                        await self._cmd_ev_start(max(6, min(16, amps)))
+                    elif alloc.action == "increase":
+                        amps = int(alloc.target_w / (230 * 3))
+                        await self._cmd_ev_adjust(max(6, min(16, amps)))
+                    elif alloc.action == "stop":
+                        await self._cmd_ev_stop()
+                elif alloc.id == "battery":
+                    if alloc.action in ("start", "increase"):
+                        for adapter in self.inverter_adapters:
+                            await adapter.set_ems_mode("charge_pv")
+                            await adapter.set_fast_charging(on=False)
+            except Exception as err:
+                _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err)
+
     async def _execute_grid_guard_commands(
         self, commands: list[dict], state: CarmaboxState,
     ) -> None:
@@ -1185,9 +1427,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
             if not grid_guard_acted:
-                await self._execute(state)
+                use_v2 = self._cfg.get("use_plan_executor", False)
+                if use_v2:
+                    await self._execute_v2(state)
+                else:
+                    await self._execute(state)
             else:
-                _LOGGER.info("GRID GUARD: Skippar _execute() — guard har kontroll")
+                _LOGGER.info("GRID GUARD: Skippar execute — guard har kontroll")
             await self._watchdog(state)
             # IT-2465: Non-critical methods wrapped with isolation
             self._safe_call("track_shadow", self._track_shadow, state)
