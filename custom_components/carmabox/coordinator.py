@@ -863,6 +863,90 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
 
+    async def _execute_grid_guard_commands(
+        self, commands: list[dict], state: CarmaboxState,
+    ) -> None:
+        """Execute Grid Guard commands — actually control hardware."""
+        for cmd in commands:
+            action = cmd.get("action", "")
+            try:
+                if action == "set_ems_mode":
+                    bat_id = cmd.get("battery_id", "")
+                    mode = cmd.get("mode", "battery_standby")
+                    adapter = next(
+                        (a for a in self.inverter_adapters if a.prefix == bat_id),
+                        None,
+                    )
+                    if adapter:
+                        await adapter.set_ems_mode(mode)
+                        _LOGGER.info("GRID GUARD: %s → EMS %s", bat_id, mode)
+
+                elif action == "set_fast_charging":
+                    bat_id = cmd.get("battery_id", "")
+                    on = cmd.get("on", False)
+                    adapter = next(
+                        (a for a in self.inverter_adapters if a.prefix == bat_id),
+                        None,
+                    )
+                    if adapter:
+                        await adapter.set_fast_charging(on=on)
+                        _LOGGER.info("GRID GUARD: %s → fast_charging=%s", bat_id, on)
+
+                elif action == "pause_ev":
+                    if self._ev_enabled:
+                        await self._cmd_ev_stop()
+                        _LOGGER.info("GRID GUARD: EV pausad")
+
+                elif action == "reduce_ev":
+                    new_amps = cmd.get("amps", 6)
+                    if self._ev_enabled and new_amps != self._ev_current_amps:
+                        await self._cmd_ev_adjust(new_amps)
+                        _LOGGER.info(
+                            "GRID GUARD: EV sänkt till %dA", new_amps,
+                        )
+
+                elif action == "increase_discharge":
+                    watts = cmd.get("watts", 0)
+                    _LOGGER.info("GRID GUARD: Öka urladdning %dW", watts)
+                    # Proportional split handled by battery balancer (Fas 2)
+                    # For now: split evenly
+                    adapters = self.inverter_adapters
+                    per_adapter = watts // max(1, len(adapters))
+                    for adapter in adapters:
+                        await adapter.set_ems_mode("discharge_pv")
+                        # ems_power_limit styr max grid import
+                        # Lägre limit = mer urladdning
+                        await self.hass.services.async_call(
+                            "number", "set_value",
+                            {
+                                "entity_id": f"number.goodwe_{adapter.prefix}_ems_power_limit",
+                                "value": max(0, int(state.grid_power_w / 1000 - per_adapter) * 1000),
+                            },
+                        )
+
+                elif action == "switch_off":
+                    entity = cmd.get("entity", "")
+                    if entity:
+                        await self.hass.services.async_call(
+                            "switch", "turn_off",
+                            {"entity_id": entity},
+                        )
+                        _LOGGER.info("GRID GUARD: %s → OFF", entity)
+
+                elif action == "set_hvac_off":
+                    entity = cmd.get("entity", "")
+                    if entity:
+                        await self.hass.services.async_call(
+                            "climate", "set_hvac_mode",
+                            {"entity_id": entity, "hvac_mode": "off"},
+                        )
+                        _LOGGER.info("GRID GUARD: %s → OFF", entity)
+
+            except Exception as err:
+                _LOGGER.error(
+                    "GRID GUARD: Kommando %s misslyckades: %s", action, err,
+                )
+
     def _evaluate_grid_guard(self, state: CarmaboxState) -> "GridGuardResult":
         """Build Grid Guard input from current state and evaluate."""
         from .core.grid_guard import BatteryState, Consumer, GridGuardResult
@@ -1059,11 +1143,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # ── LAYER 0: Grid Guard — runs FIRST, every cycle ──
             self._grid_guard_result = self._evaluate_grid_guard(state)
+            grid_guard_acted = False
+
             if self._grid_guard_result.invariant_violations:
                 _LOGGER.warning(
                     "GRID GUARD FÖRBUD: %s",
                     "; ".join(self._grid_guard_result.invariant_violations),
                 )
+                await self._execute_grid_guard_commands(
+                    self._grid_guard_result.commands, state,
+                )
+                grid_guard_acted = True
+
             if self._grid_guard_result.status in ("WARNING", "CRITICAL"):
                 _LOGGER.warning(
                     "GRID GUARD %s: projected=%.2f kW, headroom=%.2f kW, reason=%s",
@@ -1072,6 +1163,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._grid_guard_result.headroom_kw,
                     self._grid_guard_result.reason,
                 )
+                await self._execute_grid_guard_commands(
+                    self._grid_guard_result.commands, state,
+                )
+                grid_guard_acted = True
+
+            if self._grid_guard_result.replan_needed:
+                _LOGGER.info("GRID GUARD: Triggar omplanering")
+                self._plan_counter = PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS
 
             self._plan_counter += 1
             if self._plan_counter >= PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS:
@@ -1085,7 +1184,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Breach Prevention Monitor — runs every cycle (30s)
             self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
-            await self._execute(state)
+            if not grid_guard_acted:
+                await self._execute(state)
+            else:
+                _LOGGER.info("GRID GUARD: Skippar _execute() — guard har kontroll")
             await self._watchdog(state)
             # IT-2465: Non-critical methods wrapped with isolation
             self._safe_call("track_shadow", self._track_shadow, state)
