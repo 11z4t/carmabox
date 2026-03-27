@@ -1427,7 +1427,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
             if not grid_guard_acted:
-                use_v2 = self._cfg.get("use_plan_executor", False)
+                use_v2 = self._cfg.get("use_plan_executor", True)
                 if use_v2:
                     await self._execute_v2(state)
                 else:
