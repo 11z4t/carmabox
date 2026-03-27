@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from custom_components.carmabox.core.grid_guard import (
     BatteryState,
     Consumer,

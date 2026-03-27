@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import pytest
-
 from custom_components.carmabox.core.battery_balancer import (
     BatteryInfo,
+    available_kwh,
     calculate_proportional_charge,
     calculate_proportional_discharge,
     effective_min_soc,
-    available_kwh,
 )
 
 
