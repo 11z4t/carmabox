@@ -375,17 +375,34 @@ class TestInvariants:
                         hour=14, minute=30, batteries=bats)
         assert any("INV-5" in v for v in r.invariant_violations)
 
-    def test_invariants_run_before_actions(self):
-        """If invariant violated, actions NOT executed (invariant fix takes priority)."""
+    def test_invariants_plus_headroom_both_run(self):
+        """If invariant violated AND over limit, BOTH fixes run."""
         g = _guard()
         bats = [_bat("kontor", ems_mode="auto")]
         miner = _consumer("miner", 500, 2, switch="switch.miner")
         r = g.evaluate(viktat_timmedel_kw=2.5, grid_import_w=3000,
                         hour=14, minute=30,
                         batteries=bats, consumers=[miner])
-        # Should have invariant fix, NOT action ladder
         assert len(r.invariant_violations) > 0
-        assert not any(c.get("action") == "switch_off" for c in r.commands)
+        # Both invariant fix AND action ladder should have commands
+        has_ems_fix = any(c.get("action") == "set_ems_mode" for c in r.commands)
+        has_load_shed = any(c.get("action") == "switch_off" for c in r.commands)
+        assert has_ems_fix  # Invariant fix
+        assert has_load_shed  # Action ladder (grid over tak)
+
+    def test_invariants_under_limit_no_ladder(self):
+        """If invariant violated but under limit, only invariant fix."""
+        g = _guard()
+        bats = [_bat("kontor", ems_mode="auto")]
+        miner = _consumer("miner", 500, 2, switch="switch.miner")
+        r = g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=500,
+                        hour=14, minute=30,
+                        batteries=bats, consumers=[miner])
+        assert len(r.invariant_violations) > 0
+        has_ems_fix = any(c.get("action") == "set_ems_mode" for c in r.commands)
+        has_load_shed = any(c.get("action") == "switch_off" for c in r.commands)
+        assert has_ems_fix  # Invariant fix
+        assert not has_load_shed  # No ladder needed — under limit
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -147,12 +147,22 @@ class GridGuard:
                 f"Huvudsäkring: {grid_import_w:.0f}W > {main_fuse_w * 0.9:.0f}W (90%)"
             )
 
-        # If invariants violated, return immediately
+        # If invariants violated, fix them BUT also check headroom
         if inv_result.invariant_violations:
             inv_result.headroom_kw = headroom_kw
             inv_result.projected_kw = projected_kw
             inv_result.viktat_timmedel_kw = viktat_timmedel_kw
             inv_result.replan_needed = True
+            # ALSO run action ladder if over limit
+            if headroom_kw < 0:
+                overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
+                extra_cmds, reason = self._action_ladder(
+                    overshoot_w, consumers, ev_power_w, ev_amps,
+                    ev_phase_count, batteries, kontor_temp_c,
+                )
+                inv_result.commands.extend(extra_cmds)
+                inv_result.reason += f"; {reason}" if reason else ""
+                inv_result.status = "CRITICAL"
             return inv_result
 
         # Headroom OK
