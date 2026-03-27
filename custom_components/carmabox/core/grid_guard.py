@@ -248,6 +248,24 @@ class GridGuard:
                     "mode": "battery_standby",
                 })
 
+        # INV-5: Never discharge below min_soc
+        for bat in batteries:
+            effective_min = (
+                self.config.cold_lock_temp_c
+                and bat.cell_temp_c < self.config.cold_lock_temp_c
+            )
+            min_soc = 20.0 if effective_min else 15.0  # cold → higher floor
+            if bat.soc <= min_soc and bat.power_w > 50:  # discharging below min
+                violations.append(
+                    f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% "
+                    f"(min {min_soc:.0f}%)"
+                )
+                commands.append({
+                    "action": "set_ems_mode",
+                    "battery_id": bat.id,
+                    "mode": "battery_standby",
+                })
+
         # INV-2: Never crosscharge
         if len(batteries) >= 2:
             charging = [b for b in batteries if b.power_w < -50]

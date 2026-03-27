@@ -353,6 +353,30 @@ class TestInvariants:
         inv4 = [v for v in r.invariant_violations if "INV-4" in v]
         assert len(inv4) == 0  # Discharge at cold is OK
 
+    def test_inv5_discharge_below_min_soc(self):
+        g = _guard()
+        bats = [_bat("forrad", soc=12, power_w=2000)]  # Discharging at 12%
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert any("INV-5" in v for v in r.invariant_violations)
+        assert any(c["mode"] == "battery_standby" for c in r.commands)
+
+    def test_inv5_discharge_above_min_soc_ok(self):
+        g = _guard()
+        bats = [_bat("kontor", soc=40, power_w=2000)]  # Discharging at 40%
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        inv5 = [v for v in r.invariant_violations if "INV-5" in v]
+        assert len(inv5) == 0
+
+    def test_inv5_cold_battery_higher_min_soc(self):
+        g = _guard()
+        # 18% SoC + cold (3°C) → min_soc=20% → VIOLATION
+        bats = [_bat("kontor", soc=18, power_w=1500, cell_temp_c=3.0)]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert any("INV-5" in v for v in r.invariant_violations)
+
     def test_invariants_run_before_actions(self):
         """If invariant violated, actions NOT executed (invariant fix takes priority)."""
         g = _guard()
