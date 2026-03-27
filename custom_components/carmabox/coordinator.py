@@ -5224,9 +5224,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     ok = await adapter.set_ems_mode("battery_standby")
                 else:
                     ok = await adapter.set_ems_mode("charge_pv")
-                    # Enable fast charging for max PV absorption
+                    # INV-3: ALDRIG fast_charging i charge_pv — PV laddar utan det
+                    # fast_charging drar grid-import och bryter LAG 1
                     if ok and isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                        await adapter.set_fast_charging(on=False)
                 if ok:
                     success = True
                 else:
