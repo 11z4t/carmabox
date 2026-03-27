@@ -139,6 +139,7 @@ class GoodWeAdapter(InverterAdapter):
         {
             "charge_pv",
             "charge_battery",
+            "discharge_pv",
             "discharge_battery",
             "battery_standby",
             "auto",
