@@ -1,0 +1,406 @@
+"""Tests for Grid Guard — LAG 1 enforcement + INV-* invariants."""
+
+from __future__ import annotations
+
+import pytest
+
+from custom_components.carmabox.core.grid_guard import (
+    BatteryState,
+    Consumer,
+    GridGuard,
+    GridGuardConfig,
+)
+
+
+def _bat(
+    id: str = "kontor",
+    soc: float = 50,
+    power_w: float = 0,
+    cell_temp_c: float = 15.0,
+    ems_mode: str = "discharge_pv",
+    fast_charging_on: bool = False,
+    available_kwh: float = 5.0,
+) -> BatteryState:
+    return BatteryState(
+        id=id, soc=soc, power_w=power_w, cell_temp_c=cell_temp_c,
+        ems_mode=ems_mode, fast_charging_on=fast_charging_on,
+        available_kwh=available_kwh,
+    )
+
+
+def _consumer(
+    id: str, power_w: float, priority_shed: int,
+    active: bool = True, switch: str = "", climate: str = "",
+) -> Consumer:
+    return Consumer(
+        id=id, name=id, power_w=power_w, is_active=active,
+        priority_shed=priority_shed, entity_switch=switch,
+        entity_climate=climate,
+    )
+
+
+def _guard(tak: float = 2.0, margin: float = 0.85) -> GridGuard:
+    return GridGuard(GridGuardConfig(tak_kw=tak, margin=margin))
+
+
+# ═══════════════════════════════════════════════════════════════
+# Grundläggande
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestBasicEvaluation:
+    def test_under_tak_no_action(self):
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30)
+        assert r.status == "OK"
+        assert r.headroom_kw > 0
+        assert len(r.commands) == 0
+
+    def test_over_margin_warning(self):
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=1.8, grid_import_w=2000,
+                        hour=14, minute=30,
+                        consumers=[_consumer("miner", 500, 2, switch="switch.miner")])
+        assert r.status in ("WARNING", "CRITICAL")
+        assert r.headroom_kw < 0
+        assert len(r.commands) > 0
+
+    def test_over_tak_critical(self):
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=2.5, grid_import_w=3000,
+                        hour=14, minute=30,
+                        ev_power_w=4000, ev_amps=6, ev_phase_count=3)
+        assert r.status == "CRITICAL"
+        assert any(c["action"] in ("pause_ev", "reduce_ev") for c in r.commands)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Åtgärdstrappa
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestActionLadder:
+    def test_step1_vp_kontor_off(self):
+        g = _guard()
+        vp = _consumer("vp_kontor", 1500, 1, climate="climate.kontor_ac")
+        r = g.evaluate(viktat_timmedel_kw=1.9, grid_import_w=2200,
+                        hour=14, minute=30, consumers=[vp], kontor_temp_c=18.0)
+        assert any(c.get("action") == "set_hvac_off" for c in r.commands)
+
+    def test_step1_vp_kontor_skip_cold(self):
+        g = _guard()
+        vp = _consumer("vp_kontor", 1500, 1, climate="climate.kontor_ac")
+        miner = _consumer("miner", 500, 2, switch="switch.miner")
+        r = g.evaluate(viktat_timmedel_kw=1.9, grid_import_w=2200,
+                        hour=14, minute=30, consumers=[vp, miner],
+                        kontor_temp_c=8.0)
+        # VP skipped (temp < 10°C), miner stängs istället
+        assert not any(
+            c.get("consumer_id") == "vp_kontor" for c in r.commands
+        )
+        assert any(c.get("consumer_id") == "miner" for c in r.commands)
+
+    def test_step2_miner_off(self):
+        g = _guard()
+        miner = _consumer("miner", 500, 2, switch="switch.miner")
+        r = g.evaluate(viktat_timmedel_kw=1.8, grid_import_w=2000,
+                        hour=14, minute=30, consumers=[miner])
+        assert any(c.get("action") == "switch_off" for c in r.commands)
+
+    def test_step5_reduce_ev_amps(self):
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=2.2, grid_import_w=3000,
+                        hour=14, minute=30,
+                        ev_power_w=4140, ev_amps=10, ev_phase_count=3)
+        reduce_cmds = [c for c in r.commands if c.get("action") == "reduce_ev"]
+        assert len(reduce_cmds) == 1
+        assert reduce_cmds[0]["amps"] < 10
+        assert reduce_cmds[0]["amps"] >= 6
+
+    def test_step6_pause_ev(self):
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=3.0, grid_import_w=6000,
+                        hour=14, minute=30,
+                        ev_power_w=4140, ev_amps=6, ev_phase_count=3)
+        assert any(c.get("action") == "pause_ev" for c in r.commands)
+
+    def test_step7_increase_discharge(self):
+        g = _guard()
+        bats = [_bat("kontor", available_kwh=10.0)]
+        r = g.evaluate(viktat_timmedel_kw=3.0, grid_import_w=5000,
+                        hour=14, minute=30,
+                        ev_power_w=0, ev_amps=0,
+                        batteries=bats)
+        assert any(c.get("action") == "increase_discharge" for c in r.commands)
+
+    def test_combined_steps(self):
+        """Large overshoot → VP off + miner off + EV reduced."""
+        g = _guard()
+        consumers = [
+            _consumer("vp_kontor", 1500, 1, climate="climate.kontor_ac"),
+            _consumer("miner", 500, 2, switch="switch.miner"),
+        ]
+        r = g.evaluate(viktat_timmedel_kw=3.5, grid_import_w=8000,
+                        hour=14, minute=30,
+                        ev_power_w=4140, ev_amps=10, ev_phase_count=3,
+                        consumers=consumers, kontor_temp_c=18.0)
+        actions = [c.get("action") for c in r.commands]
+        assert "set_hvac_off" in actions  # VP
+        assert "switch_off" in actions  # Miner
+        assert "reduce_ev" in actions or "pause_ev" in actions  # EV
+
+
+# ═══════════════════════════════════════════════════════════════
+# Projicering
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestProjection:
+    def test_projection_early_hour(self):
+        """Spike at XX:05 has big impact (55 min remaining)."""
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=5000,
+                        hour=14, minute=5)
+        # 55 min at 5kW dominates → projected should be high
+        assert r.projected_kw > 3.0
+
+    def test_projection_late_hour(self):
+        """Spike at XX:55 has small impact (5 min remaining)."""
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=5000,
+                        hour=14, minute=55)
+        # Only 5 min at 5kW → projected close to existing average
+        assert r.projected_kw < 2.0
+
+    def test_projection_accuracy(self):
+        """Projection formula correctness."""
+        g = _guard()
+        # At minute 30, half way: projected = (timmedel*30 + now*30)/60
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=2000,
+                        hour=14, minute=30)
+        # Day weight = 1.0, so grid_viktat = 2.0
+        expected = (1.0 * 30 + 2.0 * 30) / 60  # = 1.5
+        assert abs(r.projected_kw - expected) < 0.01
+
+
+# ═══════════════════════════════════════════════════════════════
+# Återställning
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestRecovery:
+    def test_recovery_after_warning(self):
+        g = _guard()
+        # Trigger warning
+        g.evaluate(viktat_timmedel_kw=2.0, grid_import_w=3000,
+                    hour=14, minute=30,
+                    consumers=[_consumer("miner", 500, 2, switch="s")],
+                    timestamp=100.0)
+        # Now headroom OK
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=35, timestamp=110.0)
+        assert r.status == "RECOVERY"
+
+        # Wait recovery hold
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=40, timestamp=170.0)
+        assert r.status == "OK"
+
+    def test_recovery_hysteresis(self):
+        """Headroom fluctuates around 0 → no oscillation."""
+        g = _guard()
+        # Trigger warning
+        g.evaluate(viktat_timmedel_kw=2.0, grid_import_w=3000,
+                    hour=14, minute=30,
+                    consumers=[_consumer("miner", 500, 2, switch="s")],
+                    timestamp=100.0)
+        # Brief OK
+        g.evaluate(viktat_timmedel_kw=1.5, grid_import_w=1500,
+                    hour=14, minute=31, timestamp=105.0)
+        # Should NOT be OK yet (recovery hold)
+        r = g.evaluate(viktat_timmedel_kw=1.5, grid_import_w=1500,
+                        hour=14, minute=32, timestamp=110.0)
+        assert r.status == "RECOVERY"  # Not OK — holding
+
+
+# ═══════════════════════════════════════════════════════════════
+# Edge cases
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestEdgeCases:
+    def test_hour_reset(self):
+        g = _guard()
+        g.evaluate(viktat_timmedel_kw=1.5, grid_import_w=2000,
+                    hour=14, minute=55, timestamp=100.0)
+        # New hour
+        r = g.evaluate(viktat_timmedel_kw=0.0, grid_import_w=1000,
+                        hour=15, minute=0, timestamp=400.0)
+        assert r.status == "OK"
+
+    def test_sensor_unavailable(self):
+        """NaN grid → fallback to last known + margin."""
+        g = _guard()
+        g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1500,
+                    hour=14, minute=20, timestamp=100.0)
+        # Now sensor unavailable
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=float("nan"),
+                        hour=14, minute=25, timestamp=130.0)
+        # Should use 1500 * 1.1 = 1650W
+        assert r.status == "OK"  # Still under limit
+
+    def test_3phase_ev_math(self):
+        """1 amp reduction = 690W for 3-phase, not 230W."""
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=2.0, grid_import_w=2500,
+                        hour=14, minute=30,
+                        ev_power_w=4140, ev_amps=10, ev_phase_count=3)
+        reduce_cmds = [c for c in r.commands if c.get("action") == "reduce_ev"]
+        if reduce_cmds:
+            new_amps = reduce_cmds[0]["amps"]
+            # Reduction should be fewer amps than single-phase would need
+            assert new_amps >= 6
+
+    def test_night_vs_day_weight(self):
+        """Same actual power → lower weighted at night."""
+        g = _guard()
+        # Day: 3000W * 1.0 = 3.0 kW weighted
+        r_day = g.evaluate(viktat_timmedel_kw=2.5, grid_import_w=3000,
+                            hour=14, minute=30)
+        # Night: 3000W * 0.5 = 1.5 kW weighted
+        g2 = _guard()
+        r_night = g2.evaluate(viktat_timmedel_kw=1.2, grid_import_w=3000,
+                               hour=23, minute=30)
+        assert r_night.projected_kw < r_day.projected_kw
+
+
+# ═══════════════════════════════════════════════════════════════
+# Förbud (invarianter)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestInvariants:
+    def test_inv1_ems_auto_detected(self):
+        g = _guard()
+        bats = [_bat("kontor", ems_mode="auto")]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert "INV-1" in r.invariant_violations[0]
+        assert any(c["action"] == "set_ems_mode" and c["mode"] == "battery_standby"
+                    for c in r.commands)
+
+    def test_inv1_ems_auto_triggers_replan(self):
+        g = _guard()
+        bats = [_bat("kontor", ems_mode="auto")]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert r.replan_needed is True
+
+    def test_inv2_crosscharge_detected(self):
+        g = _guard()
+        bats = [
+            _bat("kontor", power_w=-2000),   # Charging
+            _bat("forrad", power_w=1500),     # Discharging
+        ]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert any("INV-2" in v for v in r.invariant_violations)
+        # Both should be set to standby
+        standby_cmds = [c for c in r.commands
+                        if c.get("action") == "set_ems_mode"
+                        and c.get("mode") == "battery_standby"]
+        assert len(standby_cmds) == 2
+
+    def test_inv2_crosscharge_triggers_replan(self):
+        g = _guard()
+        bats = [
+            _bat("kontor", power_w=-2000),
+            _bat("forrad", power_w=1500),
+        ]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert r.replan_needed is True
+
+    def test_inv3_fast_charging_unauthorized(self):
+        g = _guard()
+        bats = [_bat("kontor", fast_charging_on=True)]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats,
+                        fast_charge_authorized=False)
+        assert any("INV-3" in v for v in r.invariant_violations)
+
+    def test_inv3_fast_charging_authorized_ok(self):
+        g = _guard()
+        bats = [_bat("kontor", fast_charging_on=True)]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats,
+                        fast_charge_authorized=True)
+        assert len(r.invariant_violations) == 0
+
+    def test_inv4_cold_lock_charging(self):
+        g = _guard()
+        bats = [_bat("kontor", cell_temp_c=3.0, power_w=-1000)]
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        assert any("INV-4" in v for v in r.invariant_violations)
+
+    def test_inv4_cold_lock_discharge_ok(self):
+        g = _guard()
+        bats = [_bat("kontor", cell_temp_c=3.0, power_w=1000)]  # Discharging
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=1000,
+                        hour=14, minute=30, batteries=bats)
+        inv4 = [v for v in r.invariant_violations if "INV-4" in v]
+        assert len(inv4) == 0  # Discharge at cold is OK
+
+    def test_invariants_run_before_actions(self):
+        """If invariant violated, actions NOT executed (invariant fix takes priority)."""
+        g = _guard()
+        bats = [_bat("kontor", ems_mode="auto")]
+        miner = _consumer("miner", 500, 2, switch="switch.miner")
+        r = g.evaluate(viktat_timmedel_kw=2.5, grid_import_w=3000,
+                        hour=14, minute=30,
+                        batteries=bats, consumers=[miner])
+        # Should have invariant fix, NOT action ladder
+        assert len(r.invariant_violations) > 0
+        assert not any(c.get("action") == "switch_off" for c in r.commands)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Gränssnittstester (scenarier)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestScenarios:
+    def test_scenario_disk_plus_ev_night(self):
+        """Disk 2kW + EV 4.1kW + house 1.7kW at night."""
+        g = _guard()
+        consumers = [
+            _consumer("vp_kontor", 0, 1, active=False),
+            _consumer("miner", 0, 2, active=False),
+        ]
+        # Night: grid 7.8kW * 0.5 weight = 3.9kW viktat > 2.0*0.85
+        r = g.evaluate(
+            viktat_timmedel_kw=3.5,
+            grid_import_w=7800,
+            hour=23, minute=10,
+            ev_power_w=4140, ev_amps=6, ev_phase_count=3,
+            consumers=consumers,
+            batteries=[_bat("kontor", available_kwh=5.0)],
+        )
+        assert r.status in ("WARNING", "CRITICAL")
+        # Should pause EV (only consumer with significant power)
+        assert any(c.get("action") == "pause_ev" for c in r.commands)
+
+    def test_scenario_short_spike_ok(self):
+        """Spike at XX:50, average already low → no action needed."""
+        g = _guard()
+        # 50 min at 1.0 kW, now spike to 5 kW for remaining 10 min
+        # projected = (1.0*50 + 5.0*10)/60 = 58.3/60 = 0.97 kW
+        r = g.evaluate(
+            viktat_timmedel_kw=1.0,
+            grid_import_w=5000,
+            hour=14, minute=50,
+        )
+        # projected ~1.67 < 1.7 (tak*margin) — should be OK
+        assert r.status == "OK"

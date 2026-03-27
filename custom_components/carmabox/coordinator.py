@@ -195,6 +195,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._peak_last_hour: int = -1
         self._MAX_CORRECTIONS: int = 100
         self._MAX_HOUR_SAMPLES: int = 150
+        # Grid Guard — LAG 1 enforcement (runs FIRST every cycle)
+        from .core.grid_guard import GridGuard, GridGuardConfig
+        self._grid_guard = GridGuard(GridGuardConfig(
+            tak_kw=float(self._cfg.get("ellevio_tak_kw", 2.0)),
+            night_weight=float(self._cfg.get("ellevio_night_weight", 0.5)),
+            margin=float(self._cfg.get("grid_guard_margin", 0.85)),
+            cold_lock_temp_c=float(self._cfg.get("cold_lock_temp_c", 4.0)),
+            vp_min_temp_c=float(self._cfg.get("grid_guard_vp_min_temp_c", 10.0)),
+        ))
+        self._grid_guard_result = None  # Last evaluation result
+
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
@@ -852,6 +863,88 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
 
+    def _evaluate_grid_guard(self, state: CarmaboxState) -> "GridGuardResult":
+        """Build Grid Guard input from current state and evaluate."""
+        from .core.grid_guard import BatteryState, Consumer, GridGuardResult
+
+        now = datetime.now()
+        opts = self._cfg
+
+        # Read Ellevio weighted timmedel from HA sensor
+        viktat_kw = self._read_float(
+            "sensor.ellevio_viktad_timmedel_pagaende", 0.0
+        )
+
+        # Battery states
+        adapters = self.inverter_adapters
+        batteries = []
+        for i, adapter in enumerate(adapters):
+            bat_id = adapter.prefix if adapter else f"bat_{i}"
+            soc = state.battery_soc_1 if i == 0 else state.battery_soc_2
+            power = state.battery_power_1 if i == 0 else state.battery_power_2
+            cap = float(opts.get(f"battery_{i+1}_kwh", 15.0 if i == 0 else 5.0))
+            min_soc = float(opts.get("battery_min_soc", 15))
+            temp = (
+                state.battery_min_cell_temp_1 if i == 0
+                else getattr(state, "battery_min_cell_temp_2", 15.0)
+            ) or 15.0
+            ems = adapter.ems_mode if adapter else ""
+            fc = adapter.fast_charging_on if adapter else False
+            avail = max(0, (soc - min_soc) / 100 * cap)
+
+            batteries.append(BatteryState(
+                id=bat_id, soc=soc, power_w=power,
+                cell_temp_c=temp, ems_mode=ems,
+                fast_charging_on=fc, available_kwh=avail,
+            ))
+
+        # Controllable consumers for action ladder
+        consumers = []
+        consumer_defs = [
+            ("vp_kontor", "sensor.kontor_varmepump_alltid_pa_switch_0_power",
+             "", "climate.kontor_ac", 1),
+            ("miner", "sensor.shelly1pmg4_a085e3bd1e60_power",
+             "switch.shelly1pmg4_a085e3bd1e60", "", 2),
+            ("elvarmare_pool", "sensor.shellypro1pm_30c6f7826520_power",
+             "switch.shellypro1pm_30c6f7826520", "", 3),
+            ("vp_pool", "sensor.shellypro1pm_a0dd6c9ecfd8_power",
+             "switch.shellypro1pm_a0dd6c9ecfd8", "", 4),
+        ]
+        for cid, power_sensor, switch, climate, prio in consumer_defs:
+            power = self._read_float(power_sensor, 0.0)
+            consumers.append(Consumer(
+                id=cid, name=cid, power_w=power,
+                is_active=power > 50,
+                priority_shed=prio,
+                entity_switch=switch,
+                entity_climate=climate,
+            ))
+
+        # Kontor temperature
+        kontor_temp = 20.0
+        climate_state = self.hass.states.get("climate.kontor_ac")
+        if climate_state:
+            kontor_temp = float(
+                climate_state.attributes.get("current_temperature", 20.0) or 20.0
+            )
+
+        ev_phase = int(opts.get("ev_phase_count", 3))
+
+        return self._grid_guard.evaluate(
+            viktat_timmedel_kw=viktat_kw,
+            grid_import_w=max(0, state.grid_power_w),
+            hour=now.hour,
+            minute=now.minute,
+            ev_power_w=state.ev_power_w,
+            ev_amps=self._ev_current_amps,
+            ev_phase_count=ev_phase,
+            batteries=batteries,
+            consumers=consumers,
+            kontor_temp_c=kontor_temp,
+            timestamp=time.monotonic(),
+            fast_charge_authorized=getattr(self, "_fast_charge_authorized", False),
+        )
+
     @property
     def slots(self):
         """Convert HourPlan → SchedulerHourSlot-compatible for sensor.py."""
@@ -963,6 +1056,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._run_deferred_write_verifies()
 
             state = self._collect_state()
+
+            # ── LAYER 0: Grid Guard — runs FIRST, every cycle ──
+            self._grid_guard_result = self._evaluate_grid_guard(state)
+            if self._grid_guard_result.invariant_violations:
+                _LOGGER.warning(
+                    "GRID GUARD FÖRBUD: %s",
+                    "; ".join(self._grid_guard_result.invariant_violations),
+                )
+            if self._grid_guard_result.status in ("WARNING", "CRITICAL"):
+                _LOGGER.warning(
+                    "GRID GUARD %s: projected=%.2f kW, headroom=%.2f kW, reason=%s",
+                    self._grid_guard_result.status,
+                    self._grid_guard_result.projected_kw,
+                    self._grid_guard_result.headroom_kw,
+                    self._grid_guard_result.reason,
+                )
 
             self._plan_counter += 1
             if self._plan_counter >= PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS:
