@@ -40,6 +40,8 @@ class PlannerConfig:
     discharge_rate_winter_kw: float = 0.5
     solar_strong_threshold_kwh: float = 25.0
     solar_partial_threshold_kwh: float = 15.0
+    ev_phase_count: int = 3
+    ellevio_night_weight: float = 0.5
 
 
 @dataclass
@@ -90,6 +92,24 @@ def generate_carma_plan(
         max_discharge = cfg.discharge_rate_partial_kw
     else:
         max_discharge = cfg.discharge_rate_winter_kw
+
+    # ── Night reserve: don't discharge daytime if batteries needed tonight ──
+    # Calculate how much battery is needed for tonight's EV support
+    ev_kw = 230 * int(getattr(cfg, 'ev_phase_count', 3)) * 6 / 1000  # min 6A
+    house_kw = 1.7  # Typical night consumption
+    grid_max_night = cfg.ellevio_tak_kw / cfg.ellevio_night_weight  # Actual kW
+    bat_per_hour_night = max(0, ev_kw + house_kw - grid_max_night)
+    night_hours = 8
+    disk_margin_kwh = 3.0  # Reserve for dishwasher/appliances
+    night_reserve_kwh = bat_per_hour_night * night_hours + disk_margin_kwh
+
+    available_kwh = max(0, (input_data.battery_soc - min_soc) / 100
+                        * input_data.battery_cap_kwh)
+    max_day_discharge_kwh = max(0, available_kwh - night_reserve_kwh)
+
+    # If no room for daytime discharge, force max_discharge to 0
+    if max_day_discharge_kwh <= 0.5:
+        max_discharge = 0.0  # Save everything for night
 
     # Trim to same length
     n = min(
