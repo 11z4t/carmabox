@@ -1293,17 +1293,32 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         try:
             now = datetime.now()
 
-            # ── RC-2: STARTUP SAFETY — fast_charging OFF OMEDELBART ──
-            if not getattr(self, "_startup_safety_done", False):
-                self._startup_safety_done = True
-                _LOGGER.info("STARTUP SAFETY: Stänger av fast_charging på alla inverters")
+            # ── RC-2: STARTUP SAFETY — fast_charging OFF + standby ──
+            # Körs varje cykel tills BEKRÄFTAT att fast_charging=OFF
+            if not getattr(self, "_startup_safety_confirmed", False):
+                all_off = True
                 for adapter in self.inverter_adapters:
                     try:
-                        await adapter.set_fast_charging(on=False)
-                        await adapter.set_ems_mode("battery_standby")
+                        # Kolla om fast_charging fortfarande ON
+                        fc_entity = f"switch.goodwe_fast_charging_switch_{adapter.prefix}"
+                        fc_state = self.hass.states.get(fc_entity)
+                        if fc_state and fc_state.state == "on":
+                            _LOGGER.warning(
+                                "STARTUP SAFETY: %s fast_charging=ON → stänger av",
+                                adapter.prefix,
+                            )
+                            await adapter.set_fast_charging(on=False)
+                            await adapter.set_ems_mode("battery_standby")
+                            all_off = False
+                        elif fc_state is None:
+                            all_off = False  # Sensor inte redo ännu
                     except Exception:
-                        _LOGGER.error("STARTUP SAFETY: Kunde inte stänga av %s", adapter.prefix)
+                        _LOGGER.error("STARTUP SAFETY: %s — adapter ej redo", adapter.prefix)
+                        all_off = False
                 self._fast_charge_authorized = False
+                if all_off:
+                    self._startup_safety_confirmed = True
+                    _LOGGER.info("STARTUP SAFETY: Bekräftat — alla fast_charging OFF")
 
             # Restore persistent state on first run
             if not self._savings_loaded:
@@ -2977,7 +2992,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.total_battery_soc,
                 action,
             )
-            await self._cmd_charge_pv(state)
+            # V2: Use adapter directly, NEVER fast_charging
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("charge_pv")
+                await adapter.set_fast_charging(on=False)
             self._record_decision(
                 state,
                 "charge_pv",
@@ -3012,7 +3030,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     state.grid_power_w,
                 )
                 if result.ok:
-                    await self._cmd_discharge(state, discharge_w)
+                    # V2: Use adapter directly, NEVER EMS auto
+                    for adapter in self.inverter_adapters:
+                        await adapter.set_ems_mode("discharge_pv")
+                        await adapter.set_fast_charging(on=False)
                     self._record_decision(
                         state,
                         "discharge",

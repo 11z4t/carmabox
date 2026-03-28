@@ -280,7 +280,7 @@ def _pv_or_standby(
     cfg: ExecutorConfig,
     reason: str,
 ) -> ExecutorCommand:
-    """Default: charge from PV if available, otherwise standby."""
+    """Default: charge from PV if available, reactive discharge if over target, else standby."""
     if state.pv_power_w > cfg.pv_charge_threshold_w:
         return ExecutorCommand(
             battery_action="charge_pv",
@@ -290,6 +290,21 @@ def _pv_or_standby(
             reason=reason + " (PV tillgänglig → ladda)",
             plan_followed=False,
             deviation_pct=0,
+        )
+    # Reactive discharge even without plan — LAG 1 trumps
+    grid_kw = max(0, state.grid_import_w) / 1000
+    weight = state.ellevio_weight
+    weighted_kw = grid_kw * weight
+    if weighted_kw > state.target_kw * cfg.reactive_discharge_margin:
+        need_w = int((weighted_kw - state.target_kw) / weight * 1000) if weight > 0 else 0
+        return ExecutorCommand(
+            battery_action="discharge",
+            battery_discharge_w=need_w,
+            ev_action="none",
+            ev_amps=0,
+            reason=f"Ingen plan men grid {grid_kw:.1f} kW > target → reaktiv urladdning {need_w}W",
+            plan_followed=False,
+            deviation_pct=100,
         )
     return ExecutorCommand(
         battery_action="standby",

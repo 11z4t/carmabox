@@ -169,6 +169,15 @@ class TestNoPlan:
         )
         assert cmd.battery_action == "standby"
 
+    def test_no_plan_grid_over_target_reactive_discharge(self):
+        """No plan but grid > target → reactive discharge (RC-5 fix)."""
+        cmd = execute_plan_hour(
+            None,
+            _state(grid_w=3000, pv_w=0, target_kw=2.0, weight=1.0),
+        )
+        assert cmd.battery_action == "discharge"
+        assert cmd.battery_discharge_w > 0
+
 
 class TestEVAmps:
     def test_3phase_6a(self):
