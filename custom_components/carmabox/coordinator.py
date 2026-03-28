@@ -3141,17 +3141,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         discharge_w=discharge_w,
                     )
                     # CARMA-P0-FIXES Task 3d: Call miner from watchdog discharge path too
-                    await self._execute_ev(state)
+                    if not getattr(self, "_night_ev_active", False):
+                        await self._execute_ev(state)
                     await self._execute_miner(state)
                     await self._execute_climate(state)
                     return
 
-        # W4: EV charging + grid importing during day
+        # W4: EV charging + grid importing during day — SKIP if night EV active
         if (
             not is_night
             and self._ev_enabled
             and not state.is_exporting
             and state.grid_power_w > wd_ev_import_w
+            and not getattr(self, "_night_ev_active", False)
         ):
             _LOGGER.warning(
                 "WATCHDOG W4: EV charging but grid importing %.0fW → stopping EV",
