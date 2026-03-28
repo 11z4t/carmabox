@@ -265,6 +265,8 @@ class GridGuard:
                 and bat.cell_temp_c < self.config.cold_lock_temp_c
             )
             min_soc = 20.0 if effective_min else 15.0  # cold → higher floor
+            if bat.soc < 0:
+                continue  # SoC unavailable — skip check
             if bat.soc <= min_soc and bat.power_w > 50:  # discharging below min
                 violations.append(
                     f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% "
