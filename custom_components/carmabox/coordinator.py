@@ -762,13 +762,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._ev_current_amps = int(data.get("ev_current_amps", 6))
                 # Restore miner state
                 self._miner_on = bool(data.get("miner_on", False))
+                # Restore night EV state (survives HA restart)
+                self._night_ev_active = bool(data.get("night_ev_active", False))
                 _LOGGER.info(
-                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s",
+                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s, night_ev=%s",
                     len(self.plan),
                     cmd_str,
                     self._ev_enabled,
                     self._ev_current_amps,
                     self._miner_on,
+                    self._night_ev_active,
                 )
         except Exception:
             _LOGGER.warning("Failed to restore runtime, starting fresh", exc_info=True)
@@ -797,6 +800,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "ev_enabled": self._ev_enabled,
                 "ev_current_amps": self._ev_current_amps,
                 "miner_on": self._miner_on,
+                "night_ev_active": getattr(self, "_night_ev_active", False),
             }
             await self._runtime_store.async_save(data)
         except Exception:
@@ -1417,6 +1421,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if all_off:
                     self._startup_safety_confirmed = True
                     _LOGGER.info("STARTUP SAFETY: Bekräftat — alla fast_charging OFF")
+                    # Recover night EV if it was active before restart
+                    if getattr(self, "_night_ev_active", False):
+                        _LOGGER.info("STARTUP SAFETY: Återställer natt-EV efter restart")
+                        try:
+                            await self.hass.services.async_call(
+                                "button", "press",
+                                {"entity_id": "button.easee_home_12840_override_schedule"},
+                            )
+                            await self.hass.services.async_call(
+                                "switch", "turn_on",
+                                {"entity_id": "switch.easee_home_12840_is_enabled"},
+                            )
+                            await self.hass.services.async_call(
+                                "easee", "set_charger_max_limit",
+                                {"charger_id": "EH128405", "current": 6},
+                            )
+                        except Exception:
+                            _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades")
 
             # Restore persistent state on first run
             if not self._savings_loaded:
