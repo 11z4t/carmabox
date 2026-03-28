@@ -155,8 +155,10 @@ def generate_plan(
                 action = "d"
 
         elif (before_sunrise and available > 0.3 and net > 0.1
-              and soc_kwh > sunrise_target_kwh + 0.5):
-            # P5: Pre-sunrise drain — empty before solar refill
+              and soc_kwh > sunrise_target_kwh + 0.5
+              and (abs_h >= 22 or abs_h < 8)):
+            # P5: Pre-sunrise drain — ONLY at night (22-08)
+            # Never drain batteries during daytime even if PV is low
             remaining_slots = max(1, sunrise_slot - i)
             remaining_drain = max(0, soc_kwh - sunrise_target_kwh)
             target_drain = remaining_drain / remaining_slots
@@ -166,8 +168,10 @@ def generate_plan(
                 soc_kwh -= discharge
                 action = "d"
 
-        # P7: Anti-idle — if battery >80% and no action, discharge slowly
-        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3:
+        # P7: Anti-idle — discharge slowly at night if battery still high
+        # ONLY at night (22-08) — daytime batteries may be needed for evening/night
+        if (action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3
+                and (abs_h >= 22 or abs_h < 8)):
             if available > 0.3:
                 idle_discharge = min(net * 0.5, available, 1.5)
                 if idle_discharge > 0.2:
