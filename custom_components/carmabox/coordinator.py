@@ -1013,8 +1013,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ev_phase = int(opts.get("ev_phase_count", 3))
         ev_departure = int(opts.get("ev_departure_hour", 6))
 
+        if not hasattr(self, "_night_ev_active"):
+            self._night_ev_active = False
         if (is_night and ev_connected and 0 <= ev_soc < ev_target
-                and not self._ev_enabled):
+                and not self._night_ev_active):
             # EV needs charging — start with battery support
             ev_kw = 230 * ev_phase * 6 / 1000  # Min 6A
             house_kw = max(0, state.grid_power_w) / 1000
@@ -1043,6 +1045,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             except Exception:
                 pass
             await self._cmd_ev_start(6)
+            self._night_ev_active = True
 
             # Start proportional battery discharge for EV support
             if bat_support_needed > 0.1:
@@ -1074,15 +1077,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         )
 
         # Stopp EV vid departure hour eller target nådd
-        if self._ev_enabled and (
+        if self._night_ev_active and (
             now.hour == ev_departure
             or (ev_soc >= 0 and ev_soc >= ev_target)
+            or not is_night
         ):
             _LOGGER.info("NATT-EV: Stoppar EV (SoC=%.0f%%, hour=%d)", ev_soc, now.hour)
             await self._cmd_ev_stop()
+            self._night_ev_active = False
 
-        # ── Execute EV command (from plan) ─────────────────────
-        if cmd.ev_action == "start" and cmd.ev_amps >= 6:
+        # ── Execute EV command (from plan) — SKIP if night EV active ──
+        if self._night_ev_active:
+            pass  # Night EV has control — don't override
+        elif cmd.ev_action == "start" and cmd.ev_amps >= 6:
             if not self._ev_enabled:
                 await self._cmd_ev_start(cmd.ev_amps)
             elif cmd.ev_amps != self._ev_current_amps:
@@ -1494,7 +1501,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # PLAT-972: Self-healing — check GoodWe config entries
             await self._self_heal_goodwe_entries()
             # PLAT-972: Self-healing — detect external EV changes
-            self._self_heal_ev_tamper()
+            # _self_heal_ev_tamper() BORTTAGEN — motarbetade V2 natt-EV
 
             # K3 (PLAT-945): Deferred write-verify — check pending verifications
             # from the previous cycle (Modbus has had 30s to propagate).
