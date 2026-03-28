@@ -18,6 +18,7 @@ import logging
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
+from ..const import DEFAULT_EV_MAX_AMPS
 from . import EVAdapter
 
 _LOGGER = logging.getLogger(__name__)
@@ -25,7 +26,6 @@ _LOGGER = logging.getLogger(__name__)
 _RETRY_DELAY_S = 5
 _MAX_LIMIT_FLOOR = 6  # Safe default — raised to 8/10 only when actively charging
 _DYNAMIC_MIN = 6
-_DYNAMIC_MAX = 8  # Max 8A — user preference, reduces Ellevio impact
 
 
 class EaseeAdapter(EVAdapter):
@@ -184,10 +184,11 @@ class EaseeAdapter(EVAdapter):
         """Set charging current via dynamic_charger_limit.
 
         Uses set_charger_dynamic_limit (NOT max_limit — max stays at 10A).
-        Range: 6-10A hard capped.
+        Range: 6-DEFAULT_EV_MAX_AMPS hard capped (defense-in-depth).
         """
         await self.ensure_initialized()
-        amps = max(_DYNAMIC_MIN, min(_DYNAMIC_MAX, amps))
+        # SAFETY: Never exceed hardware limit regardless of caller
+        amps = max(_DYNAMIC_MIN, min(DEFAULT_EV_MAX_AMPS, amps))
         # Raise max_limit if needed (max_limit must be >= dynamic_limit)
         if amps > _MAX_LIMIT_FLOOR and self.charger_id:
             await self._safe_call(

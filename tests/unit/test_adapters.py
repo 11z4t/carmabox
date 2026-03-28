@@ -147,6 +147,23 @@ class TestEaseeAdapter:
         assert call[0][2]["value"] == 10  # S5: Hard cap at 10A (safety)
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("input_amps,expected", [
+        (6, 6),    # AC5: minimum — pass through
+        (8, 8),    # AC3: mid-range — pass through
+        (10, 10),  # AC5: at DEFAULT_EV_MAX_AMPS — pass through
+        (11, 10),  # AC1/AC5: just above max — clamped to 10A
+        (16, 10),  # AC1: 16A would blow fuse — clamped to 10A
+        (32, 10),  # AC2: old max — clamped to 10A
+    ])
+    async def test_set_current_safety_clamp(self, input_amps, expected) -> None:
+        """PLAT-1009: Defense-in-depth — adapter clamps to DEFAULT_EV_MAX_AMPS."""
+        hass = _make_hass()
+        adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        await adapter.set_current(input_amps)
+        call = hass.services.async_call.call_args
+        assert call[0][2]["value"] == expected
+
+    @pytest.mark.asyncio
     async def test_enable(self) -> None:
         hass = _make_hass()
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
