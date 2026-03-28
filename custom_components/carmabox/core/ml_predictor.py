@@ -1,0 +1,195 @@
+"""ML Predictor — learns consumption patterns and optimizes decisions.
+
+Pure Python. No HA imports. Fully testable.
+
+Learns from historical data to improve planning:
+  - House consumption per weekday/hour
+  - Appliance patterns (when dishwasher typically runs)
+  - Battery temperature → discharge capacity
+  - Plan accuracy (planned vs actual per hour)
+  - Atmospheric pressure → PV forecast correction
+
+Stores rolling averages — no heavy ML frameworks needed.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class ConsumptionSample:
+    """One hour of consumption data."""
+
+    weekday: int  # 0=Monday
+    hour: int
+    consumption_kw: float
+    temperature_c: float = 15.0
+
+
+@dataclass
+class PlanAccuracySample:
+    """Planned vs actual for one hour."""
+
+    hour: int
+    planned_grid_kw: float
+    actual_grid_kw: float
+    planned_action: str
+    actual_action: str
+    price: float
+
+
+@dataclass
+class PressureSample:
+    """Atmospheric pressure for PV correlation."""
+
+    pressure_hpa: float
+    pv_actual_kwh: float
+    pv_forecast_kwh: float
+
+
+class MLPredictor:
+    """Learns and predicts energy patterns."""
+
+    def __init__(self) -> None:
+        # Consumption: [weekday][hour] → rolling average
+        self._consumption: dict[tuple[int, int], list[float]] = {}
+        # Appliance: [hour] → count of appliance events
+        self._appliance_hours: dict[int, int] = {}
+        # Plan accuracy: [hour] → list of (planned, actual)
+        self._plan_accuracy: dict[int, list[tuple[float, float]]] = {}
+        # Pressure → PV ratio
+        self._pressure_pv: list[tuple[float, float]] = []  # (pressure, pv_ratio)
+        # Battery temp → effective capacity
+        self._temp_capacity: list[tuple[float, float]] = []
+        # Decision outcomes
+        self._decision_outcomes: list[dict] = []
+        self._max_samples = 30  # Per bucket
+
+    # ── Add samples ─────────────────────────────────────────────
+
+    def add_consumption(self, sample: ConsumptionSample) -> None:
+        """Record one hour of consumption."""
+        key = (sample.weekday, sample.hour)
+        if key not in self._consumption:
+            self._consumption[key] = []
+        self._consumption[key].append(sample.consumption_kw)
+        if len(self._consumption[key]) > self._max_samples:
+            self._consumption[key] = self._consumption[key][-self._max_samples:]
+
+    def add_appliance_event(self, hour: int) -> None:
+        """Record that an appliance ran at this hour."""
+        self._appliance_hours[hour] = self._appliance_hours.get(hour, 0) + 1
+
+    def add_plan_accuracy(self, sample: PlanAccuracySample) -> None:
+        """Record planned vs actual for one hour."""
+        if sample.hour not in self._plan_accuracy:
+            self._plan_accuracy[sample.hour] = []
+        self._plan_accuracy[sample.hour].append(
+            (sample.planned_grid_kw, sample.actual_grid_kw)
+        )
+        if len(self._plan_accuracy[sample.hour]) > self._max_samples:
+            self._plan_accuracy[sample.hour] = self._plan_accuracy[sample.hour][-self._max_samples:]
+
+    def add_pressure_pv(self, pressure_hpa: float, pv_ratio: float) -> None:
+        """Record pressure → PV forecast accuracy."""
+        self._pressure_pv.append((pressure_hpa, pv_ratio))
+        if len(self._pressure_pv) > 100:
+            self._pressure_pv = self._pressure_pv[-100:]
+
+    def add_decision_outcome(
+        self, decision: str, context: dict, outcome: str, laws_ok: bool,
+    ) -> None:
+        """Record decision + outcome for learning."""
+        self._decision_outcomes.append({
+            "decision": decision, "context": context,
+            "outcome": outcome, "laws_ok": laws_ok,
+        })
+        if len(self._decision_outcomes) > 200:
+            self._decision_outcomes = self._decision_outcomes[-200:]
+
+    # ── Predictions ─────────────────────────────────────────────
+
+    def predict_consumption(self, weekday: int, hour: int) -> float:
+        """Predicted consumption (kW) for this weekday+hour."""
+        key = (weekday, hour)
+        samples = self._consumption.get(key, [])
+        if not samples:
+            return 1.7  # Default house baseload
+        return sum(samples) / len(samples)
+
+    def predict_24h_consumption(self, weekday: int) -> list[float]:
+        """Predicted 24h consumption profile."""
+        return [self.predict_consumption(weekday, h) for h in range(24)]
+
+    def predict_appliance_risk(self, hour: int) -> float:
+        """Probability (0-1) that an appliance runs at this hour."""
+        total = sum(self._appliance_hours.values())
+        if total == 0:
+            return 0.1  # Default 10% baseline
+        return self._appliance_hours.get(hour, 0) / total
+
+    def get_plan_correction_factor(self, hour: int) -> float:
+        """How much to adjust plan for this hour (1.0 = no correction)."""
+        samples = self._plan_accuracy.get(hour, [])
+        if len(samples) < 3:
+            return 1.0
+        ratios = [actual / max(0.1, planned) for planned, actual in samples if planned > 0.1]
+        if not ratios:
+            return 1.0
+        return sum(ratios) / len(ratios)
+
+    def predict_pv_correction(self, pressure_hpa: float) -> float:
+        """PV forecast correction factor based on pressure."""
+        if not self._pressure_pv:
+            return 1.0
+        # Simple: high pressure → PV usually better than forecast
+        # Low pressure → PV usually worse
+        high = [r for p, r in self._pressure_pv if p > 1015]
+        low = [r for p, r in self._pressure_pv if p < 1005]
+        if pressure_hpa > 1015 and high:
+            return sum(high) / len(high)
+        if pressure_hpa < 1005 and low:
+            return sum(low) / len(low)
+        return 1.0
+
+    def get_effective_decisions(self) -> dict[str, float]:
+        """Which decisions keep laws intact? Returns effectiveness 0-1."""
+        by_decision: dict[str, list[bool]] = {}
+        for d in self._decision_outcomes:
+            key = d["decision"]
+            if key not in by_decision:
+                by_decision[key] = []
+            by_decision[key].append(d["laws_ok"])
+        return {
+            k: sum(v) / len(v) if v else 0.5
+            for k, v in by_decision.items()
+        }
+
+    # ── Serialization ───────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        """Serialize for persistent storage."""
+        return {
+            "consumption": {
+                f"{k[0]}_{k[1]}": v for k, v in self._consumption.items()
+            },
+            "appliance_hours": self._appliance_hours,
+            "pressure_pv": self._pressure_pv[-50:],
+            "decision_outcomes": self._decision_outcomes[-50:],
+        }
+
+    def from_dict(self, data: dict) -> None:
+        """Restore from persistent storage."""
+        for key_str, values in data.get("consumption", {}).items():
+            parts = key_str.split("_")
+            if len(parts) == 2:
+                self._consumption[(int(parts[0]), int(parts[1]))] = values
+        self._appliance_hours = data.get("appliance_hours", {})
+        self._pressure_pv = data.get("pressure_pv", [])
+        self._decision_outcomes = data.get("decision_outcomes", [])
+
+    @property
+    def is_trained(self) -> bool:
+        """True if we have enough data to make predictions."""
+        return len(self._consumption) >= 24  # At least 1 day of data
