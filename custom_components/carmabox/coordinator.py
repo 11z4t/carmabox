@@ -1003,7 +1003,69 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await adapter.set_ems_mode("battery_standby")
                 await adapter.set_fast_charging(on=False)
 
-        # ── Execute EV command ──────────────────────────────────
+        # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
+        is_night = now.hour >= 22 or now.hour < 6
+        ev_connected = (
+            self.ev_adapter and self.ev_adapter.cable_locked
+        ) if self.ev_adapter else False
+        ev_soc = state.ev_soc if state.ev_soc >= 0 else -1
+        ev_target = float(opts.get("ev_night_target_soc", 75))
+        ev_phase = int(opts.get("ev_phase_count", 3))
+        ev_departure = int(opts.get("ev_departure_hour", 6))
+
+        if (is_night and ev_connected and 0 <= ev_soc < ev_target
+                and not self._ev_enabled):
+            # EV needs charging — start with battery support
+            ev_kw = 230 * ev_phase * 6 / 1000  # Min 6A
+            house_kw = max(0, state.grid_power_w) / 1000
+            grid_max = float(opts.get("ellevio_tak_kw", 2.0)) / 0.5  # Night actual
+            bat_support_needed = max(0, ev_kw + house_kw - grid_max)
+
+            _LOGGER.info(
+                "NATT-EV: SoC %.0f%% < target %.0f%%, starting EV 6A + "
+                "urladdning %.0fW",
+                ev_soc, ev_target, bat_support_needed * 1000,
+            )
+            await self._cmd_ev_start(6)
+
+            # Start proportional battery discharge for EV support
+            if bat_support_needed > 0.1:
+                bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
+                bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
+                min_soc_val = float(opts.get("battery_min_soc", 15.0))
+                temp1 = getattr(state, "battery_min_cell_temp_1", 15.0) or 15.0
+                temp2 = getattr(state, "battery_min_cell_temp_2", 15.0) or 15.0
+                bats = [
+                    BatteryInfo("kontor", state.battery_soc_1, bat1_kwh, temp1,
+                                min_soc=min_soc_val),
+                    BatteryInfo("forrad", state.battery_soc_2, bat2_kwh, temp2,
+                                min_soc=min_soc_val),
+                ]
+                bal = calculate_proportional_discharge(
+                    bats, int(bat_support_needed * 1000),
+                )
+                adapters = self.inverter_adapters
+                for i, alloc in enumerate(bal.allocations):
+                    if i < len(adapters) and alloc.watts > 50:
+                        await adapters[i].set_ems_mode("discharge_pv")
+                        await adapters[i].set_fast_charging(on=False)
+                        await self.hass.services.async_call(
+                            "number", "set_value",
+                            {
+                                "entity_id": f"number.goodwe_{adapters[i].prefix}_ems_power_limit",
+                                "value": alloc.watts,
+                            },
+                        )
+
+        # Stopp EV vid departure hour eller target nådd
+        if self._ev_enabled and (
+            now.hour == ev_departure
+            or (ev_soc >= 0 and ev_soc >= ev_target)
+        ):
+            _LOGGER.info("NATT-EV: Stoppar EV (SoC=%.0f%%, hour=%d)", ev_soc, now.hour)
+            await self._cmd_ev_stop()
+
+        # ── Execute EV command (from plan) ─────────────────────
         if cmd.ev_action == "start" and cmd.ev_amps >= 6:
             if not self._ev_enabled:
                 await self._cmd_ev_start(cmd.ev_amps)
@@ -1013,20 +1075,33 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if self._ev_enabled:
                 await self._cmd_ev_stop()
 
-        # ── Surplus chain (when exporting) ──────────────────────
-        if state.grid_power_w < -100:  # Exporting
-            surplus_w = abs(state.grid_power_w)
-            consumers = self._build_surplus_consumers(state)
-            if not hasattr(self, "_surplus_hysteresis"):
-                from .core.surplus_chain import HysteresisState
-                self._surplus_hysteresis = HysteresisState()
+        # ── Surplus chain — ALWAYS runs ──────────────────────────
+        if not hasattr(self, "_surplus_hysteresis"):
+            from .core.surplus_chain import HysteresisState
+            self._surplus_hysteresis = HysteresisState()
 
+        consumers = self._build_surplus_consumers(state)
+        surplus_cfg = SurplusConfig(start_delay_s=60, stop_delay_s=180)
+
+        if state.grid_power_w < -100:
+            # Exporting → allocate surplus to consumers
+            surplus_w = abs(state.grid_power_w)
             result = allocate_surplus(
                 surplus_w, consumers,
-                self._surplus_hysteresis,
-                SurplusConfig(start_delay_s=60, stop_delay_s=180),
+                self._surplus_hysteresis, surplus_cfg,
             )
             await self._execute_surplus_allocations(result.allocations)
+        elif state.grid_power_w > 100:
+            # Importing → reduce consumers if over target
+            weight = 0.5 if (now.hour >= 22 or now.hour < 6) else 1.0
+            viktat_kw = max(0, state.grid_power_w) / 1000 * weight
+            if viktat_kw > self.target_kw * 1.05:
+                deficit_w = (viktat_kw - self.target_kw) / weight * 1000
+                reductions = should_reduce_consumers(
+                    deficit_w, consumers,
+                    self._surplus_hysteresis, surplus_cfg,
+                )
+                await self._execute_surplus_allocations(reductions)
 
         # ── Replan check ────────────────────────────────────────
         if not hasattr(self, "_replan_deviation_count"):
