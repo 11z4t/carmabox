@@ -1614,9 +1614,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
             price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
             today_prices = price_adapter.today_prices
-            _LOGGER.info(
-                "Plan: price_entity=%s, today[0:3]=%s, fallback=%s",
-                price_entity, today_prices[:3], fallback_price,
+            _LOGGER.warning(
+                "PLAN DATA: entity=%s, today[0:3]=%s, fallback=%s, N=%d",
+                price_entity, today_prices[:3], fallback_price, len(today_prices),
             )
 
             # If primary returns all-fallback, try secondary
