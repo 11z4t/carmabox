@@ -1026,6 +1026,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "urladdning %.0fW",
                 ev_soc, ev_target, bat_support_needed * 1000,
             )
+            # Override Easee internal schedule (blocks charging otherwise)
+            try:
+                await self.hass.services.async_call(
+                    "button", "press",
+                    {"entity_id": "button.easee_home_12840_override_schedule"},
+                )
+            except Exception:
+                _LOGGER.warning("NATT-EV: override_schedule misslyckades")
+            # Set max charger limit (resets at HA restart)
+            try:
+                await self.hass.services.async_call(
+                    "easee", "set_charger_max_limit",
+                    {"charger_id": "EH128405", "current": 16},
+                )
+            except Exception:
+                pass
             await self._cmd_ev_start(6)
 
             # Start proportional battery discharge for EV support
