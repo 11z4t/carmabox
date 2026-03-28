@@ -77,6 +77,18 @@ def generate_plan(
     min_soc_kwh = battery_min_soc / 100 * battery_cap_kwh
     max_charge_kwh = grid_charge_max_soc / 100 * battery_cap_kwh
 
+    # ── Night reserve: don't discharge daytime if batteries needed tonight ──
+    ev_kw_min = 230 * 3 * 6 / 1000  # 6A 3-phase = 4.14 kW
+    house_kw = 1.7
+    grid_max_night = 4.0  # Ellevio 2kW viktat / 0.5 night weight
+    bat_per_hour_night = max(0, ev_kw_min + house_kw - grid_max_night)
+    night_reserve_kwh = bat_per_hour_night * 8 + 3.0  # 8h + disk margin
+    available_kwh = max(0, soc_kwh - min_soc_kwh)
+    max_day_discharge_kwh = max(0, available_kwh - night_reserve_kwh)
+    # If daytime and no room for discharge → cap max_discharge_kw
+    if max_day_discharge_kwh <= 0.5 and start_hour >= 6 and start_hour < 22:
+        max_discharge_kw = 0.0  # Save everything for night
+
     # ── Price-aware arbitrage thresholds ─────────────────────────
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
     median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
