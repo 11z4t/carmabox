@@ -995,6 +995,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await adapter.set_ems_mode("charge_pv")
                 await adapter.set_fast_charging(
                     on=True, power_pct=100, soc_target=100,
+                    authorized=True,
                 )
 
         elif cmd.battery_action == "standby":
@@ -1292,6 +1293,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         try:
             now = datetime.now()
 
+            # ── RC-2: STARTUP SAFETY — fast_charging OFF OMEDELBART ──
+            if not getattr(self, "_startup_safety_done", False):
+                self._startup_safety_done = True
+                _LOGGER.info("STARTUP SAFETY: Stänger av fast_charging på alla inverters")
+                for adapter in self.inverter_adapters:
+                    try:
+                        await adapter.set_fast_charging(on=False)
+                        await adapter.set_ems_mode("battery_standby")
+                    except Exception:
+                        _LOGGER.error("STARTUP SAFETY: Kunde inte stänga av %s", adapter.prefix)
+                self._fast_charge_authorized = False
+
             # Restore persistent state on first run
             if not self._savings_loaded:
                 self._savings_loaded = True
@@ -1427,11 +1440,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
             if not grid_guard_acted:
-                use_v2 = self._cfg.get("use_plan_executor", True)
-                if use_v2:
-                    await self._execute_v2(state)
-                else:
-                    await self._execute(state)
+                await self._execute_v2(state)
             else:
                 _LOGGER.info("GRID GUARD: Skippar execute — guard har kontroll")
             await self._watchdog(state)

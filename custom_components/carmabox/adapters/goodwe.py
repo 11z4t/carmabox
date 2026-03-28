@@ -166,8 +166,22 @@ class GoodWeAdapter(InverterAdapter):
         on: bool,
         power_pct: int = 100,
         soc_target: int = 100,
+        authorized: bool = False,
     ) -> bool:
-        """Set fast charging switch + power + SoC target. Returns True if all succeeded."""
+        """Set fast charging switch + power + SoC target.
+
+        INV-3 HÅRDSPÄRR: fast_charging kan ALDRIG sättas ON utan
+        explicit authorized=True. Detta förhindrar att gammal kod
+        eller automationer aktiverar fast_charging oavsiktligt.
+        """
+        if on and not authorized:
+            _LOGGER.warning(
+                "GoodWe %s: BLOCKED fast_charging ON — authorized=False (INV-3)",
+                self.prefix,
+            )
+            # Force OFF instead
+            on = False
+
         switch_entity = f"switch.goodwe_fast_charging_switch_{self.prefix}"
         service = "turn_on" if on else "turn_off"
         ok = await self._safe_call(
