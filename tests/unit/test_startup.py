@@ -123,3 +123,46 @@ class TestStartupSafety:
             ev_target_soc=75,
         )
         assert cmd.action == "ready"
+
+
+    def test_no_restore_when_ev_disabled(self):
+        """ev_enabled=False + night_ev_active=True → ready (user override)."""
+        state = StartupState(night_ev_active=True, ev_enabled=False)
+        cmd = evaluate_startup(
+            sensors_ready=True,
+            fast_charging_confirmed_off=True,
+            restored_state=state,
+            is_night=True,
+            ev_connected=True,
+            ev_soc=60,
+            ev_target_soc=75,
+        )
+        assert cmd.action == "ready"
+        assert cmd.start_ev is False
+
+    def test_fast_charging_priority_over_sensors(self):
+        """fast_charging not confirmed → safe_mode even if sensors not ready."""
+        cmd = evaluate_startup(
+            sensors_ready=False,
+            fast_charging_confirmed_off=False,
+            restored_state=None,
+            is_night=True,
+            ev_connected=True,
+            ev_soc=60,
+            ev_target_soc=75,
+        )
+        assert cmd.action == "safe_mode"
+
+    def test_ev_soc_at_exact_target(self):
+        """EV SoC exactly at target → ready (no restore needed)."""
+        state = StartupState(night_ev_active=True, ev_enabled=True)
+        cmd = evaluate_startup(
+            sensors_ready=True,
+            fast_charging_confirmed_off=True,
+            restored_state=state,
+            is_night=True,
+            ev_connected=True,
+            ev_soc=75,
+            ev_target_soc=75,
+        )
+        assert cmd.action == "ready"

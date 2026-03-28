@@ -24,8 +24,6 @@ class StartupState:
     night_ev_active: bool = False
     ev_enabled: bool = False
     ev_current_amps: int = 6
-    last_command: str = "STANDBY"
-    plan_valid: bool = False
 
 
 @dataclass
@@ -36,7 +34,7 @@ class StartupCommand:
     fast_charging_off: bool = True  # ALWAYS
     set_standby: bool = True
     start_ev: bool = False
-    ev_amps: int = 6
+    ev_amps: int = 6  # STARTUP_EV_SAFE_AMPS
     override_schedule: bool = False
     reason: str = ""
 
@@ -85,6 +83,7 @@ def evaluate_startup(
     # Step 3: Restore night EV if applicable
     if (restored_state
             and restored_state.night_ev_active
+            and restored_state.ev_enabled
             and is_night
             and ev_connected
             and 0 <= ev_soc < ev_target_soc):
