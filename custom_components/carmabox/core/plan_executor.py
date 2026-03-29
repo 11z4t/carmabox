@@ -40,7 +40,7 @@ class ExecutorConfig:
 
     ev_phase_count: int = 3
     ev_min_amps: int = 6
-    ev_max_amps: int = 16
+    ev_max_amps: int = 10
     grid_charge_price_threshold: float = 15.0
     pv_charge_threshold_w: float = 500.0
     reactive_discharge_margin: float = 1.05  # Discharge if grid > target × this
@@ -180,7 +180,7 @@ def calculate_ev_amps(
     headroom_kw: float,
     phase_count: int = 3,
     min_amps: int = 6,
-    max_amps: int = 16,
+    max_amps: int = 10,
 ) -> int:
     """Calculate max EV amps that fit within grid headroom.
 

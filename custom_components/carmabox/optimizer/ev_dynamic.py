@@ -23,7 +23,7 @@ def calculate_dynamic_amps(
     night_weight: float,
     battery_discharge_kw: float = 0.0,
     min_amps: int = 0,
-    max_amps: int = 16,
+    max_amps: int = 10,
     voltage: float = DEFAULT_VOLTAGE,
 ) -> int:
     """Calculate optimal EV amps for current conditions.

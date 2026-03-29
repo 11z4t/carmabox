@@ -74,7 +74,7 @@ def should_stop_solar_ev(
 def calculate_solar_ev_amps(
     pv_surplus_kw: float,
     min_amps: int = 6,
-    max_amps: int = 16,
+    max_amps: int = 10,
     voltage: float = DEFAULT_VOLTAGE,
 ) -> int:
     """Calculate EV amps from PV surplus.

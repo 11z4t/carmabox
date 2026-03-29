@@ -42,6 +42,7 @@ from .const import (
     DEFAULT_DAILY_BATTERY_NEED_KWH,
     DEFAULT_DAILY_CONSUMPTION_KWH,
     DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_MIN_AMPS,
     DEFAULT_EV_NIGHT_HEADROOM_KW,
     DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_FALLBACK_PRICE_ORE,
@@ -941,7 +942,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         exec_cfg = ExecutorConfig(
             ev_phase_count=ev_phase,
             ev_min_amps=int(opts.get("ev_min_amps", 6)),
-            ev_max_amps=int(opts.get("ev_max_amps", 16)),
+            ev_max_amps=int(opts.get("ev_max_amps", DEFAULT_EV_MAX_AMPS)),
             grid_charge_price_threshold=float(
                 opts.get("grid_charge_price_threshold", 15.0)
             ),
@@ -1044,7 +1045,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             try:
                 await self.hass.services.async_call(
                     "easee", "set_charger_max_limit",
-                    {"charger_id": "EH128405", "current": 16},
+                    {"charger_id": opts.get("easee_charger_id", "EH128405"), "current": DEFAULT_EV_MIN_AMPS},
                 )
             except Exception:
                 pass
@@ -1435,7 +1436,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             )
                             await self.hass.services.async_call(
                                 "easee", "set_charger_max_limit",
-                                {"charger_id": "EH128405", "current": 6},
+                                {"charger_id": opts.get("easee_charger_id", "EH128405"), "current": DEFAULT_EV_MIN_AMPS},
                             )
                         except Exception:
                             _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades")

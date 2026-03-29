@@ -34,7 +34,7 @@ class StartupCommand:
     fast_charging_off: bool = True  # ALWAYS
     set_standby: bool = True
     start_ev: bool = False
-    ev_amps: int = 6  # STARTUP_EV_SAFE_AMPS
+    ev_amps: int = 6  # DEFAULT_EV_MIN_AMPS from const
     override_schedule: bool = False
     reason: str = ""
 
