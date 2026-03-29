@@ -80,7 +80,7 @@ class TestCalculateSolarEVAmps:
         assert amps == 8  # 2000/230 = 8.7 → 8
 
     def test_4kw_surplus(self) -> None:
-        amps = calculate_solar_ev_amps(4.0)
+        amps = calculate_solar_ev_amps(4.0, max_amps=16)
         assert amps == 16  # Capped at max
 
     def test_below_min(self) -> None:

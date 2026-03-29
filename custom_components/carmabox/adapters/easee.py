@@ -24,7 +24,7 @@ from . import EVAdapter
 _LOGGER = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5
-_MAX_LIMIT_FLOOR = 6  # Safe default — raised to 8/10 only when actively charging
+_MAX_LIMIT_FLOOR = 10  # PLAT-1032: 6A causes Easee "waiting_in_fully" block — 10A is safe minimum
 _DYNAMIC_MIN = 6
 
 
@@ -59,6 +59,12 @@ class EaseeAdapter(EVAdapter):
             await self._safe_call(
                 "easee", "set_charger_dynamic_limit",
                 {"charger_id": self.charger_id, "current": _DYNAMIC_MIN},
+            )
+        # PLAT-1032: Set circuit dynamic limit as deep safety net
+        if self.charger_id:
+            await self._safe_call(
+                "easee", "set_circuit_dynamic_limit",
+                {"charger_id": self.charger_id, "current": _MAX_LIMIT_FLOOR},
             )
         # Disable smart charging (Easee cloud queue blocks us)
         await self._safe_call(

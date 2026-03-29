@@ -20,6 +20,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS
+
 
 @dataclass
 class PlanAction:
@@ -39,8 +41,8 @@ class ExecutorConfig:
     """Parameterstyrd konfiguration."""
 
     ev_phase_count: int = 3
-    ev_min_amps: int = 6
-    ev_max_amps: int = 10
+    ev_min_amps: int = DEFAULT_EV_MIN_AMPS
+    ev_max_amps: int = DEFAULT_EV_MAX_AMPS
     grid_charge_price_threshold: float = 15.0
     pv_charge_threshold_w: float = 500.0
     reactive_discharge_margin: float = 1.05  # Discharge if grid > target × this

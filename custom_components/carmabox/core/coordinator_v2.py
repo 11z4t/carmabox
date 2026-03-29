@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from ..const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS
 from .battery_balancer import BatteryInfo, calculate_proportional_discharge
 from .grid_guard import BatteryState, GridGuard, GridGuardConfig
 from .law_guardian import GuardianState, LawGuardian
@@ -54,8 +55,8 @@ class CoordinatorConfig:
     cold_lock_temp_c: float = 4.0
     max_discharge_kw: float = 5.0
     ev_phase_count: int = 3
-    ev_min_amps: int = 6
-    ev_max_amps: int = 10  # DEFAULT_EV_MAX_AMPS
+    ev_min_amps: int = DEFAULT_EV_MIN_AMPS
+    ev_max_amps: int = DEFAULT_EV_MAX_AMPS
     ev_target_soc: float = 75.0
     ev_departure_hour: int = 6
     ev_capacity_kwh: float = 92.0

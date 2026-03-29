@@ -2567,3 +2567,60 @@ class TestPriceAwareDischargeThrottle:
         assert coord._last_command == BatteryCommand.DISCHARGE
         # Full discharge — no throttle mentioned
         assert "throttl" not in (coord.last_decision.reason or "").lower()
+
+
+# ── PLAT-1050: Surplus EV amp clamping uses constants ──────────────
+
+
+class TestSurplusEvAmpClamping:
+    """Verify _execute_surplus_allocations clamps amps to DEFAULT_EV constants."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "target_w, action, expected_amps",
+        [
+            # amps = int(W / 690). Clamped to [DEFAULT_EV_MIN_AMPS, DEFAULT_EV_MAX_AMPS] = [6, 10]
+            (0, "start", 6),          # 0A → clamped to min 6
+            (3450, "start", 6),       # 5A → clamped to min 6
+            (4140, "start", 6),       # 6A → exactly min
+            (6900, "start", 10),      # 10A → exactly max
+            (7590, "start", 10),      # 11A → clamped to max 10
+            (11040, "start", 10),     # 16A → clamped to max 10
+            (22080, "start", 10),     # 32A → clamped to max 10
+            (4140, "increase", 6),    # 6A increase → min
+            (6900, "increase", 10),   # 10A increase → max
+            (11040, "increase", 10),  # 16A increase → clamped to max 10
+            (22080, "increase", 10),  # 32A increase → clamped to max 10
+        ],
+    )
+    async def test_ev_amp_clamping(self, target_w, action, expected_amps):
+        """Amps must never exceed DEFAULT_EV_MAX_AMPS or go below DEFAULT_EV_MIN_AMPS."""
+        from custom_components.carmabox.const import (
+            DEFAULT_EV_MAX_AMPS,
+            DEFAULT_EV_MIN_AMPS,
+        )
+        from custom_components.carmabox.core.surplus_chain import SurplusAllocation
+
+        coord = _make_coordinator()
+        coord._cmd_ev_start = AsyncMock()
+        coord._cmd_ev_adjust = AsyncMock()
+        coord._cmd_ev_stop = AsyncMock()
+
+        alloc = SurplusAllocation(
+            id="ev", action=action, target_w=target_w, current_w=0, reason="test",
+        )
+        # start action requires target_w >= 4140; skip call verification for lower values
+        await coord._execute_surplus_allocations([alloc])
+
+        if action == "start" and target_w >= 4140:
+            coord._cmd_ev_start.assert_called_once()
+            actual = coord._cmd_ev_start.call_args[0][0]
+            assert actual == expected_amps
+            assert actual >= DEFAULT_EV_MIN_AMPS
+            assert actual <= DEFAULT_EV_MAX_AMPS
+        elif action == "increase":
+            coord._cmd_ev_adjust.assert_called_once()
+            actual = coord._cmd_ev_adjust.call_args[0][0]
+            assert actual == expected_amps
+            assert actual >= DEFAULT_EV_MIN_AMPS
+            assert actual <= DEFAULT_EV_MAX_AMPS

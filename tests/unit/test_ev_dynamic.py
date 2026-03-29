@@ -17,6 +17,7 @@ class TestCalculateDynamicAmps:
             current_ev_amps=6,
             target_weighted_kw=2.0,
             night_weight=0.5,  # 4 kW actual max
+            max_amps=16,
         )
         assert amps == 13  # (4-1)*1000/230 = 13
 

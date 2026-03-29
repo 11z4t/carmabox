@@ -941,7 +941,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ev_phase = int(opts.get("ev_phase_count", 3))
         exec_cfg = ExecutorConfig(
             ev_phase_count=ev_phase,
-            ev_min_amps=int(opts.get("ev_min_amps", 6)),
+            ev_min_amps=int(opts.get("ev_min_amps", DEFAULT_EV_MIN_AMPS)),
             ev_max_amps=int(opts.get("ev_max_amps", DEFAULT_EV_MAX_AMPS)),
             grid_charge_price_threshold=float(
                 opts.get("grid_charge_price_threshold", 15.0)
@@ -1041,14 +1041,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
             except Exception:
                 _LOGGER.warning("NATT-EV: override_schedule misslyckades")
-            # Set max charger limit (resets at HA restart)
-            try:
-                await self.hass.services.async_call(
-                    "easee", "set_charger_max_limit",
-                    {"charger_id": opts.get("easee_charger_id", "EH128405"), "current": DEFAULT_EV_MIN_AMPS},
-                )
-            except Exception:
-                pass
             await self._cmd_ev_start(6)
             self._night_ev_active = True
 
@@ -1195,10 +1187,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 elif alloc.id == "ev":
                     if alloc.action == "start" and alloc.target_w >= 4140:
                         amps = int(alloc.target_w / (230 * 3))
-                        await self._cmd_ev_start(max(6, min(16, amps)))
+                        await self._cmd_ev_start(max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps)))
                     elif alloc.action == "increase":
                         amps = int(alloc.target_w / (230 * 3))
-                        await self._cmd_ev_adjust(max(6, min(16, amps)))
+                        await self._cmd_ev_adjust(max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps)))
                     elif alloc.action == "stop":
                         await self._cmd_ev_stop()
                 elif alloc.id == "battery":
@@ -1434,10 +1426,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                                 "switch", "turn_on",
                                 {"entity_id": "switch.easee_home_12840_is_enabled"},
                             )
-                            await self.hass.services.async_call(
-                                "easee", "set_charger_max_limit",
-                                {"charger_id": opts.get("easee_charger_id", "EH128405"), "current": DEFAULT_EV_MIN_AMPS},
-                            )
+                            # PLAT-1032: max_limit removed — adapter handles via ensure_initialized()
                         except Exception:
                             _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades")
 

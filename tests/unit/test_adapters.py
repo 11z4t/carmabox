@@ -132,7 +132,8 @@ class TestEaseeAdapter:
         hass = _make_hass()
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.set_current(10)
-        hass.services.async_call.assert_called_once_with(
+        # Last call should be the dynamic limit set (after ensure_initialized)
+        hass.services.async_call.assert_any_call(
             "number",
             "set_value",
             {"entity_id": "number.easee_home_12840_dynamic_charger_limit", "value": 10},
@@ -168,7 +169,7 @@ class TestEaseeAdapter:
         hass = _make_hass()
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.enable()
-        hass.services.async_call.assert_called_once_with(
+        hass.services.async_call.assert_any_call(
             "switch",
             "turn_on",
             {"entity_id": "switch.easee_home_12840_is_enabled"},
@@ -179,7 +180,7 @@ class TestEaseeAdapter:
         hass = _make_hass()
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
         await adapter.disable()
-        hass.services.async_call.assert_called_once_with(
+        hass.services.async_call.assert_any_call(
             "switch",
             "turn_off",
             {"entity_id": "switch.easee_home_12840_is_enabled"},
@@ -426,8 +427,10 @@ class TestEaseeSafeCall:
     @pytest.mark.asyncio
     async def test_ha_error_retries(self) -> None:
         hass = _make_hass()
-        hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("timeout"))
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
+        # Pre-initialize so ensure_initialized() won't run during test
+        await adapter.ensure_initialized()
+        hass.services.async_call = AsyncMock(side_effect=HomeAssistantError("timeout"))
         with patch("custom_components.carmabox.adapters.easee._RETRY_DELAY_S", 0):
             result = await adapter.set_current(6)
         assert result is False
