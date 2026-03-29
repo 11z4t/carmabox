@@ -685,7 +685,7 @@ async def test_ev_adapter_keys_populated(hass: HomeAssistant) -> None:
     hass.states.async_set(
         "sensor.easee_home_12840_status",
         "connected",
-        {"id": "EH128405"},
+        {"id": "TEST_CHARGER_01"},
     )
 
     with patch(
@@ -718,7 +718,7 @@ async def test_ev_adapter_keys_populated(hass: HomeAssistant) -> None:
     opts = result["options"]
 
     assert opts["ev_device_id"] == "dev_easee_456"
-    assert opts["ev_charger_id"] == "EH128405"
+    assert opts["ev_charger_id"] == "TEST_CHARGER_01"
     assert opts["ev_prefix"] == "easee_home_12840"
 
 

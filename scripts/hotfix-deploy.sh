@@ -18,8 +18,20 @@ REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SRC="$REPO_DIR/custom_components/carmabox/"
 HA_HOST="hassio@192.168.5.22"
 HA_TARGET="/homeassistant/custom_components/carmabox/"
-# Config entry ID for carmabox (from HA .storage/core.config_entries)
-CONFIG_ENTRY_ID="01KM89TAWV80X6R1SEHWG5JFFX"
+# PLAT-1038: Config entry ID fetched dynamically from HA helper
+# Falls back to env var CARMABOX_ENTRY_ID if HA API is unreachable
+CONFIG_ENTRY_ID="${CARMABOX_ENTRY_ID:-}"
+if [ -z "$CONFIG_ENTRY_ID" ]; then
+    CONFIG_ENTRY_ID=$(ssh "$HA_HOST" "sudo sh -c 'T=\$(cat /run/s6/container_environment/SUPERVISOR_TOKEN) && \
+        curl -sf -H \"Authorization: Bearer \$T\" \
+        http://supervisor/core/api/states/input_text.carmabox_entry_id'" 2>/dev/null \
+        | python3 -c "import sys,json; print(json.load(sys.stdin).get('state',''))" 2>/dev/null || echo "")
+fi
+if [ -z "$CONFIG_ENTRY_ID" ] || [ "$CONFIG_ENTRY_ID" = "unknown" ]; then
+    echo "ERROR: Cannot determine CARMA Box config entry ID."
+    echo "Set input_text.carmabox_entry_id in HA or export CARMABOX_ENTRY_ID."
+    exit 1
+fi
 
 FORCE_RESTART=false
 DRY_RUN=false

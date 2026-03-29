@@ -144,7 +144,7 @@ class CoordinatorV2:
 
         # ── 1. STARTUP SAFETY ───────────────────────────────────
         if not self._startup_confirmed:
-            sensors_ready = state.battery_soc_1 >= 0 and state.grid_import_w != 0
+            sensors_ready = state.battery_soc_1 >= 0 and state.battery_soc_2 >= 0
             fc_off = not state.fast_charging_1 and not state.fast_charging_2
             startup = evaluate_startup(
                 sensors_ready=sensors_ready,
@@ -160,7 +160,7 @@ class CoordinatorV2:
             elif startup.action == "restore_ev":
                 self._startup_confirmed = True
                 self.night_ev_active = True
-                ev_cmd = {"action": "start", "amps": 6, "override_schedule": True}
+                ev_cmd = {"action": "start", "amps": cfg.ev_min_amps, "override_schedule": True}
             else:
                 # Safe mode — standby + fast_charging OFF
                 for i in range(2):
@@ -268,6 +268,7 @@ class CoordinatorV2:
         if (is_night and state.ev_connected
                 and 0 <= state.ev_soc < cfg.ev_target_soc
                 and not self.night_ev_active
+                and state.ev_enabled
                 and not grid_guard_acted):
             bat_avail = sum(
                 max(0, (s - cfg.battery_min_soc) / 100 * c)
@@ -275,15 +276,16 @@ class CoordinatorV2:
                               (state.battery_soc_2, cfg.battery_2_kwh)]
                 if s >= 0
             )
-            if bat_avail > 2.0:
+            min_bat_for_ev_kwh = 2.0
+            if bat_avail > min_bat_for_ev_kwh:
                 self.night_ev_active = True
-                ev_cmd = {"action": "start", "amps": 6, "override_schedule": True}
+                ev_cmd = {"action": "start", "amps": cfg.ev_min_amps, "override_schedule": True}
                 reason_parts.append("night_ev_start")
 
         # Stop natt-EV at departure or target
         if self.night_ev_active:
             if (state.hour == cfg.ev_departure_hour
-                    or (0 <= state.ev_soc >= cfg.ev_target_soc)
+                    or (state.ev_soc >= 0 and state.ev_soc >= cfg.ev_target_soc)
                     or not is_night):
                 self.night_ev_active = False
                 ev_cmd = {"action": "stop", "amps": 0, "override_schedule": False}

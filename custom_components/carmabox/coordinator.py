@@ -35,6 +35,8 @@ from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
 from .const import (
+    DEFAULT_BAT_MAX_CHARGE_W,
+    DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
@@ -55,6 +57,7 @@ from .const import (
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
+    DEFAULT_PROACTIVE_MIN_GRID_W,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PRICE_CHEAP_ORE,
     DEFAULT_PRICE_EXPENSIVE_ORE,
@@ -1154,7 +1157,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         bat_full = state.battery_soc_1 >= 99 and (state.battery_soc_2 < 0 or state.battery_soc_2 >= 99)
         consumers.append(SurplusConsumer(
             "battery", "Batteri", priority=2, type=ConsumerType.VARIABLE,
-            min_w=300, max_w=6000, current_w=bat_power,
+            min_w=DEFAULT_BAT_MIN_CHARGE_W, max_w=DEFAULT_BAT_MAX_CHARGE_W, current_w=bat_power,
             is_running=bat_power > 100 and not bat_full,
         ))
         # Miner
@@ -2459,7 +2462,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _proactive_min_grid_w = 200.0
             _proactive_soc_threshold = 80.0
         else:
-            _proactive_min_grid_w = 300.0
+            _proactive_min_grid_w = DEFAULT_PROACTIVE_MIN_GRID_W
             _proactive_soc_threshold = 90.0
         if (
             state.total_battery_soc >= _proactive_soc_threshold

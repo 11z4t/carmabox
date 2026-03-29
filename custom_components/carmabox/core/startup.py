@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..const import DEFAULT_EV_MIN_AMPS
+
 
 @dataclass
 class StartupState:
@@ -23,7 +25,7 @@ class StartupState:
 
     night_ev_active: bool = False
     ev_enabled: bool = False
-    ev_current_amps: int = 6
+    ev_current_amps: int = DEFAULT_EV_MIN_AMPS
 
 
 @dataclass
@@ -34,7 +36,7 @@ class StartupCommand:
     fast_charging_off: bool = True  # ALWAYS
     set_standby: bool = True
     start_ev: bool = False
-    ev_amps: int = 6  # DEFAULT_EV_MIN_AMPS from const
+    ev_amps: int = DEFAULT_EV_MIN_AMPS
     override_schedule: bool = False
     reason: str = ""
 
@@ -92,7 +94,7 @@ def evaluate_startup(
             fast_charging_off=True,
             set_standby=False,
             start_ev=True,
-            ev_amps=6,  # ALWAYS start at 6A
+            ev_amps=DEFAULT_EV_MIN_AMPS,
             override_schedule=True,
             reason=f"Återställer natt-EV (SoC {ev_soc:.0f}% < target {ev_target_soc:.0f}%)",
         )

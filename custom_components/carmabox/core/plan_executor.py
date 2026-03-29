@@ -181,8 +181,8 @@ def execute_plan_hour(
 def calculate_ev_amps(
     headroom_kw: float,
     phase_count: int = 3,
-    min_amps: int = 6,
-    max_amps: int = 10,
+    min_amps: int = DEFAULT_EV_MIN_AMPS,
+    max_amps: int = DEFAULT_EV_MAX_AMPS,
 ) -> int:
     """Calculate max EV amps that fit within grid headroom.
 
