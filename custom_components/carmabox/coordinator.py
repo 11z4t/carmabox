@@ -1026,7 +1026,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if (is_night and ev_connected and 0 <= ev_soc < ev_target
                 and not self._night_ev_active):
             # EV needs charging — start with battery support
-            ev_kw = 230 * ev_phase * 6 / 1000  # Min 6A
+            ev_kw = 230 * ev_phase * DEFAULT_EV_MIN_AMPS / 1000  # Min 6A
             house_kw = max(0, state.grid_power_w) / 1000
             grid_max = float(opts.get("ellevio_tak_kw", 2.0)) / 0.5  # Night actual
             bat_support_needed = max(0, ev_kw + house_kw - grid_max)
@@ -1148,7 +1148,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ev_power = state.ev_power_w
         consumers.append(SurplusConsumer(
             "ev", "EV", priority=1, type=ConsumerType.VARIABLE,
-            min_w=230 * ev_phase * 6, max_w=230 * ev_phase * 16,
+            min_w=230 * ev_phase * DEFAULT_EV_MIN_AMPS, max_w=230 * ev_phase * 16,
             current_w=ev_power, is_running=ev_power > 100,
             phase_count=ev_phase,
         ))
