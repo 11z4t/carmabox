@@ -54,11 +54,15 @@ class SafetyGuard:
         temperature_min_c: float = 0.0,
         temperature_max_c: float = 45.0,
         max_mode_changes_per_hour: int = 60,
+        temperature_min_charge_c: float = 2.0,
+        temperature_min_discharge_c: float = 0.0,
     ) -> None:
         """Initialize with safety thresholds."""
         self.min_soc = min_soc
         self.crosscharge_threshold_w = crosscharge_threshold_w
-        self.temp_min = temperature_min_c
+        self.temp_min = temperature_min_c  # Legacy fallback
+        self.temp_min_charge = temperature_min_charge_c  # PLAT-1019
+        self.temp_min_discharge = temperature_min_discharge_c  # PLAT-1019
         self.temp_max = temperature_max_c
         self.max_mode_changes = max_mode_changes_per_hour
 
@@ -151,10 +155,10 @@ class SafetyGuard:
             self._log("discharge", r)
             return r
 
-        # Temperature check
+        # Temperature check (PLAT-1019: use discharge-specific threshold)
         if temp_c is not None:
-            if temp_c < self.temp_min:
-                reason = f"temperature {temp_c:.1f}°C < min {self.temp_min}°C"
+            if temp_c < self.temp_min_discharge:
+                reason = f"temperature {temp_c:.1f}°C < min {self.temp_min_discharge}°C"
                 _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
                 r = SafetyResult(ok=False, reason=reason)
                 self._log("discharge", r)
@@ -183,7 +187,7 @@ class SafetyGuard:
 
         Blocks if:
         - All batteries at 100%
-        - Temperature below 0°C (cell damage risk)
+        - Temperature below 2°C (PLAT-1019: LFP cell damage risk)
         """
         # Max SoC
         all_full = soc_1 >= 100 and (soc_2 < 0 or soc_2 >= 100)
@@ -194,9 +198,9 @@ class SafetyGuard:
             self._log("charge", r)
             return r
 
-        # Temperature — never charge below 0°C
-        if temp_c is not None and temp_c < self.temp_min:
-            reason = f"temperature {temp_c:.1f}°C < min {self.temp_min}°C — charge blocked"
+        # Temperature — PLAT-1019: never charge LFP below 2°C
+        if temp_c is not None and temp_c < self.temp_min_charge:
+            reason = f"temperature {temp_c:.1f}°C < min {self.temp_min_charge}°C — charge blocked"
             _LOGGER.debug("SafetyGuard BLOCK charge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("charge", r)

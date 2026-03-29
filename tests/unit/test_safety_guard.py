@@ -155,6 +155,40 @@ class TestCharge:
         result = guard.check_charge(soc_1=50, soc_2=50, temp_c=None)
         assert result.ok
 
+    # ── PLAT-1019: Separate charge/discharge temperature thresholds ──
+
+    def test_block_charge_at_1c(self, guard: SafetyGuard) -> None:
+        """PLAT-1019: 1°C < 2°C charge threshold → block."""
+        result = guard.check_charge(soc_1=50, soc_2=50, temp_c=1.0)
+        assert not result.ok
+        assert "temperature" in result.reason
+
+    def test_block_charge_at_exactly_2c(self, guard: SafetyGuard) -> None:
+        """PLAT-1019: Exactly 2°C is NOT below threshold → pass (boundary)."""
+        # temp_min_charge=2.0, so temp_c=2.0 is NOT < 2.0 → pass
+        result = guard.check_charge(soc_1=50, soc_2=50, temp_c=2.0)
+        assert result.ok
+
+    def test_pass_charge_at_3c(self, guard: SafetyGuard) -> None:
+        """PLAT-1019: 3°C > 2°C charge threshold → pass."""
+        result = guard.check_charge(soc_1=50, soc_2=50, temp_c=3.0)
+        assert result.ok
+
+    def test_pass_discharge_at_1c(self, guard: SafetyGuard) -> None:
+        """PLAT-1019: 1°C > 0°C discharge threshold → pass (discharge OK above 0°C)."""
+        result = guard.check_discharge(
+            soc_1=50, soc_2=50, min_soc=15, grid_power_w=2000, temp_c=1.0
+        )
+        assert result.ok
+
+    def test_block_discharge_at_minus_1c(self, guard: SafetyGuard) -> None:
+        """PLAT-1019: -1°C < 0°C discharge threshold → block."""
+        result = guard.check_discharge(
+            soc_1=50, soc_2=50, min_soc=15, grid_power_w=2000, temp_c=-1.0
+        )
+        assert not result.ok
+        assert "temperature" in result.reason
+
 
 class TestCrosscharge:
     def test_pass_both_charging(self, guard: SafetyGuard) -> None:
