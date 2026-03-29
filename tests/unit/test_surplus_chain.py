@@ -217,3 +217,34 @@ class TestReduceConsumers:
         reductions = should_reduce_consumers(600, [miner], config=_cfg())
         assert reductions[0].action == "stop"
         assert reductions[0].target_w == 0
+
+
+class TestExportAllowed:
+    def test_all_running_export_ok(self):
+        from custom_components.carmabox.core.surplus_chain import is_export_allowed
+        consumers = [
+            _ev(current_w=11000, running=True),  # At max
+            _battery(current_w=6000, running=True),  # At max
+            _miner(current_w=500, running=True),
+        ]
+        assert is_export_allowed(consumers) is True
+
+    def test_miner_off_no_export(self):
+        from custom_components.carmabox.core.surplus_chain import is_export_allowed
+        consumers = [
+            _ev(current_w=11000, running=True),
+            _miner(current_w=0, running=False),
+        ]
+        assert is_export_allowed(consumers) is False
+
+    def test_ev_not_at_max_no_export(self):
+        from custom_components.carmabox.core.surplus_chain import is_export_allowed
+        consumers = [
+            _ev(current_w=4140, running=True),  # Not at max
+        ]
+        assert is_export_allowed(consumers) is False
+
+    def test_dependency_not_met_skipped(self):
+        from custom_components.carmabox.core.surplus_chain import is_export_allowed
+        consumers = [_vp_pool(dep_met=False)]
+        assert is_export_allowed(consumers) is True

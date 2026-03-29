@@ -399,3 +399,23 @@ def _update_allocation(
     allocations.append(SurplusAllocation(
         consumer_id, action, target_w, 0, reason,
     ))
+
+
+def is_export_allowed(consumers: list[SurplusConsumer]) -> bool:
+    """Export only if ALL controllable consumers are full/running/unavailable.
+
+    LAG 4: Export is ABSOLUTE last resort.
+    """
+    for c in consumers:
+        if not c.dependency_met:
+            continue  # Skip if dependency not met (e.g. cirkpump off)
+        if c.type == ConsumerType.VARIABLE:
+            # Variable consumer not at max → can absorb more
+            if c.is_running and c.current_w < c.max_w * 0.95:
+                return False
+            if not c.is_running and c.min_w > 0:
+                return False  # Could start this consumer
+        elif c.type == ConsumerType.ON_OFF:
+            if not c.is_running:
+                return False  # Could turn this on
+    return True  # All consumers full/running → export OK
