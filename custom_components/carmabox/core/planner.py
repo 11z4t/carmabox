@@ -155,3 +155,41 @@ def generate_carma_plan(
         )
         for hp in hour_plans
     ]
+
+
+def apply_p10_safety(
+    pv_forecast_p10_kwh: float,
+    pv_forecast_estimate_kwh: float,
+    daily_consumption_kwh: float = 15.0,
+    p10_threshold_kwh: float = 5.0,
+) -> dict:
+    """PLAT-1004: p10-golv säkerhetsregel.
+
+    Om p10 < threshold → risk för mycket lite sol.
+    Returnerar justerade parametrar för planner.
+    """
+    if pv_forecast_p10_kwh < p10_threshold_kwh:
+        # Confidence låg — spara batterier, nätladda om billigt
+        return {
+            "strategy": "conservative",
+            "max_discharge_kw": 0.5,  # Minimal urladdning
+            "grid_charge_recommended": pv_forecast_p10_kwh < daily_consumption_kwh,
+            "reason": (
+                f"Solcast p10={pv_forecast_p10_kwh:.1f} kWh < {p10_threshold_kwh} kWh "
+                f"— risk för lite sol, spara batterier"
+            ),
+        }
+    confidence = min(1.0, pv_forecast_p10_kwh / max(1, pv_forecast_estimate_kwh))
+    if confidence < 0.5:
+        return {
+            "strategy": "moderate",
+            "max_discharge_kw": 1.0,
+            "grid_charge_recommended": False,
+            "reason": f"Confidence {confidence:.0%} — måttlig urladdning",
+        }
+    return {
+        "strategy": "normal",
+        "max_discharge_kw": 2.0,
+        "grid_charge_recommended": False,
+        "reason": f"Confidence {confidence:.0%} — normal drift",
+    }

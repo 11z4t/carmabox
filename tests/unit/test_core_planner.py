@@ -160,3 +160,23 @@ class TestEdgeCases:
     def test_full_ev(self):
         plan = generate_carma_plan(_input(ev_soc=100))
         assert len(plan) > 0
+
+
+class TestP10Safety:
+    def test_low_p10_conservative(self):
+        from custom_components.carmabox.core.planner import apply_p10_safety
+        r = apply_p10_safety(pv_forecast_p10_kwh=2.0, pv_forecast_estimate_kwh=22.0)
+        assert r["strategy"] == "conservative"
+        assert r["max_discharge_kw"] == 0.5
+        assert r["grid_charge_recommended"] is True
+
+    def test_normal_p10(self):
+        from custom_components.carmabox.core.planner import apply_p10_safety
+        r = apply_p10_safety(pv_forecast_p10_kwh=30.0, pv_forecast_estimate_kwh=35.0)
+        assert r["strategy"] == "normal"
+        assert r["max_discharge_kw"] == 2.0
+
+    def test_moderate_confidence(self):
+        from custom_components.carmabox.core.planner import apply_p10_safety
+        r = apply_p10_safety(pv_forecast_p10_kwh=6.0, pv_forecast_estimate_kwh=25.0)
+        assert r["strategy"] == "moderate"
