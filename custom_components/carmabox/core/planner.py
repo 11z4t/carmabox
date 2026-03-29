@@ -96,7 +96,7 @@ def generate_carma_plan(
     # ── Night reserve: don't discharge daytime if batteries needed tonight ──
     # Calculate how much battery is needed for tonight's EV support
     ev_kw = 230 * int(getattr(cfg, 'ev_phase_count', 3)) * 6 / 1000  # min 6A
-    house_kw = 1.7  # Typical night consumption
+    house_kw = 2.5  # Measured night baseload 2.5-3kW
     grid_max_night = cfg.ellevio_tak_kw / cfg.ellevio_night_weight  # Actual kW
     bat_per_hour_night = max(0, ev_kw + house_kw - grid_max_night)
     night_hours = 8
