@@ -332,6 +332,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.shadow_log: list[ShadowComparison] = []
         self._shadow_savings_kr: float = 0.0
 
+        # PV allocation plan (for dashboard)
+        self._pv_allocation: dict = {}
+
         # PLAT-927: Ellevio realtime tracking
         self._ellevio_hour_samples: list[tuple[float, float]] = []
         self._ellevio_current_hour: int = -1
@@ -1161,6 +1164,50 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     current_hour=hour,
                     ev_phase_count=ev_phase,
                 )
+
+                # Save allocation data for dashboard sensor
+                self._pv_allocation = {
+                    "timestamp": now.isoformat(),
+                    "ev_can_charge": alloc.ev_can_charge,
+                    "ev_amps": alloc.ev_recommended_amps,
+                    "battery_hours_to_full": round(alloc.battery_hours_to_full, 1),
+                    "export_risk_kwh": round(alloc.surplus_after_battery_kwh, 1),
+                    "reason": alloc.reason,
+                    "battery_soc": round(state.total_battery_soc, 0),
+                    "ev_connected": ev_connected,
+                    "hourly_plan": [],
+                }
+                # Build per-hour allocation table
+                ev_kw = (
+                    alloc.ev_recommended_amps * 230 * ev_phase / 1000 if alloc.ev_can_charge else 0
+                )
+                bat_full_h = (
+                    int(alloc.battery_hours_to_full) if alloc.battery_hours_to_full < 99 else 99
+                )
+                for h_idx in range(min(len(hourly_pv), 8)):
+                    abs_h = (hour + h_idx) % 24
+                    pv_h = hourly_pv[h_idx]
+                    load_h = hourly_load[h_idx] if h_idx < len(hourly_load) else 2.5
+                    surplus_h = max(0, pv_h - load_h)
+                    # After battery full → all surplus to EV
+                    bat_h = min(surplus_h, surplus_h if h_idx < bat_full_h else 0)
+                    ev_h = ev_kw if alloc.ev_can_charge and h_idx < bat_full_h + 3 else 0
+                    if h_idx >= bat_full_h:
+                        ev_h = min(surplus_h, ev_kw) if alloc.ev_can_charge else 0
+                        bat_h = 0
+                    export_h = max(0, surplus_h - bat_h - ev_h)
+                    grid_h = max(0, load_h + ev_h - pv_h)
+                    self._pv_allocation["hourly_plan"].append(
+                        {
+                            "hour": abs_h,
+                            "pv": round(pv_h, 1),
+                            "hus": round(load_h, 1),
+                            "bat": round(bat_h, 1),
+                            "ev": round(ev_h, 1),
+                            "export": round(export_h, 1),
+                            "grid": round(grid_h, 1),
+                        }
+                    )
 
                 if alloc.ev_can_charge and alloc.ev_recommended_amps > 0:
                     if not self._ev_enabled:

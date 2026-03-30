@@ -148,6 +148,10 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
             else None
         ),
     }
+    # PV allocation plan (per-hour table for dashboard)
+    if hasattr(coord, "_pv_allocation") and coord._pv_allocation:
+        attrs["pv_allocation"] = coord._pv_allocation
+
     # Last 24h decisions as compact list (max 48 entries)
     attrs["decisions_24h"] = [
         {
