@@ -111,6 +111,7 @@ from .optimizer.savings import (
     record_grid_charge,
     record_peak,
     reset_if_new_month,
+    reset_savings,
     state_from_dict,
     state_to_dict,
 )
@@ -126,6 +127,8 @@ _LOGGER = logging.getLogger(__name__)
 SAVINGS_STORE_VERSION = 1
 SAVINGS_STORE_KEY = "carmabox_savings"
 SAVINGS_SAVE_INTERVAL = 300  # Save at most every 5 minutes
+SAVINGS_STALE_DAYS = 30  # Reset savings if data is older than 30 days
+SAVINGS_EXECUTOR_OFF_HOURS = 24  # Reset if executor was off for >24h
 
 CONSUMPTION_STORE_VERSION = 1
 CONSUMPTION_STORE_KEY = "carmabox_consumption_profile"
@@ -675,8 +678,43 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         try:
             data = await self._savings_store.async_load()
             if data and isinstance(data, dict):
-                restored = state_from_dict(data)
                 now = datetime.now()
+
+                # Check staleness: reset if data is >30 days old
+                # or executor was disabled for >24h
+                stale = False
+                last_save_str = data.get("_last_save_ts")
+                if last_save_str:
+                    try:
+                        last_save_dt = datetime.fromisoformat(last_save_str)
+                        age = now - last_save_dt
+                        if age > timedelta(days=SAVINGS_STALE_DAYS):
+                            _LOGGER.warning(
+                                "Savings data is %d days old (>%d), resetting",
+                                age.days,
+                                SAVINGS_STALE_DAYS,
+                            )
+                            stale = True
+                        elif not data.get("_executor_enabled", True) and age > timedelta(
+                            hours=SAVINGS_EXECUTOR_OFF_HOURS
+                        ):
+                            _LOGGER.warning(
+                                "Executor was disabled for %.1f hours (>%d), resetting savings",
+                                age.total_seconds() / 3600,
+                                SAVINGS_EXECUTOR_OFF_HOURS,
+                            )
+                            stale = True
+                    except (ValueError, TypeError):
+                        pass  # Can't parse timestamp, proceed normally
+
+                if stale:
+                    self.savings = reset_savings()
+                    self.savings.month = now.month
+                    self.savings.year = now.year
+                    _LOGGER.info("Savings reset due to stale data")
+                    return
+
+                restored = state_from_dict(data)
                 restored = reset_if_new_month(restored, now)
                 self.savings = restored
                 _LOGGER.info(
@@ -697,7 +735,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
         self._savings_last_save = now
         try:
-            await self._savings_store.async_save(state_to_dict(self.savings))
+            save_data = state_to_dict(self.savings)
+            save_data["_last_save_ts"] = datetime.now().isoformat()
+            save_data["_executor_enabled"] = getattr(self, "executor_enabled", False)
+            await self._savings_store.async_save(save_data)
         except Exception:
             _LOGGER.debug("Failed to save savings", exc_info=True)
 
@@ -786,14 +827,44 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._miner_on = bool(data.get("miner_on", False))
                 # Restore night EV state (survives HA restart)
                 self._night_ev_active = bool(data.get("night_ev_active", False))
+                # Restore Ellevio timmedel samples (PLAT-927 persistence)
+                raw_samples = data.get("ellevio_hour_samples", [])
+                self._ellevio_hour_samples = [
+                    (float(s[0]), float(s[1]))
+                    for s in raw_samples
+                    if isinstance(s, list | tuple) and len(s) == 2
+                ]
+                self._ellevio_monthly_hourly_peaks = [
+                    float(v) for v in data.get("ellevio_monthly_hourly_peaks", [])
+                ]
+                # Restore surplus hysteresis state
+                hyst_data = data.get("surplus_hysteresis")
+                if hyst_data and isinstance(hyst_data, dict):
+                    from .core.surplus_chain import HysteresisState
+
+                    hyst = HysteresisState()
+                    above = hyst_data.get("above", {})
+                    below = hyst_data.get("below", {})
+                    if isinstance(above, dict):
+                        hyst.surplus_above_since = {str(k): float(v) for k, v in above.items()}
+                    if isinstance(below, dict):
+                        hyst.surplus_below_since = {str(k): float(v) for k, v in below.items()}
+                    self._surplus_hysteresis = hyst
+                    _LOGGER.info(
+                        "Restored surplus hysteresis: %d above, %d below timers",
+                        len(hyst.surplus_above_since),
+                        len(hyst.surplus_below_since),
+                    )
                 _LOGGER.info(
-                    "Restored runtime: plan=%d hours, cmd=%s, ev=%s@%dA, miner=%s, night_ev=%s",
+                    "Restored: plan=%d, cmd=%s, ev=%s@%dA, miner=%s, night=%s, ellevio=%d/%d",
                     len(self.plan),
                     cmd_str,
                     self._ev_enabled,
                     self._ev_current_amps,
                     self._miner_on,
                     self._night_ev_active,
+                    len(self._ellevio_hour_samples),
+                    len(self._ellevio_monthly_hourly_peaks),
                 )
         except Exception:
             _LOGGER.warning("Failed to restore runtime, starting fresh", exc_info=True)
@@ -823,7 +894,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "ev_current_amps": self._ev_current_amps,
                 "miner_on": self._miner_on,
                 "night_ev_active": getattr(self, "_night_ev_active", False),
+                "ellevio_hour_samples": [
+                    [ts, val] for ts, val in getattr(self, "_ellevio_hour_samples", [])
+                ],
+                "ellevio_monthly_hourly_peaks": list(
+                    getattr(self, "_ellevio_monthly_hourly_peaks", [])
+                ),
             }
+            # Persist surplus hysteresis state
+            hyst = getattr(self, "_surplus_hysteresis", None)
+            if hyst is not None:
+                data["surplus_hysteresis"] = {
+                    "above": {k: v for k, v in hyst.surplus_above_since.items()},
+                    "below": {k: v for k, v in hyst.surplus_below_since.items()},
+                }
             await self._runtime_store.async_save(data)
         except Exception:
             _LOGGER.debug("Failed to save runtime", exc_info=True)
@@ -1134,7 +1218,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             and state.total_battery_soc < 99
         ):
             try:
-                from .core.planner import plan_solar_allocation
+                from .core.planner import plan_solar_allocation_simple as plan_solar_allocation
 
                 # Get Solcast hourly forecast
                 solcast_today = self.hass.states.get("sensor.solcast_pv_forecast_forecast_today")
