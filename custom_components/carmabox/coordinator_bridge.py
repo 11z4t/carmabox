@@ -58,9 +58,13 @@ from .core.planner import (
     build_price_schedule,
     generate_carma_plan,
 )
+from .optimizer.hourly_ledger import EnergyLedger
 from .optimizer.models import (
+    BreachCorrection,
     CarmaboxState,
     Decision,
+    HourActual,
+    HourlyMeterState,
     HourPlan,
     ShadowComparison,
 )
@@ -193,6 +197,24 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         self.learnings: list = []
         self.idle_analysis = None
         self.ev_next_full_charge_date = None
+
+        # ── Missing attributes for sensor.py (PLAT-1074) ──────
+        self.hourly_actuals: list[HourActual] = []
+        self.ledger: EnergyLedger = EnergyLedger()
+        self.min_soc: float = float(self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC))
+        self.benchmark_data: dict[str, Any] | None = None
+        self._bat_daily_idle_seconds: int = 0
+        self._daily_avg_price: float = float(
+            self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
+        )
+        self._ellevio_hour_samples: list[tuple[float, float]] = []
+        self._ellevio_monthly_hourly_peaks: list[float] = []
+        self._meter_state: HourlyMeterState = HourlyMeterState()
+        self._shadow_savings_kr: float = 0.0
+        self._breach_load_shed_active: bool = False
+        self.appliance_power: dict[str, float] = {}
+        self.appliance_energy_wh: dict[str, float] = {}
+        self._appliances: list[dict[str, Any]] = list(self._cfg.get("appliances") or [])
 
         # Consecutive error tracking
         self._consecutive_errors: int = 0
@@ -917,6 +939,41 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         if not issues:
             return "Allt fungerar"
         return ", ".join(issues)
+
+    @property
+    def hourly_meter_projected(self) -> float:
+        """Projected hourly weighted kW average."""
+        return self._meter_state.projected_avg
+
+    @property
+    def hourly_meter_pct(self) -> float:
+        """Projected hourly meter as % of target."""
+        if self.target_kw <= 0:
+            return 0.0
+        return round(self._meter_state.projected_avg / self.target_kw * 100, 1)
+
+    @property
+    def breach_monitor_active(self) -> bool:
+        """Whether breach load shedding is active."""
+        return self._breach_load_shed_active
+
+    @property
+    def daily_insight(self) -> dict[str, Any]:
+        """Daily energy insight summary (stub)."""
+        return {"status": "no_data"}
+
+    def plan_score(self) -> dict[str, Any]:
+        """Score how well plans matched actual outcomes (stub)."""
+        return {
+            "score_today": None,
+            "score_7d": None,
+            "score_30d": None,
+            "trend": "stable",
+        }
+
+    def get_active_corrections(self, hour: int | None = None) -> list[BreachCorrection]:
+        """Get active breach corrections (stub)."""
+        return []
 
 
 # Alias for sensor.py compatibility if needed
