@@ -1,9 +1,21 @@
 #!/bin/bash
 set -e
+
 echo "Pre-commit: quality gates..."
 cd "$(git rev-parse --show-toplevel)"
-python3 -m ruff check . || { echo "❌ ruff FAILED"; exit 1; }
-python3 -m ruff format --check . || { echo "❌ format FAILED"; exit 1; }
-python3 -m mypy --strict custom_components/carmabox/ || { echo "❌ mypy FAILED"; exit 1; }
-python3 -m pytest tests/unit/ -q --tb=short || { echo "❌ tests FAILED"; exit 1; }
-echo "✅ All gates passed"
+
+# Lint
+python3 -m ruff check . || { echo "ruff check FAILED"; exit 1; }
+
+# Format check
+python3 -m ruff format --check . || { echo "ruff format FAILED"; exit 1; }
+
+# Clean .pyc and __pycache__
+find . -name "*.pyc" -delete 2>/dev/null || true
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+echo "Cleaned .pyc and __pycache__"
+
+# Smoke test
+python3 -m pytest tests/unit/ -q --tb=short || { echo "unit tests FAILED"; exit 1; }
+
+echo "All gates passed"

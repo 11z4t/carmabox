@@ -237,6 +237,27 @@ class EaseeAdapter(EVAdapter):
             {"entity_id": f"number.{self.prefix}_dynamic_charger_limit", "value": amps},
         )
 
+    async def set_charger_phase_mode(self, mode: str) -> bool:
+        """Set charger phase mode (1_phase or 3_phase).
+
+        Maps to Easee set_charger_phase_mode service.
+        """
+        if not self.charger_id:
+            _LOGGER.warning("Easee: cannot set phase mode without charger_id")
+            return False
+        # Map internal mode names to Easee API values
+        phase_map = {"1_phase": 1, "3_phase": 3}
+        phase_value = phase_map.get(mode)
+        if phase_value is None:
+            _LOGGER.error("Easee: invalid phase mode '%s'", mode)
+            return False
+        _LOGGER.info("Easee: set phase mode → %s (value=%d)", mode, phase_value)
+        return await self._safe_call(
+            "easee",
+            "set_charger_phase_mode",
+            {"charger_id": self.charger_id, "phase_mode": phase_value},
+        )
+
     async def reset_to_default(self) -> bool:
         """Reset to safe default: dynamic=6A (max stays at 10A)."""
         return await self.set_current(_DYNAMIC_MIN)

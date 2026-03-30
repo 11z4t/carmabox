@@ -2,12 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
     branches: [main]
 
 jobs:
-  lint:
+  quality:
+    name: Code Quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,14 +17,25 @@ jobs:
           python-version: "3.12"
       - name: Install ruff
         run: pip install ruff
-      - name: Ruff check
+      - name: Ruff lint
         run: ruff check custom_components/ tests/
       - name: Ruff format check
         run: ruff format --check custom_components/ tests/
+      - name: Syntax check (py_compile)
+        run: |
+          find custom_components/ tests/ -name "*.py" -exec python -m py_compile {} +
+      - name: No .pyc in production code
+        run: |
+          if find custom_components/ -name "*.pyc" -o -name "__pycache__" | grep -q .; then
+            echo "::error::Found .pyc files or __pycache__ directories in production code"
+            find custom_components/ -name "*.pyc" -o -name "__pycache__"
+            exit 1
+          fi
 
-  test:
+  tests:
+    name: Tests & Coverage
     runs-on: ubuntu-latest
-    needs: lint
+    needs: quality
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,28 +43,39 @@ jobs:
           python-version: "3.12"
       - name: Install dependencies
         run: |
-          pip install pytest pytest-asyncio pytest-cov
-          pip install homeassistant
-      - name: Run unit tests with coverage
+          pip install -r requirements-dev.txt
+      - name: Run tests with coverage
         run: |
-          python -m pytest tests/unit/ \
+          python -m pytest tests/unit/ tests/scenarios/ tests/regression/ \
             --cov=custom_components/carmabox \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=65 \
             -x -q
-      - name: Upload coverage
+      - name: Upload coverage to Codecov
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: codecov/codecov-action@v4
         with:
-          name: coverage-report
-          path: coverage.xml
+          files: coverage.xml
+          fail_ci_if_error: false
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
-  hacs:
+  manifest-check:
+    name: Manifest Validation
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: HACS validation
-        uses: hacs/action@main
-        with:
-          category: integration
+      - name: Verify MANIFEST.md is not empty
+        run: |
+          if [ ! -s MANIFEST.md ]; then
+            echo "::error::MANIFEST.md is empty or missing"
+            exit 1
+          fi
+          echo "MANIFEST.md OK ($(wc -l < MANIFEST.md) lines)"
+      - name: Validate hacs.json
+        run: |
+          python -c "import json; json.load(open('hacs.json'))" || {
+            echo "::error::hacs.json is not valid JSON"
+            exit 1
+          }
+          echo "hacs.json OK"

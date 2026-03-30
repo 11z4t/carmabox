@@ -396,7 +396,9 @@ class TestBridgePersistence:
             ),
         ]
         bridge.night_ev_active = True
-        bridge._last_command = "DISCHARGE"
+        from custom_components.carmabox.coordinator import BatteryCommand
+
+        bridge._last_command = BatteryCommand.DISCHARGE
         bridge._ev_enabled = True
         bridge._ev_current_amps = 10
 
@@ -409,7 +411,7 @@ class TestBridgePersistence:
         saved = bridge._store.async_save.call_args[0][0]
 
         assert saved["night_ev_active"] is True
-        assert saved["last_command"] == "DISCHARGE"
+        assert saved["last_command"] == "discharge"
         assert saved["ev_enabled"] is True
         assert saved["ev_current_amps"] == 10
         assert len(saved["plan"]) == 1
@@ -440,7 +442,7 @@ class TestBridgePersistence:
                 },
             ],
             "night_ev_active": True,
-            "last_command": "CHARGE",
+            "last_command": "charge_pv",
             "ev_enabled": True,
             "ev_current_amps": 8,
             "saved_at": "2026-03-29T12:00:00",
@@ -451,7 +453,9 @@ class TestBridgePersistence:
 
         assert bridge._state_restored is True
         assert bridge.night_ev_active is True
-        assert bridge._last_command == "CHARGE"
+        from custom_components.carmabox.coordinator import BatteryCommand
+
+        assert bridge._last_command == BatteryCommand.CHARGE_PV
         assert bridge._ev_enabled is True
         assert bridge._ev_current_amps == 8
         assert len(bridge.plan) == 1
@@ -471,7 +475,9 @@ class TestBridgePersistence:
 
         assert bridge._state_restored is True
         assert bridge.plan == []  # unchanged from init
-        assert bridge._last_command == "STANDBY"
+        from custom_components.carmabox.coordinator import BatteryCommand
+
+        assert bridge._last_command == BatteryCommand.STANDBY
 
     @pytest.mark.asyncio
     async def test_restore_skips_if_already_restored(self) -> None:
@@ -496,3 +502,107 @@ class TestBridgePersistence:
         await bridge._async_save_state()
 
         bridge._store.async_save.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# PLAT-1095: Ellevio hour samples persistence
+# ---------------------------------------------------------------------------
+
+
+class TestEllevioSamplesPersistence:
+    @pytest.mark.asyncio
+    async def test_ellevio_samples_persist_across_restart(self) -> None:
+        """Save state → create new bridge → verify samples restored."""
+
+        bridge = _make_bridge()
+        bridge._last_save_time = 0.0
+
+        # Populate 3 samples
+        bridge._ellevio_hour_samples = [(1.5, 1.0), (1.2, 0.5), (1.8, 1.0)]
+        from datetime import datetime
+
+        bridge._ellevio_current_hour = datetime.now().hour
+
+        await bridge._async_save_state()
+        bridge._store.async_save.assert_called_once()
+        saved = bridge._store.async_save.call_args[0][0]
+
+        # Verify samples were serialized
+        assert len(saved["ellevio_hour_samples"]) == 3
+        assert saved["ellevio_current_hour"] == datetime.now().hour
+        assert saved["ellevio_saved_at"] > 0
+
+        # Create new bridge and restore from saved state
+        bridge2 = _make_bridge()
+        bridge2._state_restored = False
+        bridge2._store.async_load = AsyncMock(return_value=saved)
+
+        await bridge2._async_restore_state()
+
+        assert len(bridge2._ellevio_hour_samples) == 3
+        assert bridge2._ellevio_hour_samples[0] == (1.5, 1.0)
+        assert bridge2._ellevio_hour_samples[1] == (1.2, 0.5)
+        assert bridge2._ellevio_hour_samples[2] == (1.8, 1.0)
+        assert bridge2._ellevio_current_hour == datetime.now().hour
+
+    @pytest.mark.asyncio
+    async def test_stale_ellevio_samples_discarded(self) -> None:
+        """Samples from >1 hour ago are discarded on restore."""
+        import time
+
+        bridge = _make_bridge()
+        bridge._state_restored = False
+
+        stored_data = {
+            "plan": [],
+            "night_ev_active": False,
+            "last_command": "STANDBY",
+            "ev_enabled": False,
+            "ev_current_amps": 6,
+            "saved_at": "2026-03-29T10:00:00",
+            "ellevio_hour_samples": [[1.5, 1.0], [1.2, 0.5]],
+            "ellevio_current_hour": 10,
+            # Saved 90 minutes ago
+            "ellevio_saved_at": time.time() - 5400,
+        }
+        bridge._store.async_load = AsyncMock(return_value=stored_data)
+
+        await bridge._async_restore_state()
+
+        # Stale samples (>1h old) should be discarded
+        assert bridge._ellevio_hour_samples == []
+        assert bridge._ellevio_current_hour == -1  # unchanged from init
+
+    @pytest.mark.asyncio
+    async def test_grid_guard_correct_projection_after_restart(self) -> None:
+        """After restore with valid samples, weighted average is correct."""
+        import time
+        from datetime import datetime
+
+        bridge = _make_bridge()
+        bridge._state_restored = False
+
+        now_hour = datetime.now().hour
+        stored_data = {
+            "plan": [],
+            "night_ev_active": False,
+            "last_command": "STANDBY",
+            "ev_enabled": False,
+            "ev_current_amps": 6,
+            "saved_at": datetime.now().isoformat(),
+            "ellevio_hour_samples": [[2.0, 1.0], [1.0, 1.0], [3.0, 1.0]],
+            "ellevio_current_hour": now_hour,
+            "ellevio_saved_at": time.time() - 30,  # 30s ago — fresh
+        }
+        bridge._store.async_load = AsyncMock(return_value=stored_data)
+
+        await bridge._async_restore_state()
+
+        # Samples restored — verify weighted average computation
+        samples = bridge._ellevio_hour_samples
+        assert len(samples) == 3
+        total = sum(p * w for p, w in samples)
+        wt = sum(w for _, w in samples)
+        weighted_avg = total / wt
+        # (2*1 + 1*1 + 3*1) / (1+1+1) = 6/3 = 2.0
+        assert abs(weighted_avg - 2.0) < 0.01

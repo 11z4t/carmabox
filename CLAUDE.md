@@ -62,7 +62,10 @@ All deploy via git: commit → push → HACS/deploy-pipeline.
 
 ## CI
 
-GitHub Actions: `.github/workflows/ci.yml`
-- lint (ruff check + format)
-- test (pytest + coverage, fail under 65%)
-- hacs (HACS validation)
+GitHub Actions: `.github/workflows/ci.yml` (push main/develop, PR main)
+- quality (ruff check + format + py_compile + no .pyc)
+- tests (pytest unit/scenarios/regression + coverage gate 90%, Codecov upload)
+- manifest-check (MANIFEST.md not empty + hacs.json valid JSON)
+
+Pre-commit: `.githooks/pre-commit` (ruff + format + pyc cleanup + unit smoke)
+Coverage gate: `pyproject.toml` `[tool.coverage.report]` fail_under=90

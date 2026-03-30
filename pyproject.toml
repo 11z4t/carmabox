@@ -30,4 +30,14 @@ strict = true
 module = "custom_components.carmabox.*"
 ignore_errors = true
 
+[tool.coverage.run]
+source = ["custom_components/carmabox"]
 
+[tool.coverage.report]
+fail_under = 90
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]

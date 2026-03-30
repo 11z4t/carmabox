@@ -1117,6 +1117,91 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await adapter.set_ems_mode("battery_standby")
                 await adapter.set_fast_charging(on=False)
 
+        # ── EMS Mode Enforcement — EVERY cycle ──────────────────
+        # Verify that actual EMS mode on inverters matches the decided
+        # battery_action.  GoodWe firmware or manual intervention can
+        # change the mode between cycles → crosscharge / stale discharge.
+        ems_mode_map = {
+            "charge_pv": "charge_pv",
+            "grid_charge": "charge_pv",
+            "discharge": "discharge_pv",
+            "standby": "battery_standby",
+        }
+        desired_ems = ems_mode_map.get(cmd.battery_action, "charge_pv")
+
+        for _idx, _adp in enumerate(self.inverter_adapters):
+            _prefix = "kontor" if _idx == 0 else "forrad"
+
+            # --- PLAT-1040: ems_power_limit MUST be 0 when charge_pv ---
+            # Non-zero ems_power_limit in charge_pv causes autonomous
+            # grid charging by GoodWe firmware.
+            if desired_ems == "charge_pv":
+                try:
+                    _lim_entity = f"number.goodwe_{_adp.prefix}_ems_power_limit"
+                    _lim_state = self.hass.states.get(_lim_entity)
+                    _lim_val = (
+                        float(_lim_state.state)
+                        if _lim_state and _lim_state.state not in ("unknown", "unavailable")
+                        else 0.0
+                    )
+                    if _lim_val != 0.0:
+                        _LOGGER.info(
+                            "EMS PLAT-1040: %s limit %.0f→0",
+                            _adp.prefix,
+                            _lim_val,
+                        )
+                        await self.hass.services.async_call(
+                            "number",
+                            "set_value",
+                            {"entity_id": _lim_entity, "value": 0},
+                        )
+                except Exception:
+                    _LOGGER.warning("EMS ENFORCE: %s failed to reset ems_power_limit", _adp.prefix)
+
+            # --- Drift correction: re-apply mode if actual != desired ---
+            _current_ems = _adp.ems_mode
+            if _current_ems and _current_ems != desired_ems:
+                # During discharge, individual batteries may legitimately
+                # be in standby (allocation=0W).  Only correct if the
+                # battery was supposed to be active.
+                if cmd.battery_action == "discharge" and _current_ems == "battery_standby":
+                    # Skip: 0-allocation batteries are intentionally standby
+                    continue
+                _LOGGER.info(
+                    "EMS ENFORCE: %s drift detected %s → %s (action=%s)",
+                    _adp.prefix,
+                    _current_ems,
+                    desired_ems,
+                    cmd.battery_action,
+                )
+                await _adp.set_ems_mode(desired_ems)
+
+        # ── INV-1 Crosscharge Prevention — EMS-level ────────────
+        # If one inverter is discharging and another is charging at EMS
+        # level, force ALL to charge_pv immediately.  This catches
+        # firmware-level crosscharge that the power-based safety check
+        # in _watchdog may miss due to sensor lag.
+        if len(self.inverter_adapters) >= 2:
+            _ems_modes = [a.ems_mode for a in self.inverter_adapters]
+            if "discharge_pv" in _ems_modes and "charge_pv" in _ems_modes:
+                _LOGGER.error(
+                    "INV-1 CROSSCHARGE EMS: %s — forcing all to charge_pv",
+                    _ems_modes,
+                )
+                for _adp in self.inverter_adapters:
+                    await _adp.set_ems_mode("charge_pv")
+                    await _adp.set_fast_charging(on=False)
+                    # PLAT-1040: zero the limit when forcing charge_pv
+                    with contextlib.suppress(Exception):
+                        await self.hass.services.async_call(
+                            "number",
+                            "set_value",
+                            {
+                                "entity_id": f"number.goodwe_{_adp.prefix}_ems_power_limit",
+                                "value": 0,
+                            },
+                        )
+
         # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
         is_night = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
         # Ensure Easee initialized (smart_charging OFF, limits set)

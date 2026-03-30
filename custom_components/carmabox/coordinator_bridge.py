@@ -43,6 +43,7 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .coordinator import BatteryCommand
 from .core.coordinator_v2 import (
     CoordinatorConfig,
     CoordinatorV2,
@@ -211,6 +212,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE)
         )
         self._ellevio_hour_samples: list[tuple[float, float]] = []
+        self._ellevio_current_hour: int = -1
         self._ellevio_monthly_hourly_peaks: list[float] = []
         self._meter_state: HourlyMeterState = HourlyMeterState()
         self._shadow_savings_kr: float = 0.0
@@ -236,7 +238,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
         # ── Night EV state (persisted) ────────────────────────
         self.night_ev_active: bool = False
-        self._last_command: str = "STANDBY"
+        self._last_command: BatteryCommand = BatteryCommand.STANDBY
         self._ev_enabled: bool = False
         self._ev_current_amps: int = DEFAULT_EV_MIN_AMPS
 
@@ -412,6 +414,16 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         bat_id,
                     )
 
+            # PLAT-1040: ems_power_limit MUST be 0 when mode is charge_pv
+            # Non-zero ems_power_limit causes autonomous grid charging by GoodWe firmware
+            if mode == "charge_pv" and isinstance(adapter, GoodWeAdapter):
+                ok = await adapter.set_discharge_limit(0)
+                if not ok:
+                    _LOGGER.error(
+                        "PLAT-1040: Failed to set ems_power_limit=0 on adapter %d",
+                        bat_id,
+                    )
+
             # Set discharge limit if mode implies discharge
             if mode == "discharge_pv" and power_limit > 0:
                 ok = await adapter.set_discharge_limit(power_limit)
@@ -442,6 +454,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
         action = ev_cmd.get("action", "")
         amps = int(ev_cmd.get("amps", DEFAULT_EV_MIN_AMPS))
+        phase_mode = ev_cmd.get("ev_phase_mode", "")
 
         try:
             if action == "start":
@@ -455,8 +468,81 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             elif action == "set_current":
                 await self.ev_adapter.set_current(amps)
                 _LOGGER.info("EV command: set current %dA", amps)
+
+            # Set phase mode if specified (1_phase / 3_phase)
+            if phase_mode and isinstance(self.ev_adapter, EaseeAdapter):
+                await self.ev_adapter.set_charger_phase_mode(phase_mode)
+                _LOGGER.info("EV command: set phase mode → %s", phase_mode)
         except Exception:
             _LOGGER.exception("EV command failed: %s", ev_cmd)
+
+    async def _enforce_ems_modes(self, sys_state: SystemState, result: CycleResult) -> None:
+        """Verify inverter EMS modes match V2 decisions; correct if not.
+
+        After V2 cycle, the actual inverter EMS mode may drift (GoodWe firmware
+        resets, Modbus lockup, etc.). This method checks each adapter and forces
+        the mode back to what V2 decided.
+        """
+        for cmd in result.battery_commands:
+            bat_id: int = cmd.get("id", 0)
+            target_mode: str = cmd.get("mode", "")
+            if not target_mode or bat_id >= len(self.inverter_adapters):
+                continue
+
+            adapter = self.inverter_adapters[bat_id]
+            # Read current EMS mode from collected state
+            current_mode = sys_state.ems_mode_1 if bat_id == 0 else sys_state.ems_mode_2
+
+            if current_mode and current_mode != target_mode:
+                _LOGGER.warning(
+                    "EMS ENFORCE: adapter %d mode=%s, V2 wants=%s — correcting",
+                    bat_id,
+                    current_mode,
+                    target_mode,
+                )
+                ok = await adapter.set_ems_mode(target_mode)
+                if not ok:
+                    _LOGGER.error(
+                        "EMS ENFORCE: failed to set mode %s on adapter %d",
+                        target_mode,
+                        bat_id,
+                    )
+
+    async def _detect_and_fix_crosscharge(self, sys_state: SystemState) -> None:
+        """Detect crosscharge: one inverter discharging + another charging.
+
+        If detected, force ALL inverters to charge_pv (safe mode) and set
+        ems_power_limit=0 to prevent autonomous grid charging (PLAT-1040).
+        """
+        if len(self.inverter_adapters) < 2:
+            return
+
+        # Threshold: >200W to avoid noise
+        bat1_discharging = sys_state.battery_power_1 < -200
+        bat1_charging = sys_state.battery_power_1 > 200
+        bat2_discharging = sys_state.battery_power_2 < -200
+        bat2_charging = sys_state.battery_power_2 > 200
+
+        crosscharge = (bat1_discharging and bat2_charging) or (bat1_charging and bat2_discharging)
+
+        if not crosscharge:
+            return
+
+        _LOGGER.error(
+            "CROSSCHARGE DETECTED: bat1=%.0fW bat2=%.0fW — forcing charge_pv + ems_limit=0",
+            sys_state.battery_power_1,
+            sys_state.battery_power_2,
+        )
+
+        for i, adapter in enumerate(self.inverter_adapters):
+            ok = await adapter.set_ems_mode("charge_pv")
+            if not ok:
+                _LOGGER.error("CROSSCHARGE FIX: failed set charge_pv on adapter %d", i)
+            # PLAT-1040: ems_power_limit=0 prevents grid charging
+            if isinstance(adapter, GoodWeAdapter):
+                ok = await adapter.set_discharge_limit(0)
+                if not ok:
+                    _LOGGER.error("CROSSCHARGE FIX: failed set ems_power_limit=0 on adapter %d", i)
 
     async def _execute_surplus_actions(self, actions: list[dict]) -> None:
         """Execute surplus chain actions via HA service calls."""
@@ -638,6 +724,31 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.exception("Plan generation failed, keeping previous plan")
 
+    # ── PLAT-1095: Ellevio sample tracking ──────────────────
+
+    def _track_ellevio_sample(self, grid_power_w: float) -> None:
+        """Track weighted Ellevio hourly samples (mirrors legacy coordinator)."""
+        now = datetime.now()
+        now_hour = now.hour
+        is_night = now_hour < 6 or now_hour >= 22
+        weight = float(self._cfg.get("ellevio_night_weight", 0.5)) if is_night else 1.0
+        grid_kw = max(0.0, grid_power_w) / 1000.0
+
+        if now_hour != self._ellevio_current_hour:
+            if self._ellevio_hour_samples and self._ellevio_current_hour >= 0:
+                total_w = sum(p * w for p, w in self._ellevio_hour_samples)
+                total_wt = sum(w for _, w in self._ellevio_hour_samples)
+                if total_wt > 0:
+                    self._ellevio_monthly_hourly_peaks.append(total_w / total_wt)
+                    if len(self._ellevio_monthly_hourly_peaks) > 800:
+                        self._ellevio_monthly_hourly_peaks = self._ellevio_monthly_hourly_peaks[
+                            -744:
+                        ]
+            self._ellevio_hour_samples = []
+            self._ellevio_current_hour = now_hour
+
+        self._ellevio_hour_samples.append((grid_kw, weight))
+
     # ── Persistent state ──────────────────────────────────────
 
     async def _async_save_state(self) -> None:
@@ -670,10 +781,16 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             state = {
                 "plan": plan_data,
                 "night_ev_active": self.night_ev_active,
-                "last_command": self._last_command,
+                "last_command": self._last_command.value
+                if isinstance(self._last_command, BatteryCommand)
+                else str(self._last_command),
                 "ev_enabled": self._ev_enabled,
                 "ev_current_amps": self._ev_current_amps,
                 "saved_at": datetime.now().isoformat(),
+                # PLAT-1095: Persist Ellevio hour samples
+                "ellevio_hour_samples": [[kw, w] for kw, w in self._ellevio_hour_samples],
+                "ellevio_current_hour": self._ellevio_current_hour,
+                "ellevio_saved_at": time.time(),
             }
             await self._store.async_save(state)
             _LOGGER.debug("State saved to storage")
@@ -713,9 +830,44 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
             # Restore EV/command state
             self.night_ev_active = bool(data.get("night_ev_active", False))
-            self._last_command = str(data.get("last_command", "STANDBY"))
+            _cmd_str = str(data.get("last_command", "STANDBY"))
+            try:
+                self._last_command = BatteryCommand(_cmd_str.lower())
+            except ValueError:
+                try:
+                    self._last_command = BatteryCommand[_cmd_str]
+                except KeyError:
+                    self._last_command = BatteryCommand.STANDBY
             self._ev_enabled = bool(data.get("ev_enabled", False))
             self._ev_current_amps = int(data.get("ev_current_amps", DEFAULT_EV_MIN_AMPS))
+
+            # PLAT-1095: Restore Ellevio hour samples (discard if stale >1h)
+            saved_hour = data.get("ellevio_current_hour", -1)
+            saved_at = data.get("ellevio_saved_at", 0)
+            age_seconds = time.time() - saved_at if saved_at else float("inf")
+            now_hour = datetime.now().hour
+
+            if saved_hour == now_hour and age_seconds < 3600:
+                raw_samples = data.get("ellevio_hour_samples", [])
+                self._ellevio_hour_samples = [
+                    (float(s[0]), float(s[1]))
+                    for s in raw_samples
+                    if isinstance(s, list | tuple) and len(s) >= 2
+                ]
+                self._ellevio_current_hour = saved_hour
+                _LOGGER.info(
+                    "Restored %d Ellevio samples (hour=%d, age=%.0fs)",
+                    len(self._ellevio_hour_samples),
+                    saved_hour,
+                    age_seconds,
+                )
+            else:
+                _LOGGER.info(
+                    "Discarded stale Ellevio samples (saved_hour=%d, now=%d, age=%.0fs)",
+                    saved_hour,
+                    now_hour,
+                    age_seconds,
+                )
 
             _LOGGER.info(
                 "Restored bridge state: %d plan hours, last_cmd=%s, ev=%s",
@@ -773,6 +925,16 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                     sys_state = self._collect_system_state()
                     result: CycleResult = self._v2.cycle(sys_state)
 
+                    # ── EMS mode enforcement ───────────────────
+                    # After V2 cycle, verify inverter EMS modes match decisions
+                    if self.executor_enabled and result.battery_commands:
+                        await self._enforce_ems_modes(sys_state, result)
+
+                    # ── Crosscharge detection ──────────────────
+                    # If one inverter discharges while another charges → force both to charge_pv
+                    if self.executor_enabled:
+                        await self._detect_and_fix_crosscharge(sys_state)
+
                     # Execute commands (or log in shadow mode)
                     if self.executor_enabled:
                         await self._execute_battery_commands(result.battery_commands)
@@ -808,6 +970,19 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         price_ore=ha_state.current_price,
                     )
                     self.decision_log.append(self.last_decision)
+
+                    # Map V2 plan_action to BatteryCommand for sensor.py
+                    _action_map = {
+                        "charge_pv": BatteryCommand.CHARGE_PV,
+                        "charge": BatteryCommand.CHARGE_PV,
+                        "discharge": BatteryCommand.DISCHARGE,
+                        "discharge_pv": BatteryCommand.DISCHARGE,
+                        "standby": BatteryCommand.STANDBY,
+                        "idle": BatteryCommand.IDLE,
+                        "cold_lock": BatteryCommand.BMS_COLD_LOCK,
+                        "taper": BatteryCommand.CHARGE_PV_TAPER,
+                    }
+                    self._last_command = _action_map.get(result.plan_action, BatteryCommand.IDLE)
 
                     # Sync V2 plan to bridge plan for sensor.py
                     self.plan = [
@@ -863,6 +1038,9 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         )()
                         for hp in self.plan
                     ]
+
+            # ── PLAT-1095: Ellevio realtime sample tracking ─────
+            self._track_ellevio_sample(ha_state.grid_power_w)
 
             # ── Persist state ──────────────────────────────────
             await self._async_save_state()
