@@ -9,6 +9,7 @@ from custom_components.carmabox.optimizer.savings import (
     SavingsState,
     calculate_peak_savings,
     daily_trend,
+    ellevio_peak_penalty,
     peak_comparison,
     record_cost_estimate,
     record_daily_snapshot,
@@ -16,6 +17,7 @@ from custom_components.carmabox.optimizer.savings import (
     record_grid_charge,
     record_peak,
     reset_if_new_month,
+    reset_savings,
     savings_breakdown,
     savings_whatif,
     state_from_dict,
@@ -395,3 +397,95 @@ class TestStateSerialization:
         assert restored.actual_cost_kr == state.actual_cost_kr
         assert len(restored.daily_savings) == len(state.daily_savings)
         assert restored.daily_savings[0].date == "2026-03-19"
+
+
+class TestResetSavings:
+    def test_returns_fresh_state(self) -> None:
+        result = reset_savings()
+        assert result.month == 0
+        assert result.year == 0
+        assert result.peak_samples == []
+        assert result.baseline_peak_samples == []
+        assert result.discharge_savings_kr == 0.0
+        assert result.grid_charge_savings_kr == 0.0
+        assert result.total_discharge_kwh == 0.0
+        assert result.total_grid_charge_kwh == 0.0
+        assert result.daily_savings == []
+        assert result.baseline_cost_kr == 0.0
+        assert result.actual_cost_kr == 0.0
+
+    def test_independent_of_existing_state(self) -> None:
+        """reset_savings always returns a clean state regardless of prior data."""
+        # Even if some global state existed, reset_savings gives zeros
+        state = reset_savings()
+        assert state.charge_from_grid_kwh == 0.0
+        assert state.grid_charge_prices == []
+
+
+class TestEllevioPeakPenalty:
+    def test_empty_samples(self) -> None:
+        result = ellevio_peak_penalty([])
+        assert result["actual_avg_kw"] == 0.0
+        assert result["excess_kw"] == 0.0
+        assert result["excess_cost_kr"] == 0.0
+        assert result["peaks"] == []
+
+    def test_under_target(self) -> None:
+        """Peaks below target = no excess cost."""
+        result = ellevio_peak_penalty([1.5, 1.2, 1.0], target_kw=2.0)
+        assert result["excess_kw"] == 0.0
+        assert result["excess_cost_kr"] == 0.0
+        assert result["actual_avg_kw"] == round((1.5 + 1.2 + 1.0) / 3, 2)
+
+    def test_over_target(self) -> None:
+        """Peaks above target = excess cost calculated."""
+        # Top 3: 4.0, 3.0, 2.5 → avg 3.167, excess 1.167, cost 1.167*80 = 93.3
+        result = ellevio_peak_penalty([4.0, 3.0, 2.5, 1.0], target_kw=2.0, cost_per_kw=80.0)
+        assert result["actual_avg_kw"] == round((4.0 + 3.0 + 2.5) / 3, 2)
+        assert result["excess_kw"] == round((4.0 + 3.0 + 2.5) / 3 - 2.0, 2)
+        assert result["excess_cost_kr"] > 0
+        assert len(result["peaks"]) == 3
+        assert result["peaks"] == [4.0, 3.0, 2.5]
+
+    def test_exact_target(self) -> None:
+        """Peaks exactly at target = no excess."""
+        result = ellevio_peak_penalty([2.0, 2.0, 2.0], target_kw=2.0)
+        assert result["excess_kw"] == 0.0
+        assert result["excess_cost_kr"] == 0.0
+
+    def test_fewer_than_top_n(self) -> None:
+        """Fewer samples than top_n uses all available."""
+        result = ellevio_peak_penalty([3.0], target_kw=2.0, cost_per_kw=80.0)
+        assert result["actual_avg_kw"] == 3.0
+        assert result["excess_kw"] == 1.0
+        assert result["excess_cost_kr"] == 80.0
+        assert result["peaks"] == [3.0]
+
+    def test_custom_top_n(self) -> None:
+        """Custom top_n takes different number of peaks."""
+        result = ellevio_peak_penalty([5.0, 4.0, 3.0, 2.0, 1.0], target_kw=2.0, top_n=5)
+        assert len(result["peaks"]) == 5
+        assert result["actual_avg_kw"] == 3.0  # (5+4+3+2+1)/5
+
+    def test_cost_calculation(self) -> None:
+        """Verify exact cost calculation."""
+        # Top 3: 4.0, 3.0, 2.0 → avg 3.0, excess 1.0, cost 1.0*80 = 80.0
+        result = ellevio_peak_penalty([4.0, 3.0, 2.0], target_kw=2.0, cost_per_kw=80.0)
+        assert result["excess_cost_kr"] == 80.0
+
+
+class TestSavingsBreakdownEllevio:
+    def test_includes_ellevio_excess_kr(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.peak_samples = [3.0, 2.5, 2.0]  # avg 2.5, excess 0.5 over 2.0 target
+        state.baseline_peak_samples = [5.0, 4.0, 3.0]
+        bd = savings_breakdown(state, target_kw=2.0)
+        assert "ellevio_excess_kr" in bd
+        assert bd["ellevio_excess_kr"] == 40.0  # 0.5 kW * 80 kr/kW
+
+    def test_no_excess_when_under_target(self) -> None:
+        state = SavingsState(month=3, year=2026)
+        state.peak_samples = [1.5, 1.2, 1.0]
+        state.baseline_peak_samples = [3.0, 2.5, 2.0]
+        bd = savings_breakdown(state, target_kw=2.0)
+        assert bd["ellevio_excess_kr"] == 0.0

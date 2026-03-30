@@ -65,6 +65,11 @@ class SavingsState:
     grid_charge_prices: list[float] = field(default_factory=list)
 
 
+def reset_savings() -> SavingsState:
+    """Reset all savings tracking to zero. Called when data is known to be stale."""
+    return SavingsState()  # Fresh state with all zeros
+
+
 def reset_if_new_month(state: SavingsState, now: datetime) -> SavingsState:
     """Reset savings if a new month has started."""
     if state.month != now.month or state.year != now.year:
@@ -171,6 +176,54 @@ def calculate_peak_savings(
     return round(reduction * cost_per_kw, 1)
 
 
+def ellevio_peak_penalty(
+    peak_samples: list[float],
+    target_kw: float = 2.0,
+    cost_per_kw: float = 80.0,
+    top_n: int = 3,
+) -> dict:
+    """Calculate the extra Ellevio cost from exceeding target.
+
+    Ellevio charges based on the average of the top-N hourly peaks each month.
+    If our average exceeds the target, we pay extra.
+
+    Args:
+        peak_samples: All weighted hourly peak samples this month (kW).
+        target_kw: Target peak average we aim for (kW).
+        cost_per_kw: Ellevio cost per kW per month (kr).
+        top_n: Number of top peaks Ellevio uses for billing.
+
+    Returns:
+        Dict with:
+        - actual_avg_kw: average of top N peaks this month
+        - target_avg_kw: what we aimed for
+        - excess_kw: how much over target
+        - excess_cost_kr: monthly extra cost
+        - peaks: the top N values
+    """
+    if not peak_samples:
+        return {
+            "actual_avg_kw": 0.0,
+            "target_avg_kw": target_kw,
+            "excess_kw": 0.0,
+            "excess_cost_kr": 0.0,
+            "peaks": [],
+        }
+
+    sorted_peaks = sorted(peak_samples, reverse=True)[:top_n]
+    actual_avg = sum(sorted_peaks) / len(sorted_peaks)
+    excess = max(0.0, actual_avg - target_kw)
+    excess_cost = round(excess * cost_per_kw, 1)
+
+    return {
+        "actual_avg_kw": round(actual_avg, 2),
+        "target_avg_kw": target_kw,
+        "excess_kw": round(excess, 2),
+        "excess_cost_kr": excess_cost,
+        "peaks": [round(p, 2) for p in sorted_peaks],
+    }
+
+
 def total_savings(
     state: SavingsState,
     cost_per_kw: float = 80.0,
@@ -267,13 +320,16 @@ def savings_breakdown(
     state: SavingsState,
     cost_per_kw: float = 80.0,
     top_n: int = 3,
+    target_kw: float = 2.0,
 ) -> dict[str, float]:
     """Detailed savings breakdown."""
     peak = calculate_peak_savings(state, cost_per_kw, top_n)
+    penalty = ellevio_peak_penalty(state.peak_samples, target_kw, cost_per_kw, top_n)
     return {
         "peak_reduction_kr": peak,
         "discharge_savings_kr": round(state.discharge_savings_kr, 1),
         "grid_charge_savings_kr": round(state.grid_charge_savings_kr, 1),
+        "ellevio_excess_kr": penalty["excess_cost_kr"],
         "total_kr": round(peak + state.discharge_savings_kr + state.grid_charge_savings_kr, 1),
         "total_discharge_kwh": round(state.total_discharge_kwh, 1),
         "total_grid_charge_kwh": round(state.total_grid_charge_kwh, 1),
