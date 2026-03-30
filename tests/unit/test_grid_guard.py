@@ -610,6 +610,137 @@ class TestScenarios:
         # Should pause EV (only consumer with significant power)
         assert any(c.get("action") == "pause_ev" for c in r.commands)
 
+
+# ═══════════════════════════════════════════════════════════════
+# Proaktiv projektion — 3 nivåer (PLAT-1100)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestProjectionLevels:
+    """Test 3-level escalation: WARN (tak*0.85), STOP (tak), EMERGENCY (tak*1.1)."""
+
+    def test_under_warn_no_action(self):
+        """Projected below tak*0.85 → OK, no commands."""
+        g = _guard()
+        # minute=50, viktat=1.0, grid=1500W → projected = (1.0*50+1.5*10)/60 = 1.08
+        r = g.evaluate(
+            viktat_timmedel_kw=1.0,
+            grid_import_w=1500,
+            hour=14,
+            minute=50,
+        )
+        assert r.status == "OK"
+        assert len(r.commands) == 0
+        assert r.projected_kw < 2.0 * 0.85
+
+    def test_warn_level_reduces_ev_no_pause(self):
+        """Projected > tak*0.85 but < tak → WARNING, reduce EV but no pause."""
+        g = _guard()
+        # Need projected between 1.7 and 2.0
+        # minute=30: projected = (viktat*30 + grid_viktat*30)/60
+        # viktat=1.5, grid=2200W (day weight=1.0 → 2.2kW)
+        # projected = (1.5*30 + 2.2*30)/60 = (45+66)/60 = 1.85 → WARN
+        r = g.evaluate(
+            viktat_timmedel_kw=1.5,
+            grid_import_w=2200,
+            hour=14,
+            minute=30,
+            ev_power_w=4140,
+            ev_amps=10,
+            ev_phase_count=3,
+        )
+        assert r.status == "WARNING"
+        assert r.projected_kw > 2.0 * 0.85
+        assert r.projected_kw <= 2.0
+        # Should reduce EV amps but NOT pause
+        actions = [c.get("action") for c in r.commands]
+        assert "reduce_ev" in actions
+        assert "pause_ev" not in actions
+        assert "increase_discharge" not in actions
+
+    def test_stop_level_pauses_ev(self):
+        """Projected > tak but < tak*1.1 → CRITICAL, EV paused."""
+        g = _guard()
+        # minute=30: projected = (viktat*30 + grid_viktat*30)/60
+        # viktat=1.6, grid=2800W (day weight=1.0 → 2.8kW)
+        # projected = (1.6*30 + 2.8*30)/60 = (48+84)/60 = 2.2 → >2.0 but <2.2
+        # Actually 2.2 = tak*1.1 exactly, need <2.2
+        # viktat=1.5, grid=2800W → (45+84)/60 = 2.15 → STOP
+        r = g.evaluate(
+            viktat_timmedel_kw=1.5,
+            grid_import_w=2800,
+            hour=14,
+            minute=30,
+            ev_power_w=4140,
+            ev_amps=6,
+            ev_phase_count=3,
+        )
+        assert r.status == "CRITICAL"
+        assert r.projected_kw > 2.0
+        assert r.projected_kw <= 2.0 * 1.1
+        actions = [c.get("action") for c in r.commands]
+        assert "pause_ev" in actions
+        assert "increase_discharge" not in actions
+
+    def test_emergency_level_discharge(self):
+        """Projected > tak*1.1 → CRITICAL, battery discharge when no EV to shed."""
+        g = _guard()
+        bats = [_bat("kontor", available_kwh=10.0)]
+        # No EV — house load alone pushes over emergency limit
+        # minute=10: projected = (viktat*10 + grid_viktat*50)/60
+        # viktat=1.0, grid=5000W → projected = (10+250)/60 = 4.33 >> 2.2
+        r = g.evaluate(
+            viktat_timmedel_kw=1.0,
+            grid_import_w=5000,
+            hour=14,
+            minute=10,
+            ev_power_w=0,
+            ev_amps=0,
+            batteries=bats,
+        )
+        assert r.status == "CRITICAL"
+        assert r.projected_kw > 2.0 * 1.1
+        actions = [c.get("action") for c in r.commands]
+        assert "increase_discharge" in actions
+
+    def test_ev_started_early_hour_projection_catches_it(self):
+        """Real scenario from PLAT-1100: EV 6A, grid 5kW, minute 10 → caught."""
+        g = _guard()
+        bats = [_bat("kontor", available_kwh=5.0), _bat("forrad", available_kwh=5.0)]
+        # Simulates: EV just started, viktat only 1.3 kW but grid is 5kW
+        # projected = (1.3*10 + 5.0*50)/60 = (13+250)/60 = 4.38 → EMERGENCY
+        r = g.evaluate(
+            viktat_timmedel_kw=1.3,
+            grid_import_w=5000,
+            hour=14,
+            minute=10,
+            ev_power_w=4140,
+            ev_amps=6,
+            ev_phase_count=3,
+            batteries=bats,
+        )
+        assert r.status == "CRITICAL"
+        assert r.projected_kw > 2.0
+        # EV must be stopped
+        assert any(c.get("action") == "pause_ev" for c in r.commands)
+
+    def test_warn_level_no_ev_sheds_consumers(self):
+        """WARN level with no EV but consumers → shed consumers only."""
+        g = _guard()
+        consumers = [_consumer("miner", 500, 2, switch="switch.miner")]
+        r = g.evaluate(
+            viktat_timmedel_kw=1.5,
+            grid_import_w=2200,
+            hour=14,
+            minute=30,
+            consumers=consumers,
+        )
+        assert r.status == "WARNING"
+        actions = [c.get("action") for c in r.commands]
+        assert "switch_off" in actions
+        assert "pause_ev" not in actions
+        assert "increase_discharge" not in actions
+
     def test_scenario_short_spike_ok(self):
         """Spike at XX:50, average already low → no action needed."""
         g = _guard()

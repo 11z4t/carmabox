@@ -273,7 +273,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5b: Detailed household profile for benchmarking."""
         if user_input is not None:
             self._user_input.update(user_input)
-            return await self.async_step_appliances()
+            return await self.async_step_consumers()
 
         # Auto-detect battery brand from inverter domains
         detected_brand = "other"
@@ -317,6 +317,46 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Optional("electricity_retailer", default="other"): vol.In(
                         dict(ELECTRICITY_RETAILERS.items())
                     ),
+                }
+            ),
+        )
+
+    async def async_step_consumers(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 5c: Configure surplus chain consumers."""
+        if user_input is not None:
+            self._user_input["consumers"] = user_input
+            return await self.async_step_appliances()
+
+        return self.async_show_form(
+            step_id="consumers",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("ev_enabled", default=True): bool,
+                    vol.Optional(
+                        "miner_entity",
+                        default="switch.shelly1pmg4_a085e3bd1e60",
+                    ): str,
+                    vol.Optional("miner_power_w", default=500): vol.All(
+                        vol.Coerce(int), vol.Range(min=0, max=5000)
+                    ),
+                    vol.Optional(
+                        "vp_kontor_entity",
+                        default="climate.kontor_ac",
+                    ): str,
+                    vol.Optional(
+                        "vp_pool_entity",
+                        default="switch.shellypro1pm_a0dd6c9ecfd8",
+                    ): str,
+                    vol.Optional(
+                        "pool_heater_entity",
+                        default="switch.shellypro1pm_30c6f7826520",
+                    ): str,
+                    vol.Optional(
+                        "cirkpump_entity",
+                        default="sensor.shellypro1pm_8813bfda5c2c_power",
+                    ): str,
                 }
             ),
         )
@@ -572,6 +612,8 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "electricity_retailer": self._user_input.get("electricity_retailer", ""),
             # Mode — analyzer only by default (no battery commands sent)
             "executor_enabled": self._user_input.get("executor_enabled", False),
+            # Consumers (surplus chain configuration)
+            "consumers": self._user_input.get("consumers", {}),
             # Appliances (from auto-detect + user categorization)
             "appliances": self._user_input.get("appliances", []),
             # Entity mappings (from auto-detect, user can change in options)
@@ -973,8 +1015,18 @@ class CarmaboxOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Main options page."""
         if user_input is not None:
+            # Extract consumers_* keys into nested consumers dict
+            consumers: dict[str, Any] = {}
+            cleaned_input: dict[str, Any] = {}
+            for key, value in user_input.items():
+                if key.startswith("consumers_"):
+                    consumers[key.removeprefix("consumers_")] = value
+                else:
+                    cleaned_input[key] = value
+            if consumers:
+                cleaned_input["consumers"] = consumers
             # Merge with existing options to preserve entity mappings
-            return self.async_create_entry(data={**self.entry.options, **user_input})
+            return self.async_create_entry(data={**self.entry.options, **cleaned_input})
 
         opts = self.entry.options
 
@@ -1090,6 +1142,45 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "electricity_retailer",
                         default=opts.get("electricity_retailer", ""),
                     ): vol.In({**ELECTRICITY_RETAILERS, "": "Ej valt"}),
+                    # Consumers (surplus chain)
+                    vol.Optional(
+                        "consumers_ev_enabled",
+                        default=opts.get("consumers", {}).get("ev_enabled", True),
+                    ): bool,
+                    vol.Optional(
+                        "consumers_miner_entity",
+                        default=opts.get("consumers", {}).get(
+                            "miner_entity", "switch.shelly1pmg4_a085e3bd1e60"
+                        ),
+                    ): str,
+                    vol.Optional(
+                        "consumers_miner_power_w",
+                        default=opts.get("consumers", {}).get("miner_power_w", 500),
+                    ): vol.All(vol.Coerce(int), vol.Range(min=0, max=5000)),
+                    vol.Optional(
+                        "consumers_vp_kontor_entity",
+                        default=opts.get("consumers", {}).get(
+                            "vp_kontor_entity", "climate.kontor_ac"
+                        ),
+                    ): str,
+                    vol.Optional(
+                        "consumers_vp_pool_entity",
+                        default=opts.get("consumers", {}).get(
+                            "vp_pool_entity", "switch.shellypro1pm_a0dd6c9ecfd8"
+                        ),
+                    ): str,
+                    vol.Optional(
+                        "consumers_pool_heater_entity",
+                        default=opts.get("consumers", {}).get(
+                            "pool_heater_entity", "switch.shellypro1pm_30c6f7826520"
+                        ),
+                    ): str,
+                    vol.Optional(
+                        "consumers_cirkpump_entity",
+                        default=opts.get("consumers", {}).get(
+                            "cirkpump_entity", "sensor.shellypro1pm_8813bfda5c2c_power"
+                        ),
+                    ): str,
                 }
             ),
         )

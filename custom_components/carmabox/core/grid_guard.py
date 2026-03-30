@@ -26,6 +26,7 @@ class GridGuardConfig:
     tak_kw: float = 2.0
     night_weight: float = 0.5
     margin: float = 0.85
+    emergency_factor: float = 1.1
     day_start_hour: int = 6
     day_end_hour: int = 22
     main_fuse_a: int = 25
@@ -138,8 +139,12 @@ class GridGuard:
         # Calculate projection
         vikt = self._weight(hour)
         projected_kw = self._project(viktat_timmedel_kw, grid_import_w, vikt, minute)
-        limit_kw = self.config.tak_kw * self.config.margin
-        headroom_kw = limit_kw - projected_kw
+
+        # 3-level thresholds
+        warn_limit = self.config.tak_kw * self.config.margin  # tak * 0.85
+        stop_limit = self.config.tak_kw  # tak * 1.0
+        emergency_limit = self.config.tak_kw * self.config.emergency_factor  # tak * 1.1
+        headroom_kw = warn_limit - projected_kw
 
         # Check main fuse (absolute safety)
         main_fuse_w = self.config.main_fuse_a * 230 * self.config.main_fuse_phases
@@ -148,6 +153,16 @@ class GridGuard:
                 f"Huvudsäkring: {grid_import_w:.0f}W > {main_fuse_w * 0.9:.0f}W (90%)"
             )
 
+        # Determine escalation level
+        if projected_kw > emergency_limit:
+            level = "EMERGENCY"
+        elif projected_kw > stop_limit:
+            level = "STOP"
+        elif projected_kw > warn_limit:
+            level = "WARN"
+        else:
+            level = "OK"
+
         # If invariants violated, fix them BUT also check headroom
         if inv_result.invariant_violations:
             inv_result.headroom_kw = headroom_kw
@@ -155,7 +170,7 @@ class GridGuard:
             inv_result.viktat_timmedel_kw = viktat_timmedel_kw
             inv_result.replan_needed = True
             # ALSO run action ladder if over limit
-            if headroom_kw < 0:
+            if level != "OK":
                 overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
                 extra_cmds, reason = self._action_ladder(
                     overshoot_w,
@@ -165,14 +180,15 @@ class GridGuard:
                     ev_phase_count,
                     batteries,
                     kontor_temp_c,
+                    level=level,
                 )
                 inv_result.commands.extend(extra_cmds)
                 inv_result.reason += f"; {reason}" if reason else ""
                 inv_result.status = "CRITICAL"
             return inv_result
 
-        # Headroom OK
-        if headroom_kw >= 0:
+        # Headroom OK — no projection breach
+        if level == "OK":
             if self._status == "RECOVERY":
                 if ts - self._recovery_start >= self.config.recovery_hold_s:
                     self._status = "OK"
@@ -189,7 +205,7 @@ class GridGuard:
                 reason="OK" if self._status == "OK" else "Recovering",
             )
 
-        # OVER LIMIT — action ladder
+        # OVER LIMIT — action ladder with escalation level
         overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)  # Convert to actual W
         commands, reason = self._action_ladder(
             overshoot_w,
@@ -199,13 +215,10 @@ class GridGuard:
             ev_phase_count,
             batteries,
             kontor_temp_c,
+            level=level,
         )
 
-        self._status = (
-            "CRITICAL"
-            if any(c.get("action") in ("pause_ev", "increase_discharge") for c in commands)
-            else "WARNING"
-        )
+        self._status = "CRITICAL" if level in ("STOP", "EMERGENCY") else "WARNING"
 
         return GridGuardResult(
             status=self._status,
@@ -357,8 +370,15 @@ class GridGuard:
         ev_phase_count: int,
         batteries: list[BatteryState],
         kontor_temp_c: float,
+        level: str = "EMERGENCY",
     ) -> tuple[list[dict], str]:
-        """Determine actions to reduce grid import."""
+        """Determine actions to reduce grid import.
+
+        Level controls max escalation:
+          WARN     — shed consumers + reduce EV amps (no pause, no discharge)
+          STOP     — shed consumers + pause EV (no discharge)
+          EMERGENCY — full ladder including battery discharge
+        """
         commands: list[dict] = []
         reasons: list[str] = []
         remaining = overshoot_w
@@ -399,7 +419,7 @@ class GridGuard:
             reasons.append(f"{consumer.name} av ({consumer.power_w:.0f}W)")
             self._actions_taken.append(consumer.id)
 
-        # Step 5: Reduce EV amps
+        # Step 5: Reduce EV amps (WARN level and above)
         if remaining > 0 and ev_power_w > 100 and ev_amps > 0:
             w_per_amp = 230 * ev_phase_count
             amps_to_reduce = math.ceil(remaining / w_per_amp)
@@ -417,15 +437,15 @@ class GridGuard:
                 reasons.append(f"EV {ev_amps}→{new_amps}A")
                 self._actions_taken.append("ev_reduced")
 
-        # Step 6: Pause EV completely
-        if remaining > 0 and ev_power_w > 100:
+        # Step 6: Pause EV completely (STOP level and above)
+        if level in ("STOP", "EMERGENCY") and remaining > 0 and ev_power_w > 100:
             commands.append({"action": "pause_ev"})
             remaining -= ev_power_w
             reasons.append(f"EV pausad ({ev_power_w:.0f}W)")
             self._actions_taken.append("ev_paused")
 
-        # Step 7: Increase battery discharge
-        if remaining > 0:
+        # Step 7: Increase battery discharge (EMERGENCY only)
+        if level == "EMERGENCY" and remaining > 0:
             total_available = sum(b.available_kwh for b in batteries)
             if total_available > 0.3:
                 discharge_w = int(min(remaining, 5000))
