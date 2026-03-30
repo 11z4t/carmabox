@@ -44,9 +44,9 @@ class EaseeAdapter(EVAdapter):
         self.prefix = entity_prefix
         self._initialized = False
 
-    async def ensure_initialized(self) -> None:
-        """One-time setup: max_limit=10, smart_charging=off."""
-        if self._initialized:
+    async def ensure_initialized(self, force: bool = False) -> None:
+        """Setup: max_limit=10, smart_charging=off. Runs once unless force=True."""
+        if self._initialized and not force:
             return
         self._initialized = True
         _LOGGER.info(
