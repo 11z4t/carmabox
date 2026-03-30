@@ -988,6 +988,7 @@ class TestShouldChargeEvTonight:
             tonight_prices_ore=[20.0] * 8,
             tomorrow_night_prices_ore=[20.0] * 8,
             pv_tomorrow_kwh=46.0,
+            is_workday_tomorrow=False,  # Weekend: car stays home
         )
         assert r["charge"] is False
         assert r["pv_covers"] is True

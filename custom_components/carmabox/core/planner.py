@@ -804,17 +804,19 @@ def should_charge_ev_tonight(
     tomorrow_night_prices_ore: list[float],  # 8 prices for tomorrow 22-06 (may be empty)
     pv_tomorrow_kwh: float,  # PV forecast tomorrow
     ev_charge_kw: float = 4.14,  # 6A 3-phase
+    is_workday_tomorrow: bool = True,  # Mon-Fri: car leaves for work
 ) -> dict:
     """Decide: charge EV tonight or wait for cheaper/free opportunity.
 
     Compares three options:
     A) Charge tonight at tonight's cheapest hours
     B) Wait and charge tomorrow night at tomorrow's prices
-    C) Wait and charge from PV tomorrow (free!)
+    C) Wait and charge from PV tomorrow (free!) — ONLY if car stays home
 
     Logic:
     - If EV already at target: no charge
-    - If PV tomorrow covers EV need + house + battery: wait (free!)
+    - If WEEKEND + PV covers EV: wait (car home, free PV)
+    - If WORKDAY: car leaves → PV can NOT cover → charge tonight
     - If tonight < tomorrow * 0.8: charge tonight (20% cheaper)
     - Otherwise: wait for better opportunity
     """
@@ -847,11 +849,21 @@ def should_charge_ev_tonight(
     else:
         tomorrow_cost_kr = 0.0
 
+    # HARD REQUIREMENT: EV must be at target by 06:00 (LAG 3)
+    # If below target and it's tonight → CHARGE regardless of cost
+    if ev_soc_pct < ev_target_pct:
+        # Must charge tonight — can't risk missing target
+        pass  # Fall through to cost comparison below
+
     # PV coverage: tomorrow_kwh > ev_need + 15 (house + battery headroom)
-    pv_covers = pv_tomorrow_kwh > ev_need_kwh + 15.0
+    # BUT: only valid if car stays home (weekend/holiday)
+    pv_covers = (
+        pv_tomorrow_kwh > ev_need_kwh + 15.0
+        and not is_workday_tomorrow  # Car must be HOME to PV-charge
+    )
 
     # Decision logic
-    # Option C: PV covers everything -- wait for free solar
+    # Option C: PV covers everything AND car stays home -- wait for free solar
     if pv_covers:
         return {
             "charge": False,

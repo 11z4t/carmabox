@@ -1248,6 +1248,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             type("", (), {"state": "0"})(),
                         ).state
                     )
+                    from datetime import datetime as _dt
+
+                    _tomorrow_weekday = (_dt.now().weekday() + 1) % 7
+                    _is_workday = _tomorrow_weekday < 5  # Mon=0..Fri=4
+
                     ev_timing = should_charge_ev_tonight(
                         ev_soc_pct=ev_soc,
                         ev_target_pct=ev_target,
@@ -1255,6 +1260,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         tonight_prices_ore=tonight,
                         tomorrow_night_prices_ore=tmr_night,
                         pv_tomorrow_kwh=pv_tmr,
+                        is_workday_tomorrow=_is_workday,
                     )
                     _ev_charge_tonight = ev_timing.get("charge", True)
                     if not _ev_charge_tonight:
