@@ -1183,10 +1183,31 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         current_price,
                         discharge_decision.get("avg_expensive", 0),
                     )
-                    # Set discharge via EMS
-                    discharge_decision.get("recommended_kw", 2.0)
+                    # Set discharge via EMS + power limit
+                    rate_kw = discharge_decision.get("recommended_kw", 2.0)
+                    rate_w = int(rate_kw * 1000)
                     for adapter in self.inverter_adapters:
                         await adapter.set_ems_mode("discharge_pv")
+                    # Set peak_shaving_limit to control grid import
+                    # Lower limit = more aggressive discharge
+                    ps_limit = max(500, int(2500 - rate_w / 2))
+                    for adapter in self.inverter_adapters:
+                        if hasattr(adapter, "device_id") and adapter.device_id:
+                            with contextlib.suppress(Exception):
+                                await self.hass.services.async_call(
+                                    "goodwe",
+                                    "set_parameter",
+                                    {
+                                        "device_id": adapter.device_id,
+                                        "parameter": "peak_shaving_power_limit",
+                                        "value": ps_limit,
+                                    },
+                                )
+                    _LOGGER.info(
+                        "PRICE-DISCHARGE: rate=%.1fkW PS=%dW",
+                        rate_kw,
+                        ps_limit,
+                    )
                     self._price_discharge_active = True
                 elif getattr(self, "_price_discharge_active", False) and not discharge_decision.get(
                     "discharge"
