@@ -6566,6 +6566,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 ok = await adapter.set_ems_mode("battery_standby")
                 if ok:
                     success = True
+                    # PLAT-1040: Zero ems_power_limit — non-zero value causes
+                    # GoodWe firmware to autonomously charge from grid.
+                    await adapter.set_discharge_limit(0)
                     # Turn off fast charging — don't charge from grid
                     if isinstance(adapter, GoodWeAdapter):
                         await adapter.set_fast_charging(on=False)

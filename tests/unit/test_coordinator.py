@@ -1295,6 +1295,9 @@ class TestAdapterIntegration:
 
         a1.set_ems_mode.assert_called_once_with("battery_standby")
         a2.set_ems_mode.assert_called_once_with("battery_standby")
+        # PLAT-1040: standby MUST zero ems_power_limit to prevent grid charging
+        a1.set_discharge_limit.assert_called_once_with(0)
+        a2.set_discharge_limit.assert_called_once_with(0)
         assert coord._last_command == BatteryCommand.STANDBY
 
     @pytest.mark.asyncio
