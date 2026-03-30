@@ -83,12 +83,14 @@ def evaluate_startup(
         )
 
     # Step 3: Restore night EV if applicable
-    if (restored_state
-            and restored_state.night_ev_active
-            and restored_state.ev_enabled
-            and is_night
-            and ev_connected
-            and 0 <= ev_soc < ev_target_soc):
+    if (
+        restored_state
+        and restored_state.night_ev_active
+        and restored_state.ev_enabled
+        and is_night
+        and ev_connected
+        and 0 <= ev_soc < ev_target_soc
+    ):
         return StartupCommand(
             action="restore_ev",
             fast_charging_off=True,

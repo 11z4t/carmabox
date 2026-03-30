@@ -253,7 +253,7 @@ def calculate_ev_multinight_plan(
         "tonight_soc": round(tonight_soc, 0),
         "tonight_kwh": round(tonight_max_kwh, 1),
         "tomorrow_soc": round(tomorrow_soc, 0) if not can_reach_tonight else None,
-        "tomorrow_kwh": round(remaining_after_tonight, 1) if not can_reach_tonight else 0,
+        "tomorrow_kwh": (round(remaining_after_tonight, 1) if not can_reach_tonight else 0),
         "pv_tomorrow_kwh": round(pv_tomorrow_kwh, 0),
         "battery_support_kwh": round(tomorrow_battery_kwh, 1),
         "nights_needed": 1 if can_reach_tonight else 2,
@@ -279,7 +279,9 @@ def ev_needs_full_charge(days_since_full: int, full_charge_interval: int = 7) ->
 
 
 def _is_night_hour(
-    hour: int, night_start: int = DEFAULT_NIGHT_START, night_end: int = DEFAULT_NIGHT_END
+    hour: int,
+    night_start: int = DEFAULT_NIGHT_START,
+    night_end: int = DEFAULT_NIGHT_END,
 ) -> bool:
     """Check if hour is within night window."""
     if night_start > night_end:

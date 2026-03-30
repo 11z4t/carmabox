@@ -124,7 +124,6 @@ class TestStartupSafety:
         )
         assert cmd.action == "ready"
 
-
     def test_no_restore_when_ev_disabled(self):
         """ev_enabled=False + night_ev_active=True → ready (user override)."""
         state = StartupState(night_ev_active=True, ev_enabled=False)

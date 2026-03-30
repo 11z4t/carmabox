@@ -17,7 +17,12 @@ async def test_flow_no_inverter_aborts(hass: HomeAssistant) -> None:
     """Config flow aborts when no inverter is detected."""
     with patch(
         "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
-        return_value={"inverters": [], "ev_chargers": [], "price_sources": [], "pv_forecasts": []},
+        return_value={
+            "inverters": [],
+            "ev_chargers": [],
+            "price_sources": [],
+            "pv_forecasts": [],
+        },
     ):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
 
@@ -48,7 +53,12 @@ async def test_flow_full_happy_path(hass: HomeAssistant) -> None:
     detected = {
         "inverters": [{"domain": "goodwe", "name": "GoodWe", "entry_id": "e1", "prefix": "kontor"}],
         "ev_chargers": [
-            {"domain": "easee", "name": "Easee", "entry_id": "e2", "prefix": "easee_home"}
+            {
+                "domain": "easee",
+                "name": "Easee",
+                "entry_id": "e2",
+                "prefix": "easee_home",
+            }
         ],
         "price_sources": [{"domain": "nordpool", "name": "Nordpool", "entity_id": "sensor.np"}],
         "pv_forecasts": [{"domain": "solcast_solar", "name": "Solcast"}],
@@ -90,7 +100,7 @@ async def test_flow_full_happy_path(hass: HomeAssistant) -> None:
         )
         assert result["step_id"] == "household"
 
-        # Step 5: household → summary
+        # Step 5: household → household_profile
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             user_input={
@@ -98,6 +108,10 @@ async def test_flow_full_happy_path(hass: HomeAssistant) -> None:
                 "has_pool_pump": False,
             },
         )
+        assert result["step_id"] == "household_profile"
+
+        # Step 5b: household_profile → summary
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], user_input={})
         assert result["type"] == FlowResultType.FORM
         assert result["step_id"] == "summary"
 
@@ -146,6 +160,7 @@ async def test_flow_duplicate_aborts(hass: HomeAssistant) -> None:
             result["flow_id"],
             {"household_size": 2, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["step_id"] == "summary"
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -212,7 +227,12 @@ async def test_flow_no_inverter_abort_step(hass: HomeAssistant) -> None:
     """The no_inverter step should abort."""
     with patch(
         "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
-        return_value={"inverters": [], "ev_chargers": [], "price_sources": [], "pv_forecasts": []},
+        return_value={
+            "inverters": [],
+            "ev_chargers": [],
+            "price_sources": [],
+            "pv_forecasts": [],
+        },
     ):
         result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_USER})
         # Proceed through no_inverter step
@@ -334,8 +354,18 @@ async def test_flow_dual_inverter_mappings(hass: HomeAssistant) -> None:
     """Two inverters should generate battery_2 entity mappings."""
     detected = {
         "inverters": [
-            {"domain": "goodwe", "name": "GoodWe Kontor", "entry_id": "e1", "prefix": "kontor"},
-            {"domain": "goodwe", "name": "GoodWe Förråd", "entry_id": "e2", "prefix": "forrad"},
+            {
+                "domain": "goodwe",
+                "name": "GoodWe Kontor",
+                "entry_id": "e1",
+                "prefix": "kontor",
+            },
+            {
+                "domain": "goodwe",
+                "name": "GoodWe Förråd",
+                "entry_id": "e2",
+                "prefix": "forrad",
+            },
         ],
         "ev_chargers": [],
         "price_sources": [],
@@ -365,6 +395,7 @@ async def test_flow_dual_inverter_mappings(hass: HomeAssistant) -> None:
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["step_id"] == "summary"
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -467,14 +498,33 @@ async def test_summary_step_shows_detected_equipment(hass: HomeAssistant) -> Non
     """Summary step should display detected equipment and strategy."""
     detected = {
         "inverters": [
-            {"domain": "goodwe", "name": "GoodWe", "entry_id": "e1", "prefix": "kontor"},
-            {"domain": "goodwe", "name": "GoodWe", "entry_id": "e2", "prefix": "forrad"},
+            {
+                "domain": "goodwe",
+                "name": "GoodWe",
+                "entry_id": "e1",
+                "prefix": "kontor",
+            },
+            {
+                "domain": "goodwe",
+                "name": "GoodWe",
+                "entry_id": "e2",
+                "prefix": "forrad",
+            },
         ],
         "ev_chargers": [
-            {"domain": "easee", "name": "Easee", "entry_id": "e3", "prefix": "easee_home"}
+            {
+                "domain": "easee",
+                "name": "Easee",
+                "entry_id": "e3",
+                "prefix": "easee_home",
+            }
         ],
         "price_sources": [
-            {"domain": "nordpool", "name": "Nordpool", "entity_id": "sensor.nordpool_kwh_se3"}
+            {
+                "domain": "nordpool",
+                "name": "Nordpool",
+                "entity_id": "sensor.nordpool_kwh_se3",
+            }
         ],
         "pv_forecasts": [{"domain": "solcast_solar", "name": "Solcast"}],
     }
@@ -483,7 +533,7 @@ async def test_summary_step_shows_detected_equipment(hass: HomeAssistant) -> Non
     hass.states.async_set("sensor.pv_battery_soc_kontor", "57")
     hass.states.async_set("sensor.pv_battery_soc_forrad", "82")
     hass.states.async_set("sensor.easee_home_status", "connected")
-    hass.states.async_set("sensor.nordpool_kwh_se3", "1.41")
+    hass.states.async_set("sensor.nordpool_kwh_se3", "141.0")
 
     with patch(
         "custom_components.carmabox.config_flow.CarmaboxConfigFlow._auto_detect",
@@ -508,11 +558,12 @@ async def test_summary_step_shows_detected_equipment(hass: HomeAssistant) -> Non
             result["flow_id"],
             {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
         )
-        # household → summary
+        # household → household_profile
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] == FlowResultType.FORM
     assert result["step_id"] == "summary"
@@ -560,6 +611,7 @@ async def test_summary_step_without_ev(hass: HomeAssistant) -> None:
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["step_id"] == "summary"
     assert "EV" not in result["description_placeholders"]["strategy"]
@@ -646,6 +698,7 @@ async def test_adapter_keys_populated_from_entities(hass: HomeAssistant) -> None
             {"household_size": 4, "has_pool_pump": False},
         )
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     opts = result["options"]
@@ -713,6 +766,7 @@ async def test_ev_adapter_keys_populated(hass: HomeAssistant) -> None:
             {"household_size": 4, "has_pool_pump": False},
         )
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
     opts = result["options"]
@@ -774,6 +828,7 @@ async def test_easee_charger_id_fallback_from_prefix(hass: HomeAssistant) -> Non
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["type"] == FlowResultType.CREATE_ENTRY
@@ -896,11 +951,12 @@ async def test_appliance_step_shown_when_sensors_found(hass: HomeAssistant) -> N
             result["flow_id"],
             {"price_area": "SE3", "grid_operator": "ellevio", "peak_cost_per_kw": 80},
         )
-        # household → should go to appliances (not summary)
+        # household → household_profile → appliances
         result = await hass.config_entries.flow.async_configure(
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
 
     assert result["step_id"] == "appliances"
     assert "1" in result["description_placeholders"]["detected_count"]
@@ -950,6 +1006,7 @@ async def test_appliance_step_stores_selections(hass: HomeAssistant) -> None:
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["step_id"] == "appliances"
 
         # User enables both, changes tvattmaskin to laundry category
@@ -1023,6 +1080,7 @@ async def test_appliance_step_disable_sensor(hass: HomeAssistant) -> None:
             result["flow_id"],
             {"household_size": 4, "has_pool_pump": False},
         )
+        result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
         assert result["step_id"] == "appliances"
 
         # Disable unwanted sensor

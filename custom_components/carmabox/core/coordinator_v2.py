@@ -19,7 +19,12 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from ..const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS
+from ..const import (
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_MIN_AMPS,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
+)
 from .battery_balancer import BatteryInfo, calculate_proportional_discharge
 from .grid_guard import BatteryState, GridGuard, GridGuardConfig
 from .law_guardian import GuardianState, LawGuardian
@@ -112,12 +117,14 @@ class CoordinatorV2:
 
     def __init__(self, config: CoordinatorConfig | None = None) -> None:
         self.config = config or CoordinatorConfig()
-        self.grid_guard = GridGuard(GridGuardConfig(
-            tak_kw=self.config.ellevio_tak_kw,
-            night_weight=self.config.ellevio_night_weight,
-            margin=self.config.grid_guard_margin,
-            cold_lock_temp_c=self.config.cold_lock_temp_c,
-        ))
+        self.grid_guard = GridGuard(
+            GridGuardConfig(
+                tak_kw=self.config.ellevio_tak_kw,
+                night_weight=self.config.ellevio_night_weight,
+                margin=self.config.grid_guard_margin,
+                cold_lock_temp_c=self.config.cold_lock_temp_c,
+            )
+        )
         self.law_guardian = LawGuardian()
         self.surplus_hysteresis = HysteresisState()
         self.plan: list[PlanAction] = []
@@ -135,7 +142,7 @@ class CoordinatorV2:
     def cycle(self, state: SystemState) -> CycleResult:
         """Run one 30s cycle. Returns commands to execute."""
         cfg = self.config
-        is_night = state.hour >= 22 or state.hour < 6
+        is_night = state.hour >= DEFAULT_NIGHT_START or state.hour < DEFAULT_NIGHT_END
         weight = cfg.ellevio_night_weight if is_night else 1.0
         bat_commands = []
         ev_cmd = None
@@ -160,34 +167,72 @@ class CoordinatorV2:
             elif startup.action == "restore_ev":
                 self._startup_confirmed = True
                 self.night_ev_active = True
-                ev_cmd = {"action": "start", "amps": cfg.ev_min_amps, "override_schedule": True}
+                ev_cmd = {
+                    "action": "start",
+                    "amps": cfg.ev_min_amps,
+                    "override_schedule": True,
+                }
             else:
                 # Safe mode — standby + fast_charging OFF
                 for i in range(2):
-                    bat_commands.append({"id": i, "mode": "battery_standby",
-                                         "power_limit": 0, "fast_charging": False})
-                return CycleResult(bat_commands, None, [], startup.action,
-                                   "startup", startup.reason, [], [])
+                    bat_commands.append(
+                        {
+                            "id": i,
+                            "mode": "battery_standby",
+                            "power_limit": 0,
+                            "fast_charging": False,
+                        }
+                    )
+                return CycleResult(
+                    bat_commands,
+                    None,
+                    [],
+                    startup.action,
+                    "startup",
+                    startup.reason,
+                    [],
+                    [],
+                )
 
         # ── 3. GRID GUARD ───────────────────────────────────────
         batteries_gg = []
-        for i, (soc, pw, tmp, ems, fc) in enumerate([
-            (state.battery_soc_1, state.battery_power_1, state.battery_temp_1,
-             state.ems_mode_1, state.fast_charging_1),
-            (state.battery_soc_2, state.battery_power_2, state.battery_temp_2,
-             state.ems_mode_2, state.fast_charging_2),
-        ]):
+        for i, (soc, pw, tmp, ems, fc) in enumerate(
+            [
+                (
+                    state.battery_soc_1,
+                    state.battery_power_1,
+                    state.battery_temp_1,
+                    state.ems_mode_1,
+                    state.fast_charging_1,
+                ),
+                (
+                    state.battery_soc_2,
+                    state.battery_power_2,
+                    state.battery_temp_2,
+                    state.ems_mode_2,
+                    state.fast_charging_2,
+                ),
+            ]
+        ):
             cap = cfg.battery_1_kwh if i == 0 else cfg.battery_2_kwh
             avail = max(0, (soc - cfg.battery_min_soc) / 100 * cap) if soc >= 0 else 0
-            batteries_gg.append(BatteryState(
-                id=f"bat{i}", soc=soc, power_w=pw, cell_temp_c=tmp,
-                ems_mode=ems, fast_charging_on=fc, available_kwh=avail,
-            ))
+            batteries_gg.append(
+                BatteryState(
+                    id=f"bat{i}",
+                    soc=soc,
+                    power_w=pw,
+                    cell_temp_c=tmp,
+                    ems_mode=ems,
+                    fast_charging_on=fc,
+                    available_kwh=avail,
+                )
+            )
 
         gg_result = self.grid_guard.evaluate(
             viktat_timmedel_kw=state.ellevio_viktat_kw,
             grid_import_w=max(0, state.grid_import_w),
-            hour=state.hour, minute=state.minute,
+            hour=state.hour,
+            minute=state.minute,
             ev_power_w=state.ev_power_w,
             ev_amps=cfg.ev_min_amps if state.ev_enabled else 0,
             ev_phase_count=cfg.ev_phase_count,
@@ -202,8 +247,14 @@ class CoordinatorV2:
                     ev_cmd = {"action": "stop", "amps": 0, "override_schedule": False}
                 elif cmd.get("action") == "set_ems_mode":
                     bat_id = 0 if "kontor" in cmd.get("battery_id", "bat0") else 1
-                    bat_commands.append({"id": bat_id, "mode": cmd["mode"],
-                                         "power_limit": 0, "fast_charging": False})
+                    bat_commands.append(
+                        {
+                            "id": bat_id,
+                            "mode": cmd["mode"],
+                            "power_limit": 0,
+                            "fast_charging": False,
+                        }
+                    )
             reason_parts.append(f"GG:{gg_result.status}")
 
         # ── 4. PLAN GENERATION (var 5 min) ──────────────────────
@@ -244,49 +295,86 @@ class CoordinatorV2:
             # ── 6. BATTERY BALANCER ─────────────────────────────
             if cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
                 bats = [
-                    BatteryInfo("kontor", state.battery_soc_1, cfg.battery_1_kwh,
-                                state.battery_temp_1, min_soc=cfg.battery_min_soc),
-                    BatteryInfo("forrad", state.battery_soc_2, cfg.battery_2_kwh,
-                                state.battery_temp_2, min_soc=cfg.battery_min_soc),
+                    BatteryInfo(
+                        "kontor",
+                        state.battery_soc_1,
+                        cfg.battery_1_kwh,
+                        state.battery_temp_1,
+                        min_soc=cfg.battery_min_soc,
+                    ),
+                    BatteryInfo(
+                        "forrad",
+                        state.battery_soc_2,
+                        cfg.battery_2_kwh,
+                        state.battery_temp_2,
+                        min_soc=cfg.battery_min_soc,
+                    ),
                 ]
                 bal = calculate_proportional_discharge(bats, cmd.battery_discharge_w)
                 for j, alloc in enumerate(bal.allocations):
-                    bat_commands.append({
-                        "id": j, "mode": "discharge_pv",
-                        "power_limit": alloc.watts, "fast_charging": False,
-                    })
+                    bat_commands.append(
+                        {
+                            "id": j,
+                            "mode": "discharge_pv",
+                            "power_limit": alloc.watts,
+                            "fast_charging": False,
+                        }
+                    )
             elif cmd.battery_action == "charge_pv":
                 for j in range(2):
-                    bat_commands.append({"id": j, "mode": "charge_pv",
-                                         "power_limit": 0, "fast_charging": False})
+                    bat_commands.append(
+                        {
+                            "id": j,
+                            "mode": "charge_pv",
+                            "power_limit": 0,
+                            "fast_charging": False,
+                        }
+                    )
             elif cmd.battery_action == "standby":
                 for j in range(2):
-                    bat_commands.append({"id": j, "mode": "battery_standby",
-                                         "power_limit": 0, "fast_charging": False})
+                    bat_commands.append(
+                        {
+                            "id": j,
+                            "mode": "battery_standby",
+                            "power_limit": 0,
+                            "fast_charging": False,
+                        }
+                    )
 
         # ── 7. NATT-EV WORKFLOW ─────────────────────────────────
-        if (is_night and state.ev_connected
-                and 0 <= state.ev_soc < cfg.ev_target_soc
-                and not self.night_ev_active
-                and state.ev_enabled
-                and not grid_guard_acted):
+        if (
+            is_night
+            and state.ev_connected
+            and 0 <= state.ev_soc < cfg.ev_target_soc
+            and not self.night_ev_active
+            and state.ev_enabled
+            and not grid_guard_acted
+        ):
             bat_avail = sum(
                 max(0, (s - cfg.battery_min_soc) / 100 * c)
-                for s, c in [(state.battery_soc_1, cfg.battery_1_kwh),
-                              (state.battery_soc_2, cfg.battery_2_kwh)]
+                for s, c in [
+                    (state.battery_soc_1, cfg.battery_1_kwh),
+                    (state.battery_soc_2, cfg.battery_2_kwh),
+                ]
                 if s >= 0
             )
             min_bat_for_ev_kwh = 2.0
             if bat_avail > min_bat_for_ev_kwh:
                 self.night_ev_active = True
-                ev_cmd = {"action": "start", "amps": cfg.ev_min_amps, "override_schedule": True}
+                ev_cmd = {
+                    "action": "start",
+                    "amps": cfg.ev_min_amps,
+                    "override_schedule": True,
+                }
                 reason_parts.append("night_ev_start")
 
         # Stop natt-EV at departure or target
         if self.night_ev_active:
-            if (state.hour == cfg.ev_departure_hour
-                    or (state.ev_soc >= 0 and state.ev_soc >= cfg.ev_target_soc)
-                    or not is_night):
+            if (
+                state.hour == cfg.ev_departure_hour
+                or (state.ev_soc >= 0 and state.ev_soc >= cfg.ev_target_soc)
+                or not is_night
+            ):
                 self.night_ev_active = False
                 ev_cmd = {"action": "stop", "amps": 0, "override_schedule": False}
                 reason_parts.append("night_ev_stop")
@@ -296,19 +384,28 @@ class CoordinatorV2:
 
         # ── 8. SURPLUS CHAIN ────────────────────────────────────
         consumers = [
-            SurplusConsumer("miner", "Miner", 5, ConsumerType.ON_OFF,
-                            400, 500, state.miner_power_w,
-                            state.miner_power_w > 50),
+            SurplusConsumer(
+                "miner",
+                "Miner",
+                5,
+                ConsumerType.ON_OFF,
+                400,
+                500,
+                state.miner_power_w,
+                state.miner_power_w > 50,
+            ),
         ]
         if state.grid_import_w < -100:
             surplus_result = allocate_surplus(
-                abs(state.grid_import_w), consumers,
+                abs(state.grid_import_w),
+                consumers,
                 self.surplus_hysteresis,
                 SurplusConfig(start_delay_s=60, stop_delay_s=180),
             )
             surplus_actions = [
                 {"id": a.id, "action": a.action, "target_w": a.target_w}
-                for a in surplus_result.allocations if a.action != "none"
+                for a in surplus_result.allocations
+                if a.action != "none"
             ]
 
         # ── 9. LAW GUARDIAN ─────────────────────────────────────
@@ -338,9 +435,15 @@ class CoordinatorV2:
             cold_lock_temp=cfg.cold_lock_temp_c,
         )
         guardian_report = self.law_guardian.evaluate(guardian_state)
-        breaches = [{"law": b.law.value, "actual": b.actual_value,
-                      "limit": b.limit_value, "cause": b.root_cause}
-                     for b in guardian_report.breaches]
+        breaches = [
+            {
+                "law": b.law.value,
+                "actual": b.actual_value,
+                "limit": b.limit_value,
+                "cause": b.root_cause,
+            }
+            for b in guardian_report.breaches
+        ]
 
         return CycleResult(
             battery_commands=bat_commands,
@@ -357,8 +460,16 @@ class CoordinatorV2:
         """State to persist for restart survival."""
         return {
             "night_ev_active": self.night_ev_active,
-            "plan": [{"hour": p.hour, "action": p.action, "battery_kw": p.battery_kw,
-                       "grid_kw": p.grid_kw, "price": p.price,
-                       "battery_soc": p.battery_soc, "ev_soc": p.ev_soc}
-                      for p in self.plan],
+            "plan": [
+                {
+                    "hour": p.hour,
+                    "action": p.action,
+                    "battery_kw": p.battery_kw,
+                    "grid_kw": p.grid_kw,
+                    "price": p.price,
+                    "battery_soc": p.battery_soc,
+                    "ev_soc": p.ev_soc,
+                }
+                for p in self.plan
+            ],
         }

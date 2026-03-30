@@ -68,6 +68,8 @@ def generate_plan(
     4. Otherwise: idle
     """
     # S1: Input validation — clamp num_hours to sane range
+    # PLAT-969: plan_horizon controlled by input_number.v6_plan_horizon_h
+    # (DEFAULT_PLAN_HORIZON_HOURS=72). Coordinator passes full horizon via num_hours.
     num_hours = max(1, min(num_hours, 168))  # Max 7 days
     battery_cap_kwh = max(0.1, battery_cap_kwh)  # Prevent division by zero
 
@@ -105,16 +107,11 @@ def generate_plan(
     # ── Pre-sunrise drain target ─────────────────────────────────
     # Strong solar expected → drain to min_soc by sunrise
     total_pv_after_sunrise = sum(
-        hourly_pv[j] if j < len(hourly_pv) else 0.0
-        for j in range(sunrise_slot, num_hours)
+        hourly_pv[j] if j < len(hourly_pv) else 0.0 for j in range(sunrise_slot, num_hours)
     )
     solar_confident = total_pv_after_sunrise > 25.0
     solar_moderate = total_pv_after_sunrise > 15.0
-    sunrise_target_pct = (
-        battery_min_soc if solar_confident
-        else 30.0 if solar_moderate
-        else 50.0
-    )
+    sunrise_target_pct = battery_min_soc if solar_confident else 30.0 if solar_moderate else 50.0
     sunrise_target_kwh = sunrise_target_pct / 100 * battery_cap_kwh
 
     for i in range(num_hours):
@@ -140,7 +137,11 @@ def generate_plan(
                 soc_kwh += charge * battery_efficiency
                 action = "c"
 
-        elif price <= grid_charge_price_threshold and soc_kwh < max_charge_kwh:
+        elif (
+            price <= grid_charge_price_threshold
+            and soc_kwh < max_charge_kwh
+            and battery_soc <= grid_charge_max_soc
+        ):
             # P2: Very cheap price — charge from grid
             headroom = max_charge_kwh - soc_kwh
             charge_kw = min(max_grid_charge_kw, headroom)
@@ -166,9 +167,13 @@ def generate_plan(
                 soc_kwh -= discharge
                 action = "d"
 
-        elif (before_sunrise and available > 0.3 and net > 0.1
-              and soc_kwh > sunrise_target_kwh + 0.5
-              and (abs_h >= 22 or abs_h < 8)):
+        elif (
+            before_sunrise
+            and available > 0.3
+            and net > 0.1
+            and soc_kwh > sunrise_target_kwh + 0.5
+            and (abs_h >= 22 or abs_h < 8)
+        ):
             # P5: Pre-sunrise drain — ONLY at night (22-08)
             # Never drain batteries during daytime even if PV is low
             remaining_slots = max(1, sunrise_slot - i)
@@ -182,14 +187,17 @@ def generate_plan(
 
         # P7: Anti-idle — discharge slowly at night if battery still high
         # ONLY at night (22-08) — daytime batteries may be needed for evening/night
-        if (action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3
-                and (abs_h >= 22 or abs_h < 8)):
-            if available > 0.3:
-                idle_discharge = min(net * 0.5, available, 1.5)
-                if idle_discharge > 0.2:
-                    battery_kw = -idle_discharge
-                    soc_kwh -= idle_discharge
-                    action = "d"
+        if (
+            action == "i"
+            and soc_kwh > battery_cap_kwh * 0.8
+            and net > 0.3
+            and (abs_h >= 22 or abs_h < 8)
+        ) and available > 0.3:
+            idle_discharge = min(net * 0.5, available, 1.5)
+            if idle_discharge > 0.2:
+                battery_kw = -idle_discharge
+                soc_kwh -= idle_discharge
+                action = "d"
 
         # Clamp SoC to valid range
         soc_kwh = max(0.0, min(soc_kwh, battery_cap_kwh))

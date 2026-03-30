@@ -49,26 +49,34 @@ class EaseeAdapter(EVAdapter):
         if self._initialized:
             return
         self._initialized = True
-        _LOGGER.info("Easee: initializing — max_limit=%dA, dynamic=%dA, smart_charging=off", _MAX_LIMIT_FLOOR, _DYNAMIC_MIN)
+        _LOGGER.info(
+            "Easee: initializing — max_limit=%dA, dynamic=%dA, smart_charging=off",
+            _MAX_LIMIT_FLOOR,
+            _DYNAMIC_MIN,
+        )
         # Set max_limit to safe floor + dynamic to minimum
         if self.charger_id:
             await self._safe_call(
-                "easee", "set_charger_max_limit",
+                "easee",
+                "set_charger_max_limit",
                 {"charger_id": self.charger_id, "current": _MAX_LIMIT_FLOOR},
             )
             await self._safe_call(
-                "easee", "set_charger_dynamic_limit",
+                "easee",
+                "set_charger_dynamic_limit",
                 {"charger_id": self.charger_id, "current": _DYNAMIC_MIN},
             )
         # PLAT-1032: Set circuit dynamic limit as deep safety net
         if self.charger_id:
             await self._safe_call(
-                "easee", "set_circuit_dynamic_limit",
+                "easee",
+                "set_circuit_dynamic_limit",
                 {"charger_id": self.charger_id, "current": _MAX_LIMIT_FLOOR},
             )
         # Disable smart charging (Easee cloud queue blocks us)
         await self._safe_call(
-            "switch", "turn_off",
+            "switch",
+            "turn_off",
             {"entity_id": f"switch.{self.prefix}_smart_charging"},
         )
 
@@ -101,7 +109,13 @@ class EaseeAdapter(EVAdapter):
                 _LOGGER.error("Easee: service not found %s.%s", domain, service)
                 return False
             except (HomeAssistantError, Exception) as err:
-                _LOGGER.error("Easee: %s.%s error: %s (attempt %d/2)", domain, service, err, attempt + 1)
+                _LOGGER.error(
+                    "Easee: %s.%s error: %s (attempt %d/2)",
+                    domain,
+                    service,
+                    err,
+                    attempt + 1,
+                )
             if attempt == 0:
                 await asyncio.sleep(_RETRY_DELAY_S)
         return False
@@ -168,13 +182,15 @@ class EaseeAdapter(EVAdapter):
         await self.ensure_initialized()
         _LOGGER.info("Easee: enable charger")
         ok = await self._safe_call(
-            "switch", "turn_on",
+            "switch",
+            "turn_on",
             {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
         if ok and self.charger_id:
             # Resume in case Easee is in awaiting_start
             await self._safe_call(
-                "easee", "action_command",
+                "easee",
+                "action_command",
                 {"charger_id": self.charger_id, "action_command": "resume"},
             )
         return ok
@@ -182,7 +198,8 @@ class EaseeAdapter(EVAdapter):
     async def disable(self) -> bool:
         _LOGGER.info("Easee: disable charger")
         return await self._safe_call(
-            "switch", "turn_off",
+            "switch",
+            "turn_off",
             {"entity_id": f"switch.{self.prefix}_is_enabled"},
         )
 
@@ -198,19 +215,22 @@ class EaseeAdapter(EVAdapter):
         # Raise max_limit if needed (max_limit must be >= dynamic_limit)
         if amps > _MAX_LIMIT_FLOOR and self.charger_id:
             await self._safe_call(
-                "easee", "set_charger_max_limit",
+                "easee",
+                "set_charger_max_limit",
                 {"charger_id": self.charger_id, "current": amps},
             )
         _LOGGER.info("Easee: set dynamic limit → %dA", amps)
 
         if self.charger_id:
             return await self._safe_call(
-                "easee", "set_charger_dynamic_limit",
+                "easee",
+                "set_charger_dynamic_limit",
                 {"charger_id": self.charger_id, "current": amps},
             )
         # Fallback: number entity
         return await self._safe_call(
-            "number", "set_value",
+            "number",
+            "set_value",
             {"entity_id": f"number.{self.prefix}_dynamic_charger_limit", "value": amps},
         )
 

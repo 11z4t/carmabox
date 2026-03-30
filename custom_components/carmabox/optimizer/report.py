@@ -161,7 +161,8 @@ def generate_report(
 
     # Totals
     report.total_savings_kr = round(
-        report.peak_savings_kr + report.discharge_savings_kr + report.grid_charge_savings_kr, 1
+        report.peak_savings_kr + report.discharge_savings_kr + report.grid_charge_savings_kr,
+        1,
     )
 
     return report

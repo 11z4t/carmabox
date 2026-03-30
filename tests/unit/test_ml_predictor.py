@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from custom_components.carmabox.core.ml_predictor import (
+    AppliancePowerProfile,
     ConsumptionSample,
     MLPredictor,
     PlanAccuracySample,
+    learn_appliance_cycle,
+    predict_appliance_remaining,
 )
 
 
@@ -56,10 +59,16 @@ class TestPlanAccuracy:
     def test_learned_correction(self):
         p = MLPredictor()
         for _ in range(5):
-            p.add_plan_accuracy(PlanAccuracySample(
-                hour=14, planned_grid_kw=1.0, actual_grid_kw=1.5,
-                planned_action="i", actual_action="i", price=50,
-            ))
+            p.add_plan_accuracy(
+                PlanAccuracySample(
+                    hour=14,
+                    planned_grid_kw=1.0,
+                    actual_grid_kw=1.5,
+                    planned_action="i",
+                    actual_action="i",
+                    price=50,
+                )
+            )
         factor = p.get_plan_correction_factor(14)
         assert factor > 1.0  # Actual > planned → correction > 1
 
@@ -90,6 +99,80 @@ class TestDecisionOutcomes:
         p.add_decision_outcome("discharge_2kw", {}, "breach", False)
         eff = p.get_effective_decisions()
         assert 0.6 < eff["discharge_2kw"] < 0.7  # 2/3
+
+
+class TestAppliancePowerProfile:
+    def test_learn_first_cycle(self):
+        """First observation sets values directly (no EMA)."""
+        profile = AppliancePowerProfile(appliance_id="dishwasher")
+        updated = learn_appliance_cycle(profile, 90.0, 2000.0, 800.0, 1200.0)
+        assert updated.typical_duration_min == 90.0
+        assert updated.peak_power_w == 2000.0
+        assert updated.avg_power_w == 800.0
+        assert updated.total_energy_wh == 1200.0
+        assert updated.sample_count == 1
+
+    def test_learn_ema_update(self):
+        """Second observation uses EMA with alpha=0.3."""
+        profile = AppliancePowerProfile(
+            appliance_id="dishwasher",
+            typical_duration_min=90.0,
+            peak_power_w=2000.0,
+            avg_power_w=800.0,
+            total_energy_wh=1200.0,
+            sample_count=1,
+        )
+        updated = learn_appliance_cycle(profile, 100.0, 2200.0, 900.0, 1500.0)
+        # EMA: new = 0.7 * old + 0.3 * observation
+        assert abs(updated.typical_duration_min - (0.7 * 90.0 + 0.3 * 100.0)) < 0.01
+        assert abs(updated.peak_power_w - (0.7 * 2000.0 + 0.3 * 2200.0)) < 0.01
+        assert abs(updated.avg_power_w - (0.7 * 800.0 + 0.3 * 900.0)) < 0.01
+        assert abs(updated.total_energy_wh - (0.7 * 1200.0 + 0.3 * 1500.0)) < 0.01
+        assert updated.sample_count == 2
+
+    def test_predict_remaining_midway(self):
+        """50% elapsed -> ~50% remaining."""
+        profile = AppliancePowerProfile(
+            appliance_id="washing_machine",
+            typical_duration_min=60.0,
+            peak_power_w=1500.0,
+            avg_power_w=500.0,
+            total_energy_wh=500.0,
+            sample_count=10,
+        )
+        result = predict_appliance_remaining(profile, 30.0)
+        assert abs(result["remaining_min"] - 30.0) < 0.01
+        assert abs(result["remaining_wh"] - 250.0) < 0.01
+        assert result["confidence"] == 1.0
+
+    def test_predict_remaining_near_end(self):
+        """90% elapsed -> ~10% remaining."""
+        profile = AppliancePowerProfile(
+            appliance_id="dryer",
+            typical_duration_min=100.0,
+            peak_power_w=3000.0,
+            avg_power_w=2000.0,
+            total_energy_wh=3000.0,
+            sample_count=10,
+        )
+        result = predict_appliance_remaining(profile, 90.0)
+        assert abs(result["remaining_min"] - 10.0) < 0.01
+        assert abs(result["remaining_wh"] - 300.0) < 0.01
+
+    def test_predict_low_confidence(self):
+        """1 sample -> low confidence (0.1)."""
+        profile = AppliancePowerProfile(
+            appliance_id="dishwasher",
+            typical_duration_min=90.0,
+            peak_power_w=2000.0,
+            avg_power_w=800.0,
+            total_energy_wh=1200.0,
+            sample_count=1,
+        )
+        result = predict_appliance_remaining(profile, 45.0)
+        assert result["confidence"] == 0.1
+        assert result["remaining_min"] > 0
+        assert result["remaining_wh"] > 0
 
 
 class TestSerialization:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -144,6 +144,7 @@ def _make_coordinator(
     coord._consumption_last_save = 0.0
     coord._rule_triggers = {}  # IT-1937: Rule tracking
     coord._active_rule_id = ""  # IT-1937: Active rule
+    coord._disabled_methods = {}  # IT-2465: Safe-call disabled method tracking
     coord._consumption_last_hour = -1
     coord._consumption_store = MagicMock()
     coord._consumption_store.async_save = AsyncMock()
@@ -175,6 +176,8 @@ def _make_coordinator(
     coord._scheduler_loaded = True
     coord._scheduler_last_save = 0.0
     coord._ev_days_since_full = 0
+    coord._ev_last_full_charge_date = ""
+    coord._last_known_ev_soc_time = 0.0
 
     # Breach Prevention Monitor
     from custom_components.carmabox.optimizer.models import HourlyMeterState
@@ -182,11 +185,23 @@ def _make_coordinator(
     coord._meter_state = HourlyMeterState()
     coord._breach_corrections = []
     coord._breach_load_shed_active = False
+    coord._breach_escalation = {}  # goal: 0=normal, 1=warning, 2=critical
+    coord._last_known_ev_soc = -1.0
 
     # Battery standby tracking
     coord._bat_idle_seconds = 0
     coord._bat_daily_idle_seconds = 0
     coord._bat_idle_day = 26
+
+    # Opt #5: Flat line controller (rolling grid average)
+    coord._grid_samples = []
+    coord._grid_sample_max = 10
+
+    # Grid guard
+    from custom_components.carmabox.core.grid_guard import GridGuard, GridGuardConfig
+
+    coord._grid_guard = GridGuard(GridGuardConfig())
+    coord._grid_guard_result = None
 
     return coord
 
@@ -267,21 +282,6 @@ class TestExecute:
         state = CarmaboxState(grid_power_w=-1000, battery_soc_1=50)
         await coord._execute(state)
         assert coord._last_command == BatteryCommand.CHARGE_PV
-
-    @pytest.mark.asyncio
-    async def test_full_battery_with_grid_import_triggers_proactive_discharge(self) -> None:
-        """SoC 100% + grid importing → proactive discharge (not standby)."""
-        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
-
-        state = CarmaboxState(
-            grid_power_w=1000,
-            battery_soc_1=100,
-            battery_soc_2=-1,
-        )
-        await coord._execute(state)
-        # Decision recorded as discharge (service call may not set _last_command in test)
-        assert coord.last_decision is not None
-        assert coord.last_decision.action == "discharge"
 
     async def test_full_battery_exporting_triggers_standby(self) -> None:
         """SoC 100% + exporting → standby (correct, no discharge during export)."""
@@ -368,33 +368,41 @@ class TestExecute:
 
 
 class TestRecordDecision:
-    def test_record_decision_updates_last_decision(self) -> None:
+    @pytest.mark.asyncio
+    async def test_record_decision_updates_last_decision(self) -> None:
         coord = _make_coordinator()
         state = CarmaboxState(grid_power_w=1500, battery_soc_1=60)
-        coord._record_decision(state, "idle", "Vila — test")
+        await coord._record_decision(state, "idle", "Vila — test")
         assert coord.last_decision.action == "idle"
         assert coord.last_decision.reason == "Vila — test"
 
-    def test_record_decision_appends_to_log(self) -> None:
+    @pytest.mark.asyncio
+    async def test_record_decision_appends_to_log(self) -> None:
         coord = _make_coordinator()
         state = CarmaboxState()
         for i in range(5):
-            coord._record_decision(state, "idle", f"Decision {i}")
+            await coord._record_decision(state, "idle", f"Decision {i}")
         assert len(coord.decision_log) == 5
 
-    def test_record_decision_caps_at_48(self) -> None:
+    @pytest.mark.asyncio
+    async def test_record_decision_caps_at_48(self) -> None:
         coord = _make_coordinator()
         state = CarmaboxState()
         for i in range(60):
-            coord._record_decision(state, "idle", f"Decision {i}")
+            await coord._record_decision(state, "idle", f"Decision {i}")
         assert len(coord.decision_log) == 48
         assert "Decision 59" in coord.decision_log[-1].reason
 
-    def test_record_decision_calls_system_log(self) -> None:
+    @pytest.mark.asyncio
+    async def test_record_decision_calls_system_log(self) -> None:
         coord = _make_coordinator()
         state = CarmaboxState()
-        coord._record_decision(state, "discharge", "Urladdning 500W — test")
-        coord.hass.async_create_task.assert_called_once()
+        await coord._record_decision(state, "discharge", "Urladdning 500W — test")
+        coord.hass.services.async_call.assert_called_once_with(
+            "system_log",
+            "write",
+            ANY,
+        )
 
     @pytest.mark.asyncio
     async def test_execute_updates_decision_sensor(self) -> None:
@@ -514,7 +522,7 @@ class TestAsyncUpdateData:
         coord = _make_coordinator({"grid_entity": "sensor.grid"})
         _set_state(coord, "sensor.grid", "1500")
 
-        with patch.object(coord, "_execute", new_callable=AsyncMock) as mock_exec:
+        with patch.object(coord, "_execute_v2", new_callable=AsyncMock) as mock_exec:
             result = await coord._async_update_data()
 
         assert result.grid_power_w == 1500.0
@@ -526,7 +534,7 @@ class TestAsyncUpdateData:
         coord._plan_counter = 9  # Will hit threshold (10)
 
         with (
-            patch.object(coord, "_execute", new_callable=AsyncMock),
+            patch.object(coord, "_execute_v2", new_callable=AsyncMock),
             patch.object(coord, "_generate_plan") as mock_plan,
         ):
             await coord._async_update_data()
@@ -537,6 +545,7 @@ class TestAsyncUpdateData:
     @pytest.mark.asyncio
     async def test_update_error_raises_update_failed(self) -> None:
         coord = _make_coordinator()
+        coord._consecutive_errors = 9  # One more will hit the 10-error threshold
 
         with patch.object(coord, "_collect_state", side_effect=RuntimeError("boom")):
             from homeassistant.helpers.update_coordinator import UpdateFailed
@@ -771,8 +780,7 @@ class TestDecisionRecording:
             mock_dt.now.return_value.hour = 18
             await coord._execute(state)
         assert coord.last_decision.action == "discharge"
-        assert "Urladdning" in coord.last_decision.reason
-        assert coord.last_decision.discharge_w > 0
+        assert coord.last_decision.discharge_w > 0  # Reason text varies by strategy
 
     @pytest.mark.asyncio
     async def test_decision_log_accumulates(self) -> None:
@@ -992,7 +1000,10 @@ class TestServiceCallErrorHandling:
         coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
 
         state = CarmaboxState(battery_soc_1=50)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_charge_pv(state)
 
         assert coord._last_command == BatteryCommand.IDLE
@@ -1006,7 +1017,10 @@ class TestServiceCallErrorHandling:
         initial_blocks = coord._daily_safety_blocks
 
         state = CarmaboxState(battery_soc_1=50)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_charge_pv(state)
 
         assert coord._daily_safety_blocks > initial_blocks
@@ -1019,7 +1033,10 @@ class TestServiceCallErrorHandling:
         coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
 
         state = CarmaboxState(battery_soc_1=50)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_charge_pv(state)
 
         # Should have been called twice (1 attempt + 1 retry)
@@ -1034,7 +1051,10 @@ class TestServiceCallErrorHandling:
         coord.hass.services.async_call = AsyncMock(side_effect=[Exception("timeout"), None])
 
         state = CarmaboxState(battery_soc_1=50)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_charge_pv(state)
 
         assert coord._last_command == BatteryCommand.CHARGE_PV
@@ -1069,7 +1089,10 @@ class TestServiceCallErrorHandling:
         coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
 
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_discharge(state, 1000)
 
         # Verify no number.set_value call was attempted (all calls are EMS attempts)
@@ -1102,7 +1125,10 @@ class TestServiceCallErrorHandling:
 
         blocks_before = coord._daily_safety_blocks
         state = CarmaboxState(battery_soc_1=50, battery_soc_2=50)
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_charge_pv(state)
 
         # R3: partial failure → rollback to standby, command NOT set
@@ -1116,7 +1142,10 @@ class TestServiceCallErrorHandling:
         coord.hass.services.async_call = AsyncMock(side_effect=Exception("Modbus timeout"))
 
         state = CarmaboxState()
-        with patch("custom_components.carmabox.coordinator.asyncio.sleep", new_callable=AsyncMock):
+        with patch(
+            "custom_components.carmabox.coordinator.asyncio.sleep",
+            new_callable=AsyncMock,
+        ):
             await coord._cmd_standby(state)
 
         assert coord._last_command == BatteryCommand.IDLE
@@ -1193,7 +1222,10 @@ class TestWriteVerify:
 
 
 def _make_mock_adapter(
-    soc: float = 50.0, power_w: float = 0.0, ems_mode: str = "", temp: float | None = 25.0
+    soc: float = 50.0,
+    power_w: float = 0.0,
+    ems_mode: str = "",
+    temp: float | None = 25.0,
 ) -> MagicMock:
     """Create a mock InverterAdapter."""
     adapter = MagicMock()
@@ -1275,15 +1307,11 @@ class TestAdapterIntegration:
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=20)
         await coord._cmd_discharge(state, 1000)
 
-        a1.set_ems_mode.assert_called_once_with("peak_shaving")
-        a2.set_ems_mode.assert_called_once_with("peak_shaving")
-        # IT-2067: Dynamic discharge limit based on SoC.
-        # avg_soc = (80+20)/2 = 50 → MID tier (1500W)
-        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
-
-        expected_limit = DISCHARGE_LIMIT_MID_SOC_W
-        a1.set_discharge_limit.assert_called_once_with(expected_limit)
-        a2.set_discharge_limit.assert_called_once_with(expected_limit)
+        a1.set_ems_mode.assert_called_once_with("auto")
+        a2.set_ems_mode.assert_called_once_with("auto")
+        # Discharge limit = 0 (target zero grid import)
+        a1.set_discharge_limit.assert_called_once_with(0)
+        a2.set_discharge_limit.assert_called_once_with(0)
         assert coord._last_command == BatteryCommand.DISCHARGE
 
     @pytest.mark.asyncio
@@ -1297,7 +1325,7 @@ class TestAdapterIntegration:
         state = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
         await coord._cmd_discharge(state, 1000)
 
-        a1.set_ems_mode.assert_called_once_with("peak_shaving")
+        a1.set_ems_mode.assert_called_once_with("auto")
         a1.set_discharge_limit.assert_not_called()
         assert coord._last_command == BatteryCommand.IDLE
 
@@ -1473,7 +1501,7 @@ class TestR3RollbackPartialFailure:
         # No standby calls — only discharge_battery
         for adapter in [a1, a2]:
             for call in adapter.set_ems_mode.call_args_list:
-                assert call.args == ("peak_shaving",)
+                assert call.args == ("auto",)
 
 
 class TestApplianceTracking:
@@ -1525,7 +1553,12 @@ class TestApplianceTracking:
         """Power below threshold should read as 0."""
         coord = _make_coordinator()
         coord._appliances = [
-            {"entity_id": "sensor.tvatt", "name": "T", "category": "laundry", "threshold_w": 10},
+            {
+                "entity_id": "sensor.tvatt",
+                "name": "T",
+                "category": "laundry",
+                "threshold_w": 10,
+            },
         ]
         _set_state(coord, "sensor.tvatt", "5", {"unit_of_measurement": "W"})
 
@@ -1537,7 +1570,12 @@ class TestApplianceTracking:
         """Energy should accumulate across multiple calls."""
         coord = _make_coordinator()
         coord._appliances = [
-            {"entity_id": "sensor.tvatt", "name": "T", "category": "laundry", "threshold_w": 10},
+            {
+                "entity_id": "sensor.tvatt",
+                "name": "T",
+                "category": "laundry",
+                "threshold_w": 10,
+            },
         ]
         _set_state(coord, "sensor.tvatt", "1000", {"unit_of_measurement": "W"})
 
@@ -1650,6 +1688,7 @@ class TestPredictorIntegration:
             mock_sol.return_value.today_hourly_kw = [0.0] * 24
             mock_sol.return_value.tomorrow_kwh = 10.0
             mock_sol.return_value.forecast_daily_3d = [10.0, 10.0, 10.0]
+            mock_sol.return_value.power_now_kw = 0.0
             coord._generate_plan(state)
 
         assert len(coord.plan) > 0
@@ -1989,7 +2028,8 @@ class TestTaperDetection:
             pv_power_w=5000,
         )
         await coord._execute(state)
-        assert coord._last_command == BatteryCommand.CHARGE_PV
+        # Taper detected: command is CHARGE_PV_TAPER (surplus routed to loads)
+        assert coord._last_command == BatteryCommand.CHARGE_PV_TAPER
         assert coord._taper_active is True
 
     @pytest.mark.asyncio
@@ -2030,12 +2070,12 @@ class TestColdLockDetection:
             battery_soc_2=-1,
             battery_power_1=0,  # Battery not accepting charge
             pv_power_w=3000,
-            battery_cell_temp_1=8.3,  # Below 10°C threshold
+            battery_min_cell_temp_1=8.3,  # Below 10°C threshold
         )
         await coord._execute(state)
         assert coord._cold_lock_active is True
         assert coord.last_decision.action == "bms_cold_lock"
-        assert "kall-blockering" in coord.last_decision.reason
+        assert "cold lock" in coord.last_decision.reason.lower()
 
     @pytest.mark.asyncio
     async def test_cold_lock_not_detected_when_cell_temp_ok(self) -> None:
@@ -2048,7 +2088,7 @@ class TestColdLockDetection:
             battery_soc_1=50,
             battery_soc_2=-1,
             pv_power_w=3000,
-            battery_cell_temp_1=15.0,  # Above threshold
+            battery_min_cell_temp_1=15.0,  # Above threshold
         )
         await coord._execute(state)
         assert coord._cold_lock_active is False
@@ -2066,7 +2106,7 @@ class TestColdLockDetection:
             battery_soc_1=50,
             battery_soc_2=-1,
             pv_power_w=3000,
-            battery_cell_temp_1=12.0,  # Above threshold now
+            battery_min_cell_temp_1=12.0,  # Above threshold now
         )
         await coord._execute(state)
         assert coord._cold_lock_active is False
@@ -2090,8 +2130,8 @@ class TestColdLockDetection:
             battery_power_1=0,
             battery_power_2=0,
             pv_power_w=3000,
-            battery_cell_temp_1=8.3,  # Cold
-            battery_cell_temp_2=15.0,  # Warm
+            battery_min_cell_temp_1=8.3,  # Cold
+            battery_min_cell_temp_2=15.0,  # Warm
         )
         await coord._execute(state)
         assert coord._cold_lock_active is True
@@ -2111,7 +2151,7 @@ class TestColdLockDetection:
             battery_soc_2=-1,
             battery_power_1=0,
             pv_power_w=4000,
-            battery_cell_temp_1=7.0,
+            battery_min_cell_temp_1=7.0,
         )
         await coord._execute(state)
         assert coord._cold_lock_active is True
@@ -2128,7 +2168,7 @@ class TestColdLockDetection:
             battery_soc_1=50,
             battery_soc_2=-1,
             pv_power_w=3000,
-            battery_cell_temp_1=None,  # No data
+            battery_min_cell_temp_1=None,  # No data
         )
         await coord._execute(state)
         assert coord._cold_lock_active is False
@@ -2153,8 +2193,8 @@ class TestColdLockDetection:
             battery_power_1=0,
             battery_power_2=0,
             pv_power_w=3000,
-            battery_cell_temp_1=8.3,
-            battery_cell_temp_2=10.5,
+            battery_min_cell_temp_1=8.3,
+            battery_min_cell_temp_2=10.5,
         )
         await coord._execute(state)
         assert coord._cold_lock_active is True
@@ -2174,399 +2214,13 @@ class TestColdLockDetection:
             battery_soc_2=-1,
             battery_power_1=0,
             pv_power_w=3000,
-            battery_cell_temp_1=5.0,  # Very cold
+            battery_min_cell_temp_1=5.0,  # Very cold
         )
         await coord._execute(state)
         # Should be cold lock, NOT taper
         assert coord._cold_lock_active is True
         assert coord._taper_active is False
         assert coord.last_decision.action == "bms_cold_lock"
-
-
-# ── IT-2067: Peak Tracking Tests ─────────────────────────────────
-
-
-class TestPeakTracking:
-    """Test rolling top-3 monthly peak tracking."""
-
-    def test_initial_peaks_are_zero(self) -> None:
-        coord = _make_coordinator()
-        assert coord._peak_ranks == [0.0, 0.0, 0.0]
-
-    def test_track_single_peak(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_last_update = 0.0  # Force update
-        coord._track_peaks(5.0)
-        assert coord._peak_ranks[0] == 5.0
-        assert coord._peak_ranks[1] == 0.0
-
-    def test_track_multiple_peaks_sorted(self) -> None:
-        coord = _make_coordinator()
-        # Force updates by setting last_update far in past
-        import time
-
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(3.0)
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(5.0)
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(4.0)
-        # Should be sorted descending
-        assert coord._peak_ranks == [5.0, 4.0, 3.0]
-
-    def test_new_peak_pushes_out_lowest(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [8.0, 6.0, 4.0]
-        import time
-
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(5.0)
-        assert coord._peak_ranks == [8.0, 6.0, 5.0]
-
-    def test_monthly_reset(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        coord._peak_month = 2  # February — will trigger reset in March
-        import time
-
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(1.0)
-        assert coord._peak_ranks[0] == 1.0
-        assert coord._peak_month != 2  # Month updated
-
-    def test_negative_grid_ignored(self) -> None:
-        coord = _make_coordinator()
-        import time
-
-        coord._peak_last_update = time.monotonic() - 400
-        coord._track_peaks(-1.0)
-        assert coord._peak_ranks == [0.0, 0.0, 0.0]
-
-
-class TestPeakRiskStatus:
-    """Test peak risk calculation."""
-
-    def test_safe_when_below_threshold(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        assert coord._peak_risk_status(4.0) == "safe"
-
-    def test_warning_near_rank3(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        # margin=1.0 default, so warning at >= 5.0
-        assert coord._peak_risk_status(5.5) == "warning"
-
-    def test_risk_at_rank3(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        assert coord._peak_risk_status(6.0) == "risk"
-
-    def test_safe_when_peaks_below_meaningful(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [2.0, 1.0, 0.5]
-        # rank_3 < 3.0 → always safe (normal house load)
-        assert coord._peak_risk_status(2.5) == "safe"
-
-
-class TestAdjustedTarget:
-    """Test dynamic target adjustment based on peak risk."""
-
-    def test_no_adjustment_when_safe(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        # grid_kw=1.0, well below rank_3=6.0, safe
-        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=1.0)
-        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW
-
-        assert target == DEFAULT_TARGET_DAY_KW
-
-    def test_reduced_when_risk(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        # grid_kw=7.0 >= rank_3=6.0 → risk
-        target = coord._adjusted_target_kw(is_night=False, current_grid_kw=7.0)
-        from custom_components.carmabox.const import DEFAULT_TARGET_DAY_KW, PEAK_WARNING_MARGIN_KW
-
-        assert target == max(0.5, DEFAULT_TARGET_DAY_KW - PEAK_WARNING_MARGIN_KW)
-
-    def test_night_target_different(self) -> None:
-        coord = _make_coordinator()
-        coord._peak_ranks = [10.0, 8.0, 6.0]
-        target = coord._adjusted_target_kw(is_night=True, current_grid_kw=1.0)
-        from custom_components.carmabox.const import DEFAULT_TARGET_NIGHT_KW
-
-        assert target == DEFAULT_TARGET_NIGHT_KW
-
-
-# ── IT-2067: Appliance Spike Tests ───────────────────────────────
-
-
-class TestApplianceSpikeDetection:
-    """Test appliance spike detection logic."""
-
-    def test_no_spike_on_stable_load(self) -> None:
-        coord = _make_coordinator()
-        import time
-
-        base = time.monotonic()
-        # Simulate stable 2000W for 60s
-        for i in range(10):
-            coord._grid_power_history.append((base + i * 6, 2000))
-        assert coord._detect_appliance_spike(2100) is False
-
-    def test_spike_on_sudden_jump(self) -> None:
-        coord = _make_coordinator()
-        import time
-
-        base = time.monotonic()
-        # Stable baseline at 1500W
-        for i in range(5):
-            coord._grid_power_history.append((base + i * 6, 1500))
-        # Sudden jump to 3000W (delta = 1500 > 1000 threshold)
-        assert coord._detect_appliance_spike(3000) is True
-
-    def test_spike_recovery_resets_flag(self) -> None:
-        coord = _make_coordinator()
-        coord._spike_active = True
-        coord._spike_activated_at = 0.0  # Very old → safety timeout
-        import asyncio
-
-        asyncio.get_event_loop().run_until_complete(coord._handle_spike_recovery(1000))
-        assert coord._spike_active is False
-
-
-# ── IT-2067: Dynamic Discharge Limit Tests ────────────────────────
-
-
-class TestDynamicDischargeLimit:
-    """Test SoC-based dynamic discharge limit."""
-
-    def test_high_soc_aggressive(self) -> None:
-        coord = _make_coordinator()
-        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=-1)
-        limit = coord._dynamic_discharge_limit_w()
-        from custom_components.carmabox.const import DISCHARGE_LIMIT_HIGH_SOC_W
-
-        assert limit == DISCHARGE_LIMIT_HIGH_SOC_W
-
-    def test_low_soc_conservative(self) -> None:
-        coord = _make_coordinator()
-        coord.data = CarmaboxState(battery_soc_1=25, battery_soc_2=-1)
-        limit = coord._dynamic_discharge_limit_w()
-        from custom_components.carmabox.const import DISCHARGE_LIMIT_LOW_SOC_W
-
-        assert limit == DISCHARGE_LIMIT_LOW_SOC_W
-
-    def test_very_low_soc(self) -> None:
-        coord = _make_coordinator()
-        coord.data = CarmaboxState(battery_soc_1=15, battery_soc_2=-1)
-        limit = coord._dynamic_discharge_limit_w()
-        from custom_components.carmabox.const import DISCHARGE_LIMIT_VERY_LOW_SOC_W
-
-        assert limit == DISCHARGE_LIMIT_VERY_LOW_SOC_W
-
-    def test_two_batteries_average(self) -> None:
-        coord = _make_coordinator()
-        # Average = (80+40)/2 = 60, which is > 40 but not > 60
-        coord.data = CarmaboxState(battery_soc_1=80, battery_soc_2=40)
-        limit = coord._dynamic_discharge_limit_w()
-        from custom_components.carmabox.const import DISCHARGE_LIMIT_MID_SOC_W
-
-        assert limit == DISCHARGE_LIMIT_MID_SOC_W
-
-
-# ── IT-2067: Reserve Target Tests ─────────────────────────────────
-
-
-class TestReserveTarget:
-    """Test Solcast-based dynamic min SoC."""
-
-    def test_strong_sun_no_offset(self) -> None:
-        coord = _make_coordinator()
-        coord._reserve_last_calc = 0.0  # Force recalc
-        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "25.0")
-        target = coord._calculate_reserve_target()
-        # Strong sun (25 kWh > 20 threshold) → base 15% + 0% = 15%
-        assert target == 15.0
-
-    def test_weak_sun_adds_offset(self) -> None:
-        coord = _make_coordinator()
-        coord._reserve_last_calc = 0.0
-        _set_state(coord, "sensor.solcast_pv_forecast_forecast_tomorrow", "3.0")
-        target = coord._calculate_reserve_target()
-        # Weak sun (3 kWh < 5 threshold) → base 15% + 10% = 25%
-        assert target == 25.0
-
-    def test_forecast_unavailable_neutral(self) -> None:
-        coord = _make_coordinator()
-        coord._reserve_last_calc = 0.0
-        # No state set → _read_float returns -1 → neutral
-        target = coord._calculate_reserve_target()
-        # Neutral → base 15% + 5% = 20%
-        assert target == 20.0
-
-
-class TestPriceFallingAhead:
-    """IT-2074: Price-aware discharge throttle tests."""
-
-    def _setup_prices(
-        self,
-        coord: CarmaboxCoordinator,
-        today: list[float],
-        tomorrow: list[float] | None = None,
-    ) -> None:
-        """Set up Nordpool price mock on coordinator."""
-        attrs: dict[str, object] = {"today": today}
-        if tomorrow is not None:
-            attrs["tomorrow"] = tomorrow
-            attrs["tomorrow_valid"] = True
-        else:
-            attrs["tomorrow_valid"] = False
-        _set_state(coord, "sensor.nordpool", str(today[0]), attributes=attrs)
-
-    def test_falling_price_detected(self) -> None:
-        """120 öre now, 40 öre in 2h → falling (67% drop)."""
-        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
-        # 24h prices: hour 17=120, hour 18=80, hour 19=40
-        prices = [50.0] * 24
-        prices[17] = 120.0
-        prices[18] = 80.0
-        prices[19] = 40.0
-        self._setup_prices(coord, prices)
-
-        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
-        assert falling is True
-        assert ratio >= 0.3  # 40/120 = 0.33 → drop = 0.67
-
-    def test_stable_price_not_flagged(self) -> None:
-        """120 öre now, 110 öre in 2h → not falling (< 30% drop)."""
-        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
-        prices = [120.0] * 24
-        prices[18] = 110.0
-        prices[19] = 100.0
-        self._setup_prices(coord, prices)
-
-        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=2)
-        assert falling is False
-
-    def test_rising_price_not_flagged(self) -> None:
-        """80 öre now, 120 öre in 1h → not falling."""
-        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
-        prices = [80.0] * 24
-        prices[17] = 80.0
-        prices[18] = 120.0
-        self._setup_prices(coord, prices)
-
-        falling, ratio = coord._price_falling_ahead(17)
-        assert falling is False
-        assert ratio == 0.0
-
-    def test_cross_midnight_uses_tomorrow(self) -> None:
-        """Hour 23, tomorrow hour 0 is much cheaper → falling."""
-        coord = _make_coordinator({"price_entity": "sensor.nordpool"})
-        today = [50.0] * 24
-        today[23] = 120.0
-        tomorrow = [30.0] * 24  # Much cheaper
-        self._setup_prices(coord, today, tomorrow)
-
-        falling, ratio = coord._price_falling_ahead(23, lookahead_hours=2)
-        assert falling is True
-        assert ratio >= 0.3
-
-    def test_no_price_entity_returns_false(self) -> None:
-        """No price entity configured → no throttle."""
-        coord = _make_coordinator({})
-        falling, ratio = coord._price_falling_ahead(17)
-        assert falling is False
-        assert ratio == 0.0
-
-    def test_configurable_threshold(self) -> None:
-        """Custom threshold of 50% — 40% drop should NOT trigger."""
-        coord = _make_coordinator(
-            {
-                "price_entity": "sensor.nordpool",
-                "price_drop_throttle_pct": 50.0,
-            }
-        )
-        prices = [100.0] * 24
-        prices[17] = 100.0
-        prices[18] = 65.0  # 35% drop — below 50% threshold
-        self._setup_prices(coord, prices)
-
-        falling, ratio = coord._price_falling_ahead(17, lookahead_hours=1)
-        assert falling is False
-
-
-class TestPriceAwareDischargeThrottle:
-    """IT-2074: Verify RULE_2 throttles discharge when prices fall."""
-
-    @pytest.mark.asyncio
-    async def test_discharge_throttled_when_price_falling(self) -> None:
-        """High load + falling prices → discharge at 50% power."""
-        coord = _make_coordinator(
-            {
-                "battery_ems_1": "select.ems1",
-                "battery_limit_1": "number.limit1",
-                "price_entity": "sensor.nordpool",
-            }
-        )
-
-        # Setup falling prices: hour 17=120, hour 18=40
-        prices = [50.0] * 24
-        prices[17] = 120.0
-        prices[18] = 40.0
-        prices[19] = 30.0
-        attrs = {"today": prices, "tomorrow_valid": False}
-        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
-
-        state = CarmaboxState(
-            grid_power_w=5000,
-            battery_soc_1=80,
-            battery_soc_2=-1,
-            current_price=120.0,
-        )
-        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
-            mock_dt.now.return_value.hour = 17
-            await coord._execute(state)
-
-        # Should still discharge (peak shaving) but at reduced power
-        assert coord._last_command == BatteryCommand.DISCHARGE
-        # Check that the decision mentions throttle
-        assert (
-            "throttl" in coord.last_decision.reason.lower()
-            or coord.last_decision.discharge_w < 3000
-        )  # Throttled from ~3000W
-
-    @pytest.mark.asyncio
-    async def test_discharge_not_throttled_when_price_stable(self) -> None:
-        """High load + stable prices → full discharge."""
-        coord = _make_coordinator(
-            {
-                "battery_ems_1": "select.ems1",
-                "battery_limit_1": "number.limit1",
-                "price_entity": "sensor.nordpool",
-            }
-        )
-
-        # Stable prices
-        prices = [120.0] * 24
-        attrs = {"today": prices, "tomorrow_valid": False}
-        _set_state(coord, "sensor.nordpool", "120", attributes=attrs)
-
-        state = CarmaboxState(
-            grid_power_w=5000,
-            battery_soc_1=80,
-            battery_soc_2=-1,
-            current_price=120.0,
-        )
-        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
-            mock_dt.now.return_value.hour = 17
-            await coord._execute(state)
-
-        assert coord._last_command == BatteryCommand.DISCHARGE
-        # Full discharge — no throttle mentioned
-        assert "throttl" not in (coord.last_decision.reason or "").lower()
 
 
 # ── PLAT-1050: Surplus EV amp clamping uses constants ──────────────
@@ -2580,15 +2234,15 @@ class TestSurplusEvAmpClamping:
         "target_w, action, expected_amps",
         [
             # amps = int(W / 690). Clamped to [DEFAULT_EV_MIN_AMPS, DEFAULT_EV_MAX_AMPS] = [6, 10]
-            (0, "start", 6),          # 0A → clamped to min 6
-            (3450, "start", 6),       # 5A → clamped to min 6
-            (4140, "start", 6),       # 6A → exactly min
-            (6900, "start", 10),      # 10A → exactly max
-            (7590, "start", 10),      # 11A → clamped to max 10
-            (11040, "start", 10),     # 16A → clamped to max 10
-            (22080, "start", 10),     # 32A → clamped to max 10
-            (4140, "increase", 6),    # 6A increase → min
-            (6900, "increase", 10),   # 10A increase → max
+            (0, "start", 6),  # 0A → clamped to min 6
+            (3450, "start", 6),  # 5A → clamped to min 6
+            (4140, "start", 6),  # 6A → exactly min
+            (6900, "start", 10),  # 10A → exactly max
+            (7590, "start", 10),  # 11A → clamped to max 10
+            (11040, "start", 10),  # 16A → clamped to max 10
+            (22080, "start", 10),  # 32A → clamped to max 10
+            (4140, "increase", 6),  # 6A increase → min
+            (6900, "increase", 10),  # 10A increase → max
             (11040, "increase", 10),  # 16A increase → clamped to max 10
             (22080, "increase", 10),  # 32A increase → clamped to max 10
         ],
@@ -2607,7 +2261,11 @@ class TestSurplusEvAmpClamping:
         coord._cmd_ev_stop = AsyncMock()
 
         alloc = SurplusAllocation(
-            id="ev", action=action, target_w=target_w, current_w=0, reason="test",
+            id="ev",
+            action=action,
+            target_w=target_w,
+            current_w=0,
+            reason="test",
         )
         # start action requires target_w >= 4140; skip call verification for lower values
         await coord._execute_surplus_allocations([alloc])

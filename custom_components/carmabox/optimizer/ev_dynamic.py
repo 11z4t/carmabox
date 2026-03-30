@@ -13,7 +13,7 @@ Keeps grid import at or below target at all times.
 
 from __future__ import annotations
 
-from ..const import DEFAULT_SPIKE_THRESHOLD_KW, DEFAULT_VOLTAGE
+from ..const import DEFAULT_EV_MIN_AMPS, DEFAULT_SPIKE_THRESHOLD_KW, DEFAULT_VOLTAGE
 
 
 def calculate_dynamic_amps(
@@ -56,7 +56,7 @@ def calculate_dynamic_amps(
     optimal_amps = max(min_amps, min(optimal_amps, max_amps))
 
     # Easee minimum is 6A — below that, pause (0A)
-    if 0 < optimal_amps < 6:
+    if 0 < optimal_amps < DEFAULT_EV_MIN_AMPS:
         optimal_amps = 0
 
     return optimal_amps
@@ -94,8 +94,8 @@ def calculate_spike_response(
     reduce_amps = int(spike_kw * 1000 / voltage) + 1  # +1 for margin
     new_amps = max(min_amps, current_ev_amps - reduce_amps)
 
-    # Below 6A → pause
-    if 0 < new_amps < 6:
+    # Below min amps → pause
+    if 0 < new_amps < DEFAULT_EV_MIN_AMPS:
         new_amps = 0
 
     return new_amps

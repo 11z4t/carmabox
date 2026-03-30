@@ -323,7 +323,7 @@ def state_from_dict(data: dict[str, Any]) -> BatteryHealthState:
                 charge_kwh=float(d.get("charge_kwh", 0)),
                 discharge_kwh=float(d.get("discharge_kwh", 0)),
                 efficiency=float(d.get("efficiency", 0.9)),
-                avg_temp_c=float(d["avg_temp_c"]) if d.get("avg_temp_c") is not None else None,
+                avg_temp_c=(float(d["avg_temp_c"]) if d.get("avg_temp_c") is not None else None),
             )
             for d in data.get("daily_records", [])
             if isinstance(d, dict)

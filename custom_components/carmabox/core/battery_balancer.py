@@ -90,7 +90,9 @@ def calculate_proportional_discharge(
         return BalancerResult(
             allocations=[
                 BatteryAllocation(
-                    id=b.id, watts=0, share_pct=0,
+                    id=b.id,
+                    watts=0,
+                    share_pct=0,
                     available_kwh=available_kwh(b),
                     effective_min_soc=effective_min_soc(b),
                     at_min_soc=b.soc <= effective_min_soc(b),
@@ -113,12 +115,16 @@ def calculate_proportional_discharge(
         at_min = bat.soc <= eff_min
 
         if at_min or total_avail <= 0 or bat_avail <= 0:
-            allocations.append(BatteryAllocation(
-                id=bat.id, watts=0, share_pct=0,
-                available_kwh=bat_avail,
-                effective_min_soc=eff_min,
-                at_min_soc=at_min,
-            ))
+            allocations.append(
+                BatteryAllocation(
+                    id=bat.id,
+                    watts=0,
+                    share_pct=0,
+                    available_kwh=bat_avail,
+                    effective_min_soc=eff_min,
+                    at_min_soc=at_min,
+                )
+            )
             continue
 
         share = bat_avail / total_avail
@@ -127,12 +133,16 @@ def calculate_proportional_discharge(
         watts = min(watts, int(bat.max_discharge_w))
         actual_total += watts
 
-        allocations.append(BatteryAllocation(
-            id=bat.id, watts=watts, share_pct=round(share * 100, 1),
-            available_kwh=bat_avail,
-            effective_min_soc=eff_min,
-            at_min_soc=False,
-        ))
+        allocations.append(
+            BatteryAllocation(
+                id=bat.id,
+                watts=watts,
+                share_pct=round(share * 100, 1),
+                available_kwh=bat_avail,
+                effective_min_soc=eff_min,
+                at_min_soc=False,
+            )
+        )
 
     # Check if balanced (all non-min batteries have similar time to min)
     active = [a for a in allocations if a.watts > 0 and a.available_kwh > 0]
@@ -149,6 +159,99 @@ def calculate_proportional_discharge(
     )
 
 
+def redistribute_on_depletion(
+    batteries: list[BatteryInfo],
+    total_watts: int,
+    min_soc: float = 15.0,
+) -> BalancerResult:
+    """When one battery hits min_soc, redistribute its share to others.
+
+    If battery A is at min_soc but battery B has capacity,
+    battery B takes the full discharge load.
+    If all batteries at min_soc, return 0W for all.
+
+    Uses a 1% margin: batteries with soc <= min_soc + 1 are excluded.
+    """
+    margin = 1.0
+    threshold = min_soc + margin
+
+    # Split into available vs depleted
+    available = [b for b in batteries if b.soc > threshold]
+    depleted = [b for b in batteries if b.soc <= threshold]
+
+    # Build depleted allocations (0W each)
+    depleted_allocs = [
+        BatteryAllocation(
+            id=b.id,
+            watts=0,
+            share_pct=0,
+            available_kwh=available_kwh(b),
+            effective_min_soc=effective_min_soc(b),
+            at_min_soc=True,
+        )
+        for b in depleted
+    ]
+
+    if not available or total_watts <= 0:
+        # All depleted or nothing to discharge
+        all_allocs = depleted_allocs + [
+            BatteryAllocation(
+                id=b.id,
+                watts=0,
+                share_pct=0,
+                available_kwh=available_kwh(b),
+                effective_min_soc=effective_min_soc(b),
+                at_min_soc=b.soc <= effective_min_soc(b),
+            )
+            for b in available
+        ]
+        return BalancerResult(allocations=all_allocs, total_w=0, balanced=True)
+
+    # Redistribute proportionally among available batteries
+    avail_kwh = [(b, available_kwh(b)) for b in available]
+    total_avail = sum(a for _, a in avail_kwh)
+
+    active_allocs = []
+    actual_total = 0
+
+    for bat, bat_avail in avail_kwh:
+        eff_min = effective_min_soc(bat)
+        if total_avail <= 0 or bat_avail <= 0:
+            active_allocs.append(
+                BatteryAllocation(
+                    id=bat.id,
+                    watts=0,
+                    share_pct=0,
+                    available_kwh=bat_avail,
+                    effective_min_soc=eff_min,
+                    at_min_soc=False,
+                )
+            )
+            continue
+
+        share = bat_avail / total_avail
+        watts = int(total_watts * share)
+        watts = min(watts, int(bat.max_discharge_w))
+        actual_total += watts
+
+        active_allocs.append(
+            BatteryAllocation(
+                id=bat.id,
+                watts=watts,
+                share_pct=round(share * 100, 1),
+                available_kwh=bat_avail,
+                effective_min_soc=eff_min,
+                at_min_soc=False,
+            )
+        )
+
+    return BalancerResult(
+        allocations=depleted_allocs + active_allocs,
+        total_w=actual_total,
+        balanced=len(active_allocs) > 0,
+    )
+
+
 def calculate_proportional_charge(
     batteries: list[BatteryInfo],
     total_watts: int,
@@ -162,7 +265,9 @@ def calculate_proportional_charge(
         return BalancerResult(
             allocations=[
                 BatteryAllocation(
-                    id=b.id, watts=0, share_pct=0,
+                    id=b.id,
+                    watts=0,
+                    share_pct=0,
                     available_kwh=0,
                     effective_min_soc=effective_min_soc(b),
                     at_min_soc=False,
@@ -193,25 +298,32 @@ def calculate_proportional_charge(
         eff_min = effective_min_soc(bat)
 
         if total_room <= 0 or room <= 0:
-            allocations.append(BatteryAllocation(
-                id=bat.id, watts=0, share_pct=0,
-                available_kwh=room,
-                effective_min_soc=eff_min,
-                at_min_soc=bat.soc <= eff_min,
-            ))
+            allocations.append(
+                BatteryAllocation(
+                    id=bat.id,
+                    watts=0,
+                    share_pct=0,
+                    available_kwh=room,
+                    effective_min_soc=eff_min,
+                    at_min_soc=bat.soc <= eff_min,
+                )
+            )
             continue
 
         share = room / total_room
         watts = int(total_watts * share)
         actual_total += watts
 
-        allocations.append(BatteryAllocation(
-            id=bat.id, watts=watts,
-            share_pct=round(share * 100, 1),
-            available_kwh=room,
-            effective_min_soc=eff_min,
-            at_min_soc=False,
-        ))
+        allocations.append(
+            BatteryAllocation(
+                id=bat.id,
+                watts=watts,
+                share_pct=round(share * 100, 1),
+                available_kwh=room,
+                effective_min_soc=eff_min,
+                at_min_soc=False,
+            )
+        )
 
     return BalancerResult(
         allocations=allocations,

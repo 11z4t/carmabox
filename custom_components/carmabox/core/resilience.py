@@ -66,11 +66,16 @@ class ResilienceManager:
     # ── Sensor Fallback ─────────────────────────────────────────
 
     def register_sensor(
-        self, entity_id: str, default: float = 0.0, margin: float = 0.1,
+        self,
+        entity_id: str,
+        default: float = 0.0,
+        margin: float = 0.1,
     ) -> None:
         """Register a sensor with fallback configuration."""
         self._fallbacks[entity_id] = SensorFallback(
-            entity_id=entity_id, default=default, margin=margin,
+            entity_id=entity_id,
+            default=default,
+            margin=margin,
         )
 
     def update_sensor(self, entity_id: str, value: float, ts: float | None = None) -> None:
@@ -83,7 +88,10 @@ class ResilienceManager:
         fb.last_update = now
 
     def get_value(
-        self, entity_id: str, current: float | None, ts: float | None = None,
+        self,
+        entity_id: str,
+        current: float | None,
+        ts: float | None = None,
     ) -> tuple[float, bool]:
         """Get sensor value with fallback. Returns (value, is_fallback)."""
         now = ts or time.monotonic()
@@ -117,11 +125,15 @@ class ResilienceManager:
     # ── Circuit Breaker ─────────────────────────────────────────
 
     def register_breaker(
-        self, adapter_id: str, max_errors: int = 5, cooldown_s: float = 60.0,
+        self,
+        adapter_id: str,
+        max_errors: int = 5,
+        cooldown_s: float = 60.0,
     ) -> None:
         """Register circuit breaker for an adapter."""
         self._circuit_breakers[adapter_id] = CircuitBreakerState(
-            max_errors=max_errors, cooldown_s=cooldown_s,
+            max_errors=max_errors,
+            cooldown_s=cooldown_s,
         )
 
     def record_success(self, adapter_id: str) -> None:
@@ -182,7 +194,8 @@ class ResilienceManager:
         """0=normal, 1=sensor fallback, 2=adapter offline, 3=coordinator issues."""
         open_breakers = sum(1 for cb in self._circuit_breakers.values() if cb.tripped)
         fallback_sensors = sum(
-            1 for fb in self._fallbacks.values()
+            1
+            for fb in self._fallbacks.values()
             if fb.last_update > 0 and (time.monotonic() - fb.last_update) > fb.max_age_s
         )
         if open_breakers > 0:
@@ -207,4 +220,5 @@ class ResilienceManager:
 def _is_unavailable(value: float) -> bool:
     """Check if value represents unavailable sensor."""
     import math
+
     return math.isnan(value) or value < -90000

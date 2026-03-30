@@ -20,6 +20,15 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 
+from ..const import (
+    CONSUMER_NEAR_MAX_RATIO,
+    DEFAULT_BAT_MAX_CHARGE_W,
+    DEFAULT_BAT_MIN_CHARGE_W,
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_MIN_AMPS,
+    DEFAULT_VOLTAGE,
+)
+
 
 class ConsumerType(Enum):
     VARIABLE = "variable"  # Can adjust power (EV amps, battery charge rate)
@@ -87,6 +96,88 @@ class SurplusConfig:
     min_surplus_w: float = 50.0  # Ignore surplus below this
 
 
+def build_default_consumers(
+    ev_phase_count: int = 3,
+    ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
+    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    miner_w: float = 500.0,
+    vp_kontor_w: float = 1500.0,
+    vp_pool_w: float = 3000.0,
+    pool_heater_w: float = 3000.0,
+) -> list[SurplusConsumer]:
+    """Build the default consumer list for surplus allocation.
+
+    Priority order (lower = higher priority at surplus):
+    1. EV (variable, 3-phase)
+    2. Battery charging (variable)
+    3. VP kontor (climate, on/off)
+    4. VP pool (on/off, requires cirkpump)
+    5. Pool heater (on/off, requires cirkpump)
+    6. Miner (on/off)
+    """
+    ev_min_w = DEFAULT_VOLTAGE * ev_phase_count * ev_min_amps
+    ev_max_w = DEFAULT_VOLTAGE * ev_phase_count * ev_max_amps
+
+    return [
+        SurplusConsumer(
+            id="ev",
+            name="EV",
+            priority=1,
+            type=ConsumerType.VARIABLE,
+            min_w=ev_min_w,
+            max_w=ev_max_w,
+            entity_switch="switch.easee_is_enabled",
+            phase_count=ev_phase_count,
+        ),
+        SurplusConsumer(
+            id="battery",
+            name="Batteri",
+            priority=2,
+            type=ConsumerType.VARIABLE,
+            min_w=float(DEFAULT_BAT_MIN_CHARGE_W),
+            max_w=float(DEFAULT_BAT_MAX_CHARGE_W),
+        ),
+        SurplusConsumer(
+            id="vp_kontor",
+            name="VP Kontor",
+            priority=3,
+            type=ConsumerType.CLIMATE,
+            min_w=vp_kontor_w,
+            max_w=vp_kontor_w,
+            entity_climate="climate.kontor_ac",
+        ),
+        SurplusConsumer(
+            id="vp_pool",
+            name="VP Pool",
+            priority=4,
+            type=ConsumerType.ON_OFF,
+            min_w=vp_pool_w,
+            max_w=vp_pool_w,
+            entity_switch="switch.vp_pool",
+            requires_active="cirkpump",
+        ),
+        SurplusConsumer(
+            id="pool_heater",
+            name="Pool Heater",
+            priority=5,
+            type=ConsumerType.ON_OFF,
+            min_w=pool_heater_w,
+            max_w=pool_heater_w,
+            entity_switch="switch.pool_heater",
+            requires_active="cirkpump",
+        ),
+        SurplusConsumer(
+            id="miner",
+            name="Miner",
+            priority=6,
+            type=ConsumerType.ON_OFF,
+            min_w=miner_w,
+            max_w=miner_w,
+            entity_switch="switch.miner",
+        ),
+    ]
+
+
 def allocate_surplus(
     surplus_w: float,
     consumers: list[SurplusConsumer],
@@ -122,8 +213,7 @@ def allocate_surplus(
             hyst.surplus_above_since.pop(c.id, None)
         return SurplusResult(
             allocations=[
-                SurplusAllocation(c.id, "none", c.current_w, c.current_w, "")
-                for c in consumers
+                SurplusAllocation(c.id, "none", c.current_w, c.current_w, "") for c in consumers
             ],
             surplus_w=surplus_w,
             allocated_w=0,
@@ -160,16 +250,27 @@ def allocate_surplus(
 
         increase = min(increase, headroom)
         if increase > 50:
-            allocations.append(SurplusAllocation(
-                c.id, "increase", c.current_w + increase, c.current_w,
-                f"Öka {c.name} +{increase:.0f}W",
-            ))
+            allocations.append(
+                SurplusAllocation(
+                    c.id,
+                    "increase",
+                    c.current_w + increase,
+                    c.current_w,
+                    f"Öka {c.name} +{increase:.0f}W",
+                )
+            )
             remaining -= increase
             actions += 1
         else:
-            allocations.append(SurplusAllocation(
-                c.id, "none", c.current_w, c.current_w, "",
-            ))
+            allocations.append(
+                SurplusAllocation(
+                    c.id,
+                    "none",
+                    c.current_w,
+                    c.current_w,
+                    "",
+                )
+            )
 
     # ── Pass 2: Start new consumers that fit (knapsack) ─────────
     for c in sorted_consumers:
@@ -183,24 +284,41 @@ def allocate_surplus(
         if remaining >= c.min_w:
             # Check hysteresis: has surplus been above min_w long enough?
             if not _hysteresis_start_ok(c.id, remaining, c.min_w, hyst, cfg, ts):
-                allocations.append(SurplusAllocation(
-                    c.id, "none", 0, 0, f"Väntar {cfg.start_delay_s:.0f}s",
-                ))
+                allocations.append(
+                    SurplusAllocation(
+                        c.id,
+                        "none",
+                        0,
+                        0,
+                        f"Väntar {cfg.start_delay_s:.0f}s",
+                    )
+                )
                 continue
 
             alloc_w = min(c.max_w, remaining)
-            allocations.append(SurplusAllocation(
-                c.id, "start", alloc_w, 0,
-                f"Starta {c.name} {alloc_w:.0f}W",
-            ))
+            allocations.append(
+                SurplusAllocation(
+                    c.id,
+                    "start",
+                    alloc_w,
+                    0,
+                    f"Starta {c.name} {alloc_w:.0f}W",
+                )
+            )
             remaining -= alloc_w
             actions += 1
         else:
             # Track that surplus is below this consumer's min
             _hysteresis_reset_start(c.id, hyst)
-            allocations.append(SurplusAllocation(
-                c.id, "none", 0, 0, f"Överskott {remaining:.0f}W < min {c.min_w:.0f}W",
-            ))
+            allocations.append(
+                SurplusAllocation(
+                    c.id,
+                    "none",
+                    0,
+                    0,
+                    f"Överskott {remaining:.0f}W < min {c.min_w:.0f}W",
+                )
+            )
 
     # ── Pass 3: Bump — stop low-prio to make room for high-prio ─
     if remaining < 0:
@@ -210,13 +328,15 @@ def allocate_surplus(
         # Still have surplus. Can we bump a running low-prio
         # to make room for a higher-prio that doesn't fit?
         not_started = [
-            c for c in sorted_consumers
+            c
+            for c in sorted_consumers
             if not c.is_running
             and c.dependency_met
             and not any(a.id == c.id and a.action == "start" for a in allocations)
         ]
         running_low = [
-            c for c in sorted_consumers
+            c
+            for c in sorted_consumers
             if c.is_running
             and not any(a.id == c.id and a.action in ("increase", "start") for a in allocations)
         ]
@@ -226,15 +346,16 @@ def allocate_surplus(
                 continue  # Already fits — should have been started in pass 2
 
             # Can we free enough by stopping lower-prio consumers?
-            freeable = sum(
-                c.current_w for c in running_low
-                if c.priority > high.priority
-            )
+            freeable = sum(c.current_w for c in running_low if c.priority > high.priority)
             if remaining + freeable >= high.min_w:
                 # Check hysteresis for bump
                 if not _hysteresis_start_ok(
-                    f"bump_{high.id}", remaining + freeable,
-                    high.min_w, hyst, cfg, ts,
+                    f"bump_{high.id}",
+                    remaining + freeable,
+                    high.min_w,
+                    hyst,
+                    cfg,
+                    ts,
                 ):
                     continue
 
@@ -250,17 +371,25 @@ def allocate_surplus(
                         freed += low.current_w
                         # Update allocation for stopped consumer
                         _update_allocation(
-                            allocations, low.id, "stop", 0,
+                            allocations,
+                            low.id,
+                            "stop",
+                            0,
                             f"Bump: stoppa {low.name} för {high.name}",
                         )
                         actions += 1
 
                 if remaining + freed >= high.min_w:
                     alloc_w = min(high.max_w, remaining + freed)
-                    allocations.append(SurplusAllocation(
-                        high.id, "start", alloc_w, 0,
-                        f"Bump: starta {high.name} {alloc_w:.0f}W",
-                    ))
+                    allocations.append(
+                        SurplusAllocation(
+                            high.id,
+                            "start",
+                            alloc_w,
+                            0,
+                            f"Bump: starta {high.name} {alloc_w:.0f}W",
+                        )
+                    )
                     remaining = remaining + freed - alloc_w
                     actions += 1
 
@@ -268,10 +397,15 @@ def allocate_surplus(
     handled_ids = {a.id for a in allocations}
     for c in consumers:
         if c.id not in handled_ids:
-            allocations.append(SurplusAllocation(
-                c.id, "none", c.current_w if c.is_running else 0,
-                c.current_w, "",
-            ))
+            allocations.append(
+                SurplusAllocation(
+                    c.id,
+                    "none",
+                    c.current_w if c.is_running else 0,
+                    c.current_w,
+                    "",
+                )
+            )
 
     allocated = surplus_w - remaining
     return SurplusResult(
@@ -320,17 +454,27 @@ def should_reduce_consumers(
             if c.type == ConsumerType.VARIABLE and c.current_w > c.min_w:
                 # Reduce variable consumer
                 reduce = min(c.current_w - c.min_w, remaining)
-                reductions.append(SurplusAllocation(
-                    c.id, "decrease", c.current_w - reduce, c.current_w,
-                    f"Minska {c.name} -{reduce:.0f}W",
-                ))
+                reductions.append(
+                    SurplusAllocation(
+                        c.id,
+                        "decrease",
+                        c.current_w - reduce,
+                        c.current_w,
+                        f"Minska {c.name} -{reduce:.0f}W",
+                    )
+                )
                 remaining -= reduce
             else:
                 # Stop on/off consumer
-                reductions.append(SurplusAllocation(
-                    c.id, "stop", 0, c.current_w,
-                    f"Stoppa {c.name} ({c.current_w:.0f}W)",
-                ))
+                reductions.append(
+                    SurplusAllocation(
+                        c.id,
+                        "stop",
+                        0,
+                        c.current_w,
+                        f"Stoppa {c.name} ({c.current_w:.0f}W)",
+                    )
+                )
                 remaining -= c.current_w
 
     return reductions
@@ -396,9 +540,81 @@ def _update_allocation(
             a.target_w = target_w
             a.reason = reason
             return
-    allocations.append(SurplusAllocation(
-        consumer_id, action, target_w, 0, reason,
-    ))
+    allocations.append(
+        SurplusAllocation(
+            consumer_id,
+            action,
+            target_w,
+            0,
+            reason,
+        )
+    )
+
+
+def calculate_climate_boost(
+    current_temp_c: float,
+    target_temp_c: float,
+    surplus_w: float,
+    mode: str = "cool",
+    boost_degrees: float = 2.0,
+    min_surplus_w: float = 500.0,
+) -> dict:
+    """Calculate climate setpoint boost to absorb PV surplus.
+
+    When surplus is available:
+    - Cooling: lower setpoint by up to boost_degrees (pre-cool)
+    - Heating: raise setpoint by up to boost_degrees (pre-heat)
+
+    Args:
+        current_temp_c: Current room temperature.
+        target_temp_c: Normal setpoint.
+        surplus_w: Available PV surplus (W). Positive = exporting.
+        mode: "cool" or "heat".
+        boost_degrees: Maximum boost offset in degrees C.
+        min_surplus_w: Minimum surplus to activate boost.
+
+    Returns:
+        dict with:
+        - boost: bool — whether boost is active
+        - new_target_c: float — adjusted setpoint
+        - reason: str — human-readable reason
+    """
+    if surplus_w < min_surplus_w:
+        return {
+            "boost": False,
+            "new_target_c": target_temp_c,
+            "reason": f"Överskott {surplus_w:.0f}W < min {min_surplus_w:.0f}W",
+        }
+
+    offset = min(boost_degrees, surplus_w / 1000.0)
+
+    if mode == "cool":
+        new_target = target_temp_c - offset
+        # Already too far past boost limit — room is cold enough
+        if current_temp_c <= target_temp_c - boost_degrees:
+            return {
+                "boost": False,
+                "new_target_c": target_temp_c,
+                "reason": f"Rumstemperatur {current_temp_c:.1f}°C redan under boostgräns",
+            }
+    else:  # heat
+        new_target = target_temp_c + offset
+        # Already too far past boost limit — room is warm enough
+        if current_temp_c >= target_temp_c + boost_degrees:
+            return {
+                "boost": False,
+                "new_target_c": target_temp_c,
+                "reason": f"Rumstemperatur {current_temp_c:.1f}°C redan över boostgräns",
+            }
+
+    return {
+        "boost": True,
+        "new_target_c": round(new_target, 1),
+        "reason": (
+            f"PV-boost {mode}: {target_temp_c:.1f}→{new_target:.1f}°C"
+            f" ({surplus_w:.0f}W överskott)"
+        ),
+    }
 
 
 def is_export_allowed(consumers: list[SurplusConsumer]) -> bool:
@@ -411,7 +627,7 @@ def is_export_allowed(consumers: list[SurplusConsumer]) -> bool:
             continue  # Skip if dependency not met (e.g. cirkpump off)
         if c.type == ConsumerType.VARIABLE:
             # Variable consumer not at max → can absorb more
-            if c.is_running and c.current_w < c.max_w * 0.95:
+            if c.is_running and c.current_w < c.max_w * CONSUMER_NEAR_MAX_RATIO:
                 return False
             if not c.is_running and c.min_w > 0:
                 return False  # Could start this consumer

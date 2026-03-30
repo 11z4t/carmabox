@@ -6,10 +6,12 @@ Pure Python. No HA imports.
 
 from __future__ import annotations
 
+from ..const import DEFAULT_NIGHT_END, DEFAULT_NIGHT_START
+
 
 def ellevio_weight(hour: int, night_weight: float = 0.5) -> float:
     """Ellevio hourly weight: night (22-06) × night_weight, day × 1.0."""
-    return night_weight if (hour >= 22 or hour < 6) else 1.0
+    return night_weight if (hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END) else 1.0
 
 
 def season_mode(pv_forecast_3d: list[float]) -> str:

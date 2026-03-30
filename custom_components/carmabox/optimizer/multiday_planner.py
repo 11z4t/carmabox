@@ -65,6 +65,8 @@ def build_day_inputs(
     price_model: PriceProfile | None = None,
     pv_correction: PVCorrectionProfile | None = None,
     pv_daily_estimate: float = 10.0,
+    historical_mean_prices: list[float] | None = None,
+    known_pv_daily: list[float] | None = None,
 ) -> list[DayInputs]:
     """Build inputs for each day of the multi-day plan.
 
@@ -85,13 +87,18 @@ def build_day_inputs(
         price_model: Learned price patterns for prediction.
         pv_correction: PV forecast correction model.
         pv_daily_estimate: Estimated daily PV production (kWh) for days without forecast.
+        historical_mean_prices: AC3 fallback — historical mean prices per hour (24h).
+            Used when Nordpool unavailable (>48h) and no trained price model.
+        known_pv_daily: Solcast daily totals [today, tomorrow, day3, ...] for extrapolation.
 
     Returns:
         List of DayInputs, one per day.
     """
     days = max(1, min(7, days))
     default_consumption = [2.0] * 24
-    default_prices = [50.0] * 24
+    # AC3: Use historical mean prices as fallback when available
+    has_prices = historical_mean_prices and len(historical_mean_prices) >= 24
+    default_prices = list(historical_mean_prices) if has_prices else [50.0] * 24
 
     result = []
     for d in range(days):
@@ -111,6 +118,9 @@ def build_day_inputs(
         elif price_model and price_model.has_sufficient_data:
             di.prices = price_model.predict_24h(month, is_weekend)
             di.price_source = "predicted"
+        elif historical_mean_prices and len(historical_mean_prices) >= 24:
+            di.prices = list(historical_mean_prices)
+            di.price_source = "historical_mean"
         else:
             di.prices = list(default_prices)
             di.price_source = "default"
@@ -123,8 +133,11 @@ def build_day_inputs(
             di.pv_forecast = list(known_pv_tomorrow)
             di.pv_source = "solcast"
         else:
-            # Extrapolate from known data with correction
-            base_profile = _estimate_pv_profile(pv_daily_estimate, month)
+            # Use Solcast daily estimate for this day if available
+            day_kwh = pv_daily_estimate
+            if known_pv_daily and d < len(known_pv_daily) and known_pv_daily[d] > 0:
+                day_kwh = known_pv_daily[d]
+            base_profile = _estimate_pv_profile(day_kwh, month)
             if pv_correction:
                 di.pv_forecast = pv_correction.correct_profile(month, base_profile)
             else:

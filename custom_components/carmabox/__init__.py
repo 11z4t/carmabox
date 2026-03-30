@@ -7,6 +7,7 @@ electricity costs and peak power charges.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import logging
 import sys
@@ -29,12 +30,10 @@ for _mod in [
     "custom_components.carmabox.optimizer.predictor",
 ]:
     if _mod in sys.modules:
-        try:
+        with contextlib.suppress(Exception):  # noqa: BLE001
             importlib.reload(sys.modules[_mod])
-        except Exception:  # noqa: BLE001
-            pass
 
-from .coordinator import CarmaboxCoordinator
+from .coordinator import CarmaboxCoordinator  # noqa: E402
 
 CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
 CARD_URL = "/carmabox/carmabox-card.js"
@@ -113,9 +112,7 @@ def _invalidate_module_cache() -> None:
     for name in stale:
         del sys.modules[name]
     if stale:
-        _LOGGER.info(
-            "IT-2466: Purged %d cached modules for hotfix support", len(stale)
-        )
+        _LOGGER.info("IT-2466: Purged %d cached modules for hotfix support", len(stale))
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:

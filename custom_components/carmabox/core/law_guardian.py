@@ -15,6 +15,7 @@ Key principles:
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -54,6 +55,7 @@ class BreachRecord:
     root_cause: str = ""
     correction: str = ""
     context: dict = field(default_factory=dict)
+    _mono: float = field(default_factory=time.monotonic, repr=False)
 
 
 @dataclass
@@ -136,9 +138,11 @@ class LawGuardian:
         checks.append(c1)
         if not c1.ok:
             br = BreachRecord(
-                timestamp=now_str, law=LawId.LAG_1_GRID,
+                timestamp=now_str,
+                law=LawId.LAG_1_GRID,
                 severity=c1.severity,
-                actual_value=c1.actual, limit_value=c1.limit,
+                actual_value=c1.actual,
+                limit_value=c1.limit,
                 root_cause=self._classify_lag1_cause(state),
                 correction="Grid Guard agerar",
                 context={"grid_w": state.grid_import_w, "price": state.current_price},
@@ -147,72 +151,94 @@ class LawGuardian:
             replan = True
             self._count_breach("LAG_1")
             if self._breach_count_hour.get("LAG_1", 0) >= 3:
-                notifications.append({
-                    "channel": "slack",
-                    "severity": "critical",
-                    "message": f"LAG 1 brott ×{self._breach_count_hour['LAG_1']}/h: "
-                               f"viktat {c1.actual:.1f} kW > tak {c1.limit:.1f} kW",
-                })
+                notifications.append(
+                    {
+                        "channel": "slack",
+                        "severity": "critical",
+                        "message": f"LAG 1 brott ×{self._breach_count_hour['LAG_1']}/h: "
+                        f"viktat {c1.actual:.1f} kW > tak {c1.limit:.1f} kW",
+                    }
+                )
 
         # ── LAG 2: Batterier idle ───────────────────────────────
         c2 = self._check_lag2(state)
         checks.append(c2)
         if not c2.ok:
-            breaches.append(BreachRecord(
-                timestamp=now_str, law=LawId.LAG_2_IDLE,
-                severity=Severity.WARNING,
-                actual_value=c2.actual, limit_value=c2.limit,
-                root_cause="Batterier idle > 4h",
-                context={"soc_1": state.battery_soc_1, "soc_2": state.battery_soc_2},
-            ))
+            breaches.append(
+                BreachRecord(
+                    timestamp=now_str,
+                    law=LawId.LAG_2_IDLE,
+                    severity=Severity.WARNING,
+                    actual_value=c2.actual,
+                    limit_value=c2.limit,
+                    root_cause="Batterier idle > 4h",
+                    context={
+                        "soc_1": state.battery_soc_1,
+                        "soc_2": state.battery_soc_2,
+                    },
+                )
+            )
 
         # ── LAG 3: EV target ───────────────────────────────────
         c3 = self._check_lag3(state)
         checks.append(c3)
         if not c3.ok:
-            breaches.append(BreachRecord(
-                timestamp=now_str, law=LawId.LAG_3_EV,
-                severity=Severity.CRITICAL,
-                actual_value=c3.actual, limit_value=c3.limit,
-                root_cause="EV under target vid avresetid",
-            ))
-            notifications.append({
-                "channel": "slack",
-                "severity": "critical",
-                "message": (
-                    f"LAG 3: EV {c3.actual:.0f}% < target"
-                    f" {c3.limit:.0f}% kl {state.ev_departure_hour}"
-                ),
-            })
+            breaches.append(
+                BreachRecord(
+                    timestamp=now_str,
+                    law=LawId.LAG_3_EV,
+                    severity=Severity.CRITICAL,
+                    actual_value=c3.actual,
+                    limit_value=c3.limit,
+                    root_cause="EV under target vid avresetid",
+                )
+            )
+            notifications.append(
+                {
+                    "channel": "slack",
+                    "severity": "critical",
+                    "message": (
+                        f"LAG 3: EV {c3.actual:.0f}% < target"
+                        f" {c3.limit:.0f}% kl {state.ev_departure_hour}"
+                    ),
+                }
+            )
 
         # ── LAG 4: Export ───────────────────────────────────────
         c4 = self._check_lag4(state)
         checks.append(c4)
         if not c4.ok:
-            breaches.append(BreachRecord(
-                timestamp=now_str, law=LawId.LAG_4_EXPORT,
-                severity=Severity.WARNING,
-                actual_value=c4.actual, limit_value=0,
-                root_cause="Export > 500W med styrbara förbrukare tillgängliga",
-            ))
+            breaches.append(
+                BreachRecord(
+                    timestamp=now_str,
+                    law=LawId.LAG_4_EXPORT,
+                    severity=Severity.WARNING,
+                    actual_value=c4.actual,
+                    limit_value=0,
+                    root_cause="Export > 500W med styrbara förbrukare tillgängliga",
+                )
+            )
 
         # ── INV-1 till INV-5 ───────────────────────────────────
         for inv_check in self._check_invariants(state):
             checks.append(inv_check)
             if not inv_check.ok:
-                breaches.append(BreachRecord(
-                    timestamp=now_str, law=inv_check.law,
-                    severity=Severity.CRITICAL,
-                    actual_value=inv_check.actual,
-                    limit_value=inv_check.limit,
-                    root_cause=inv_check.message,
-                ))
+                breaches.append(
+                    BreachRecord(
+                        timestamp=now_str,
+                        law=inv_check.law,
+                        severity=Severity.CRITICAL,
+                        actual_value=inv_check.actual,
+                        limit_value=inv_check.limit,
+                        root_cause=inv_check.message,
+                    )
+                )
                 replan = True
 
         # Store breaches
         self.breach_history.extend(breaches)
         if len(self.breach_history) > self._max_history:
-            self.breach_history = self.breach_history[-self._max_history:]
+            self.breach_history = self.breach_history[-self._max_history :]
 
         return GuardianReport(
             checks=checks,
@@ -221,12 +247,31 @@ class LawGuardian:
             notifications=notifications,
         )
 
+    # ── Slack notification check ─────────────────────────────────
+
+    def should_notify_slack(
+        self,
+        law: str = "LAG_1",
+        threshold_count: int = 3,
+        window_minutes: int = 60,
+    ) -> tuple[bool, str]:
+        """Return (True, message) if breach count in window exceeds threshold."""
+        now = time.monotonic()
+        cutoff = now - window_minutes * 60
+        recent = [b for b in self.breach_history if b.law.value == law and b._mono >= cutoff]
+        count = len(recent)
+        if count < threshold_count:
+            return False, ""
+
+        worst = max(b.actual_value for b in recent)
+        msg = f"{law} brott x{count} senaste {window_minutes}min" f" (worst {worst:.1f} kW)"
+        return True, msg
+
     # ── Hourly/daily reports ────────────────────────────────────
 
     def hourly_summary(self) -> dict:
         """Summary for the last hour."""
-        recent = [b for b in self.breach_history
-                  if b.timestamp > datetime.now().isoformat()[:13]]
+        recent = [b for b in self.breach_history if b.timestamp > datetime.now().isoformat()[:13]]
         by_law = {}
         for b in recent:
             key = b.law.value
@@ -240,8 +285,7 @@ class LawGuardian:
     def daily_summary(self) -> dict:
         """Summary for today."""
         today = datetime.now().strftime("%Y-%m-%d")
-        today_breaches = [b for b in self.breach_history
-                          if b.timestamp.startswith(today)]
+        today_breaches = [b for b in self.breach_history if b.timestamp.startswith(today)]
         by_law = {}
         for b in today_breaches:
             key = b.law.value
@@ -263,18 +307,29 @@ class LawGuardian:
         tak = state.ellevio_tak_kw
         margin = tak * 0.85
         if viktat > tak:
-            return CheckResult(LawId.LAG_1_GRID, False, Severity.CRITICAL, viktat, tak,
-                               f"Viktat {viktat:.1f} > tak {tak:.1f}")
+            return CheckResult(
+                LawId.LAG_1_GRID,
+                False,
+                Severity.CRITICAL,
+                viktat,
+                tak,
+                f"Viktat {viktat:.1f} > tak {tak:.1f}",
+            )
         if viktat > margin:
-            return CheckResult(LawId.LAG_1_GRID, True, Severity.WARNING, viktat, tak,
-                               f"Viktat {viktat:.1f} nära tak {tak:.1f}")
+            return CheckResult(
+                LawId.LAG_1_GRID,
+                True,
+                Severity.WARNING,
+                viktat,
+                tak,
+                f"Viktat {viktat:.1f} nära tak {tak:.1f}",
+            )
         return CheckResult(LawId.LAG_1_GRID, True, Severity.INFO, viktat, tak)
 
     def _check_lag2(self, state: GuardianState) -> CheckResult:
         both_idle = abs(state.battery_power_1) < 50 and abs(state.battery_power_2) < 50
         has_capacity = (
-            state.battery_soc_1 > state.min_soc + 5
-            or state.battery_soc_2 > state.min_soc + 5
+            state.battery_soc_1 > state.min_soc + 5 or state.battery_soc_2 > state.min_soc + 5
         )
 
         if both_idle and has_capacity:
@@ -284,24 +339,40 @@ class LawGuardian:
 
         idle_hours = self._consecutive_idle * 30 / 3600  # 30s cycles
         if idle_hours > 4:
-            return CheckResult(LawId.LAG_2_IDLE, False, Severity.WARNING,
-                               idle_hours, 4, f"Idle {idle_hours:.1f}h > 4h")
+            return CheckResult(
+                LawId.LAG_2_IDLE,
+                False,
+                Severity.WARNING,
+                idle_hours,
+                4,
+                f"Idle {idle_hours:.1f}h > 4h",
+            )
         return CheckResult(LawId.LAG_2_IDLE, True, Severity.INFO, idle_hours, 4)
 
     def _check_lag3(self, state: GuardianState) -> CheckResult:
         if state.ev_soc < 0:
             return CheckResult(LawId.LAG_3_EV, True, Severity.INFO, -1, state.ev_target_soc)
         if state.current_hour == state.ev_departure_hour and state.ev_soc < state.ev_target_soc:
-                return CheckResult(LawId.LAG_3_EV, False, Severity.CRITICAL,
-                                   state.ev_soc, state.ev_target_soc,
-                                   f"EV {state.ev_soc:.0f}% < target {state.ev_target_soc:.0f}%")
-        return CheckResult(LawId.LAG_3_EV, True, Severity.INFO,
-                           state.ev_soc, state.ev_target_soc)
+            return CheckResult(
+                LawId.LAG_3_EV,
+                False,
+                Severity.CRITICAL,
+                state.ev_soc,
+                state.ev_target_soc,
+                f"EV {state.ev_soc:.0f}% < target {state.ev_target_soc:.0f}%",
+            )
+        return CheckResult(LawId.LAG_3_EV, True, Severity.INFO, state.ev_soc, state.ev_target_soc)
 
     def _check_lag4(self, state: GuardianState) -> CheckResult:
         if state.export_w > 500:
-            return CheckResult(LawId.LAG_4_EXPORT, False, Severity.WARNING,
-                               state.export_w, 0, f"Export {state.export_w:.0f}W")
+            return CheckResult(
+                LawId.LAG_4_EXPORT,
+                False,
+                Severity.WARNING,
+                state.export_w,
+                0,
+                f"Export {state.export_w:.0f}W",
+            )
         return CheckResult(LawId.LAG_4_EXPORT, True, Severity.INFO, state.export_w, 0)
 
     def _check_invariants(self, state: GuardianState) -> list[CheckResult]:
@@ -309,43 +380,81 @@ class LawGuardian:
         # INV-1: EMS auto
         for i, mode in enumerate([state.ems_mode_1, state.ems_mode_2], 1):
             if mode == "auto":
-                results.append(CheckResult(
-                    LawId.INV_1_EMS_AUTO, False, Severity.CRITICAL,
-                    0, 0, f"Batteri {i} EMS=auto"))
+                results.append(
+                    CheckResult(
+                        LawId.INV_1_EMS_AUTO,
+                        False,
+                        Severity.CRITICAL,
+                        0,
+                        0,
+                        f"Batteri {i} EMS=auto",
+                    )
+                )
             else:
                 results.append(CheckResult(LawId.INV_1_EMS_AUTO, True))
 
         # INV-2: Crosscharge
         if state.battery_power_1 < -50 and state.battery_power_2 > 50:
-            results.append(CheckResult(
-                LawId.INV_2_CROSSCHARGE, False, Severity.CRITICAL,
-                0, 0, "Bat1 laddar, Bat2 urladdar"))
+            results.append(
+                CheckResult(
+                    LawId.INV_2_CROSSCHARGE,
+                    False,
+                    Severity.CRITICAL,
+                    0,
+                    0,
+                    "Bat1 laddar, Bat2 urladdar",
+                )
+            )
         elif state.battery_power_1 > 50 and state.battery_power_2 < -50:
-            results.append(CheckResult(
-                LawId.INV_2_CROSSCHARGE, False, Severity.CRITICAL,
-                0, 0, "Bat1 urladdar, Bat2 laddar"))
+            results.append(
+                CheckResult(
+                    LawId.INV_2_CROSSCHARGE,
+                    False,
+                    Severity.CRITICAL,
+                    0,
+                    0,
+                    "Bat1 urladdar, Bat2 laddar",
+                )
+            )
         else:
             results.append(CheckResult(LawId.INV_2_CROSSCHARGE, True))
 
         # INV-3: fast_charging
         for i, fc in enumerate([state.fast_charging_1, state.fast_charging_2], 1):
             if fc:
-                results.append(CheckResult(
-                    LawId.INV_3_FAST_CHARGE, False, Severity.CRITICAL,
-                    0, 0, f"Batteri {i} fast_charging=ON"))
+                results.append(
+                    CheckResult(
+                        LawId.INV_3_FAST_CHARGE,
+                        False,
+                        Severity.CRITICAL,
+                        0,
+                        0,
+                        f"Batteri {i} fast_charging=ON",
+                    )
+                )
             else:
                 results.append(CheckResult(LawId.INV_3_FAST_CHARGE, True))
 
         # INV-5: Min SoC
-        for i, (soc, power, temp) in enumerate([
-            (state.battery_soc_1, state.battery_power_1, state.cell_temp_1),
-            (state.battery_soc_2, state.battery_power_2, state.cell_temp_2),
-        ], 1):
+        for i, (soc, power, temp) in enumerate(
+            [
+                (state.battery_soc_1, state.battery_power_1, state.cell_temp_1),
+                (state.battery_soc_2, state.battery_power_2, state.cell_temp_2),
+            ],
+            1,
+        ):
             eff_min = 20.0 if temp < state.cold_lock_temp else state.min_soc
             if soc <= eff_min and power > 50:
-                results.append(CheckResult(
-                    LawId.INV_5_MIN_SOC, False, Severity.CRITICAL,
-                    soc, eff_min, f"Bat{i} SoC {soc:.0f}% ≤ min {eff_min:.0f}% och urladdar"))
+                results.append(
+                    CheckResult(
+                        LawId.INV_5_MIN_SOC,
+                        False,
+                        Severity.CRITICAL,
+                        soc,
+                        eff_min,
+                        f"Bat{i} SoC {soc:.0f}% ≤ min {eff_min:.0f}% och urladdar",
+                    )
+                )
             else:
                 results.append(CheckResult(LawId.INV_5_MIN_SOC, True))
 

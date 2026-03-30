@@ -7,15 +7,14 @@ All tests run without real HA imports (mock hass).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from custom_components.carmabox.adapters.easee import (
-    EaseeAdapter,
     _DYNAMIC_MIN,
     _MAX_LIMIT_FLOOR,
+    EaseeAdapter,
 )
 from custom_components.carmabox.const import DEFAULT_EV_MAX_AMPS
 
@@ -50,7 +49,11 @@ class TestSetCurrentClamp:
         await adapter.set_current(20)
         # Last call = set_charger_dynamic_limit with clamped value
         last_call = hass.services.async_call.call_args
-        assert last_call[0] == ("easee", "set_charger_dynamic_limit", {"charger_id": CHARGER_ID, "current": DEFAULT_EV_MAX_AMPS})
+        assert last_call[0] == (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": DEFAULT_EV_MAX_AMPS},
+        )
 
     @pytest.mark.asyncio
     async def test_set_current_clamp_lower(self) -> None:
@@ -59,7 +62,11 @@ class TestSetCurrentClamp:
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
         await adapter.set_current(3)
         last_call = hass.services.async_call.call_args
-        assert last_call[0] == ("easee", "set_charger_dynamic_limit", {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN})
+        assert last_call[0] == (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN},
+        )
 
     @pytest.mark.asyncio
     async def test_set_current_passthrough_mid(self) -> None:
@@ -68,7 +75,11 @@ class TestSetCurrentClamp:
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
         await adapter.set_current(8)
         last_call = hass.services.async_call.call_args
-        assert last_call[0] == ("easee", "set_charger_dynamic_limit", {"charger_id": CHARGER_ID, "current": 8})
+        assert last_call[0] == (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": 8},
+        )
 
     @pytest.mark.asyncio
     async def test_set_current_at_boundaries(self) -> None:
@@ -112,13 +123,29 @@ class TestEnsureInitialized:
 
         call_args = [c[0] for c in hass.services.async_call.call_args_list]
         # max_limit
-        assert ("easee", "set_charger_max_limit", {"charger_id": CHARGER_ID, "current": _MAX_LIMIT_FLOOR}) in call_args
+        assert (
+            "easee",
+            "set_charger_max_limit",
+            {"charger_id": CHARGER_ID, "current": _MAX_LIMIT_FLOOR},
+        ) in call_args
         # dynamic
-        assert ("easee", "set_charger_dynamic_limit", {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN}) in call_args
+        assert (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN},
+        ) in call_args
         # circuit
-        assert ("easee", "set_circuit_dynamic_limit", {"charger_id": CHARGER_ID, "current": _MAX_LIMIT_FLOOR}) in call_args
+        assert (
+            "easee",
+            "set_circuit_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": _MAX_LIMIT_FLOOR},
+        ) in call_args
         # smart_charging off
-        assert ("switch", "turn_off", {"entity_id": f"switch.{PREFIX}_smart_charging"}) in call_args
+        assert (
+            "switch",
+            "turn_off",
+            {"entity_id": f"switch.{PREFIX}_smart_charging"},
+        ) in call_args
 
 
 class TestResetToDefault:
@@ -131,7 +158,11 @@ class TestResetToDefault:
         result = await adapter.reset_to_default()
         assert result is True
         last_call = hass.services.async_call.call_args
-        assert last_call[0] == ("easee", "set_charger_dynamic_limit", {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN})
+        assert last_call[0] == (
+            "easee",
+            "set_charger_dynamic_limit",
+            {"charger_id": CHARGER_ID, "current": _DYNAMIC_MIN},
+        )
 
 
 class TestChargerIdFallback:
@@ -155,7 +186,11 @@ class TestChargerIdFallback:
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id="")
         await adapter.set_current(8)
         last_call = hass.services.async_call.call_args
-        assert last_call[0] == ("number", "set_value", {"entity_id": f"number.{PREFIX}_dynamic_charger_limit", "value": 8})
+        assert last_call[0] == (
+            "number",
+            "set_value",
+            {"entity_id": f"number.{PREFIX}_dynamic_charger_limit", "value": 8},
+        )
 
     @pytest.mark.asyncio
     async def test_init_without_charger_id_skips_easee_services(self) -> None:
@@ -166,7 +201,11 @@ class TestChargerIdFallback:
         call_args = [c[0] for c in hass.services.async_call.call_args_list]
         # Only smart_charging off should be called
         assert len(call_args) == 1
-        assert call_args[0] == ("switch", "turn_off", {"entity_id": f"switch.{PREFIX}_smart_charging"})
+        assert call_args[0] == (
+            "switch",
+            "turn_off",
+            {"entity_id": f"switch.{PREFIX}_smart_charging"},
+        )
 
     @pytest.mark.asyncio
     async def test_enable_with_charger_id_sends_resume(self) -> None:
@@ -175,7 +214,11 @@ class TestChargerIdFallback:
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
         await adapter.enable()
         call_args = [c[0] for c in hass.services.async_call.call_args_list]
-        assert ("easee", "action_command", {"charger_id": CHARGER_ID, "action_command": "resume"}) in call_args
+        assert (
+            "easee",
+            "action_command",
+            {"charger_id": CHARGER_ID, "action_command": "resume"},
+        ) in call_args
 
     @pytest.mark.asyncio
     async def test_enable_without_charger_id_no_resume(self) -> None:

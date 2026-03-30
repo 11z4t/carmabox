@@ -8,11 +8,12 @@ from custom_components.carmabox.core.battery_balancer import (
     calculate_proportional_charge,
     calculate_proportional_discharge,
     effective_min_soc,
+    redistribute_on_depletion,
 )
 
 
 def _bat(
-    id: str = "kontor",
+    consumer_id: str = "kontor",
     soc: float = 50,
     cap_kwh: float = 15.0,
     cell_temp_c: float = 15.0,
@@ -22,9 +23,14 @@ def _bat(
     max_discharge_w: float = 5000.0,
 ) -> BatteryInfo:
     return BatteryInfo(
-        id=id, soc=soc, cap_kwh=cap_kwh, cell_temp_c=cell_temp_c,
-        min_soc=min_soc, min_soc_cold=min_soc_cold,
-        cold_temp_c=cold_temp_c, max_discharge_w=max_discharge_w,
+        id=consumer_id,
+        soc=soc,
+        cap_kwh=cap_kwh,
+        cell_temp_c=cell_temp_c,
+        min_soc=min_soc,
+        min_soc_cold=min_soc_cold,
+        cold_temp_c=cold_temp_c,
+        max_discharge_w=max_discharge_w,
     )
 
 
@@ -83,7 +89,7 @@ class TestProportionalDischarge:
         """Different SoC → proportional to available kWh."""
         bats = [
             _bat("kontor", soc=50, cap_kwh=15.0),  # avail = 5.25 kWh
-            _bat("forrad", soc=90, cap_kwh=5.0),    # avail = 3.75 kWh
+            _bat("forrad", soc=90, cap_kwh=5.0),  # avail = 3.75 kWh
         ]
         result = calculate_proportional_discharge(bats, 2000)
         k = next(a for a in result.allocations if a.id == "kontor")
@@ -181,8 +187,8 @@ class TestProportionalCharge:
     def test_charge_emptiest_first(self):
         """Emptier battery gets more charge power."""
         bats = [
-            _bat("kontor", soc=30, cap_kwh=15.0),   # room = 10.5 kWh
-            _bat("forrad", soc=80, cap_kwh=5.0),     # room = 1.0 kWh
+            _bat("kontor", soc=30, cap_kwh=15.0),  # room = 10.5 kWh
+            _bat("forrad", soc=80, cap_kwh=5.0),  # room = 1.0 kWh
         ]
         result = calculate_proportional_charge(bats, 3000)
         k = next(a for a in result.allocations if a.id == "kontor")
@@ -212,3 +218,55 @@ class TestProportionalCharge:
         f = next(a for a in result.allocations if a.id == "forrad")
         assert k.watts == 0
         assert f.watts == 3000
+
+
+class TestRedistributeOnDepletion:
+    def test_redistribute_one_depleted(self):
+        """bat1 at 15% (min_soc), bat2 at 50% → bat2 takes all."""
+        bats = [
+            _bat("kontor", soc=15.0, cap_kwh=15.0),
+            _bat("forrad", soc=50.0, cap_kwh=5.0),
+        ]
+        result = redistribute_on_depletion(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 0
+        assert k.at_min_soc is True
+        assert f.watts == 2000
+        assert result.total_w == 2000
+
+    def test_redistribute_both_available(self):
+        """Both above min+margin → normal proportional split."""
+        bats = [
+            _bat("kontor", soc=50.0, cap_kwh=15.0),
+            _bat("forrad", soc=50.0, cap_kwh=5.0),
+        ]
+        result = redistribute_on_depletion(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 1500  # 75% of 2000
+        assert f.watts == 500  # 25% of 2000
+        assert result.total_w == 2000
+
+    def test_redistribute_all_depleted(self):
+        """Both at min_soc → 0W for all."""
+        bats = [
+            _bat("kontor", soc=15.0, cap_kwh=15.0),
+            _bat("forrad", soc=14.0, cap_kwh=5.0),
+        ]
+        result = redistribute_on_depletion(bats, 2000)
+        assert result.total_w == 0
+        assert all(a.watts == 0 for a in result.allocations)
+
+    def test_redistribute_margin(self):
+        """bat at 15.5% (within 1% margin above min_soc=15) → excluded."""
+        bats = [
+            _bat("kontor", soc=15.5, cap_kwh=15.0),  # <= 16.0 threshold → excluded
+            _bat("forrad", soc=50.0, cap_kwh=5.0),
+        ]
+        result = redistribute_on_depletion(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 0
+        assert k.at_min_soc is True
+        assert f.watts == 2000

@@ -8,39 +8,64 @@ from custom_components.carmabox.core.surplus_chain import (
     SurplusConfig,
     SurplusConsumer,
     allocate_surplus,
+    build_default_consumers,
+    calculate_climate_boost,
     should_reduce_consumers,
 )
 
 
 def _ev(current_w: float = 0, running: bool = False) -> SurplusConsumer:
     return SurplusConsumer(
-        "ev", "EV", priority=1, type=ConsumerType.VARIABLE,
-        min_w=4140, max_w=11040, current_w=current_w,
-        is_running=running, phase_count=3,
+        "ev",
+        "EV",
+        priority=1,
+        type=ConsumerType.VARIABLE,
+        min_w=4140,
+        max_w=11040,
+        current_w=current_w,
+        is_running=running,
+        phase_count=3,
     )
 
 
 def _battery(current_w: float = 0, running: bool = False) -> SurplusConsumer:
     return SurplusConsumer(
-        "battery", "Batteri", priority=2, type=ConsumerType.VARIABLE,
-        min_w=300, max_w=6000, current_w=current_w,
+        "battery",
+        "Batteri",
+        priority=2,
+        type=ConsumerType.VARIABLE,
+        min_w=300,
+        max_w=6000,
+        current_w=current_w,
         is_running=running,
     )
 
 
 def _miner(current_w: float = 0, running: bool = False) -> SurplusConsumer:
     return SurplusConsumer(
-        "miner", "Miner", priority=5, type=ConsumerType.ON_OFF,
-        min_w=400, max_w=500, current_w=current_w,
-        is_running=running, entity_switch="switch.miner",
+        "miner",
+        "Miner",
+        priority=5,
+        type=ConsumerType.ON_OFF,
+        min_w=400,
+        max_w=500,
+        current_w=current_w,
+        is_running=running,
+        entity_switch="switch.miner",
     )
 
 
 def _vp_pool(running: bool = False, dep_met: bool = True) -> SurplusConsumer:
     return SurplusConsumer(
-        "vp_pool", "VP Pool", priority=3, type=ConsumerType.ON_OFF,
-        min_w=500, max_w=3000, current_w=2000 if running else 0,
-        is_running=running, requires_active="cirkpump",
+        "vp_pool",
+        "VP Pool",
+        priority=3,
+        type=ConsumerType.ON_OFF,
+        min_w=500,
+        max_w=3000,
+        current_w=2000 if running else 0,
+        is_running=running,
+        requires_active="cirkpump",
         dependency_met=dep_met,
     )
 
@@ -48,8 +73,10 @@ def _vp_pool(running: bool = False, dep_met: bool = True) -> SurplusConsumer:
 def _cfg(start_s: float = 0, stop_s: float = 0, bump_s: float = 0) -> SurplusConfig:
     """Config with zero delays for testing (unless specified)."""
     return SurplusConfig(
-        start_delay_s=start_s, stop_delay_s=stop_s,
-        bump_delay_s=bump_s, min_surplus_w=50,
+        start_delay_s=start_s,
+        stop_delay_s=stop_s,
+        bump_delay_s=bump_s,
+        min_surplus_w=50,
     )
 
 
@@ -222,6 +249,7 @@ class TestReduceConsumers:
 class TestExportAllowed:
     def test_all_running_export_ok(self):
         from custom_components.carmabox.core.surplus_chain import is_export_allowed
+
         consumers = [
             _ev(current_w=11000, running=True),  # At max
             _battery(current_w=6000, running=True),  # At max
@@ -231,6 +259,7 @@ class TestExportAllowed:
 
     def test_miner_off_no_export(self):
         from custom_components.carmabox.core.surplus_chain import is_export_allowed
+
         consumers = [
             _ev(current_w=11000, running=True),
             _miner(current_w=0, running=False),
@@ -239,6 +268,7 @@ class TestExportAllowed:
 
     def test_ev_not_at_max_no_export(self):
         from custom_components.carmabox.core.surplus_chain import is_export_allowed
+
         consumers = [
             _ev(current_w=4140, running=True),  # Not at max
         ]
@@ -246,5 +276,133 @@ class TestExportAllowed:
 
     def test_dependency_not_met_skipped(self):
         from custom_components.carmabox.core.surplus_chain import is_export_allowed
+
         consumers = [_vp_pool(dep_met=False)]
         assert is_export_allowed(consumers) is True
+
+
+class TestClimateBoost:
+    def test_climate_boost_cool(self):
+        """2kW surplus → lower cooling setpoint by up to 2 degrees."""
+        result = calculate_climate_boost(
+            current_temp_c=24.0,
+            target_temp_c=23.0,
+            surplus_w=2000.0,
+            mode="cool",
+        )
+        assert result["boost"] is True
+        assert result["new_target_c"] == 21.0  # 23 - min(2.0, 2000/1000) = 21
+        assert "PV-boost cool" in result["reason"]
+
+    def test_climate_boost_heat(self):
+        """1kW surplus → raise heating setpoint by 1 degree."""
+        result = calculate_climate_boost(
+            current_temp_c=20.0,
+            target_temp_c=21.0,
+            surplus_w=1000.0,
+            mode="heat",
+        )
+        assert result["boost"] is True
+        assert result["new_target_c"] == 22.0  # 21 + min(2.0, 1000/1000) = 22
+        assert "PV-boost heat" in result["reason"]
+
+    def test_climate_boost_no_surplus(self):
+        """200W surplus → no boost (below min_surplus_w)."""
+        result = calculate_climate_boost(
+            current_temp_c=24.0,
+            target_temp_c=23.0,
+            surplus_w=200.0,
+            mode="cool",
+        )
+        assert result["boost"] is False
+        assert result["new_target_c"] == 23.0
+        assert "min" in result["reason"]
+
+    def test_climate_boost_proportional(self):
+        """More surplus = bigger boost, capped at boost_degrees."""
+        # 800W → 0.8 degree offset
+        r1 = calculate_climate_boost(
+            current_temp_c=24.0,
+            target_temp_c=23.0,
+            surplus_w=800.0,
+            mode="cool",
+        )
+        # 3000W → capped at 2.0 degrees
+        r2 = calculate_climate_boost(
+            current_temp_c=24.0,
+            target_temp_c=23.0,
+            surplus_w=3000.0,
+            mode="cool",
+        )
+        assert r1["boost"] is True
+        assert r1["new_target_c"] == 22.2  # 23 - 0.8
+        assert r2["boost"] is True
+        assert r2["new_target_c"] == 21.0  # 23 - 2.0 (capped)
+
+    def test_climate_boost_cool_already_cold(self):
+        """Room already below boost limit → no boost."""
+        result = calculate_climate_boost(
+            current_temp_c=20.5,
+            target_temp_c=23.0,
+            surplus_w=2000.0,
+            mode="cool",
+        )
+        assert result["boost"] is False
+        assert "redan under" in result["reason"]
+
+    def test_climate_boost_heat_already_warm(self):
+        """Room already above boost limit → no boost."""
+        result = calculate_climate_boost(
+            current_temp_c=23.5,
+            target_temp_c=21.0,
+            surplus_w=2000.0,
+            mode="heat",
+        )
+        assert result["boost"] is False
+        assert "redan över" in result["reason"]
+
+
+class TestBuildDefaultConsumers:
+    def test_build_default_consumers_count(self):
+        """Returns exactly 6 consumers."""
+        consumers = build_default_consumers()
+        assert len(consumers) == 6
+
+    def test_build_default_consumers_priority_order(self):
+        """Consumers are sorted by priority (ascending)."""
+        consumers = build_default_consumers()
+        priorities = [c.priority for c in consumers]
+        assert priorities == sorted(priorities)
+        # Verify specific order
+        ids = [c.id for c in consumers]
+        assert ids == ["ev", "battery", "vp_kontor", "vp_pool", "pool_heater", "miner"]
+
+    def test_build_default_ev_params(self):
+        """EV has correct phase_count, min_w, max_w from defaults."""
+        consumers = build_default_consumers()
+        ev = next(c for c in consumers if c.id == "ev")
+        assert ev.phase_count == 3
+        assert ev.type == ConsumerType.VARIABLE
+        # 230V * 3 phases * 6A = 4140W min
+        assert ev.min_w == 230.0 * 3 * 6
+        # 230V * 3 phases * 10A = 6900W max
+        assert ev.max_w == 230.0 * 3 * 10
+
+    def test_build_default_pool_dependency(self):
+        """VP pool and pool heater require cirkpump."""
+        consumers = build_default_consumers()
+        vp_pool = next(c for c in consumers if c.id == "vp_pool")
+        pool_heater = next(c for c in consumers if c.id == "pool_heater")
+        assert vp_pool.requires_active == "cirkpump"
+        assert pool_heater.requires_active == "cirkpump"
+        # Others should NOT require cirkpump
+        for c in consumers:
+            if c.id not in ("vp_pool", "pool_heater"):
+                assert c.requires_active == "", f"{c.id} should not require dependency"
+
+    def test_build_default_custom_params(self):
+        """Custom miner_w overrides default."""
+        consumers = build_default_consumers(miner_w=750.0)
+        miner = next(c for c in consumers if c.id == "miner")
+        assert miner.min_w == 750.0
+        assert miner.max_w == 750.0

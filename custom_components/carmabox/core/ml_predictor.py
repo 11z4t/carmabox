@@ -48,6 +48,78 @@ class PressureSample:
     pv_forecast_kwh: float
 
 
+@dataclass
+class AppliancePowerProfile:
+    """Learned power profile for an appliance."""
+
+    appliance_id: str
+    typical_duration_min: float = 0.0
+    peak_power_w: float = 0.0
+    avg_power_w: float = 0.0
+    total_energy_wh: float = 0.0
+    sample_count: int = 0
+
+
+def learn_appliance_cycle(
+    profile: AppliancePowerProfile,
+    cycle_duration_min: float,
+    peak_w: float,
+    avg_w: float,
+    energy_wh: float,
+) -> AppliancePowerProfile:
+    """Update appliance profile with new cycle observation.
+
+    Uses exponential moving average (EMA) with alpha=0.3.
+    First observation sets values directly.
+    """
+    alpha = 0.3
+    if profile.sample_count == 0:
+        return AppliancePowerProfile(
+            appliance_id=profile.appliance_id,
+            typical_duration_min=cycle_duration_min,
+            peak_power_w=peak_w,
+            avg_power_w=avg_w,
+            total_energy_wh=energy_wh,
+            sample_count=1,
+        )
+    return AppliancePowerProfile(
+        appliance_id=profile.appliance_id,
+        typical_duration_min=(
+            (1 - alpha) * profile.typical_duration_min + alpha * cycle_duration_min
+        ),
+        peak_power_w=(1 - alpha) * profile.peak_power_w + alpha * peak_w,
+        avg_power_w=(1 - alpha) * profile.avg_power_w + alpha * avg_w,
+        total_energy_wh=(1 - alpha) * profile.total_energy_wh + alpha * energy_wh,
+        sample_count=profile.sample_count + 1,
+    )
+
+
+def predict_appliance_remaining(
+    profile: AppliancePowerProfile,
+    elapsed_min: float,
+) -> dict:
+    """Predict remaining time and energy for running appliance.
+
+    Returns:
+        - remaining_min: estimated minutes left (clamped to >= 0)
+        - remaining_wh: estimated energy left (clamped to >= 0)
+        - confidence: 0-1 based on sample_count (saturates around 10 samples)
+    """
+    if profile.sample_count == 0 or profile.typical_duration_min <= 0:
+        return {"remaining_min": 0.0, "remaining_wh": 0.0, "confidence": 0.0}
+
+    fraction_elapsed = min(elapsed_min / profile.typical_duration_min, 1.0)
+    remaining_min = max(profile.typical_duration_min - elapsed_min, 0.0)
+    remaining_wh = max(profile.total_energy_wh * (1.0 - fraction_elapsed), 0.0)
+    confidence = min(profile.sample_count / 10.0, 1.0)
+
+    return {
+        "remaining_min": remaining_min,
+        "remaining_wh": remaining_wh,
+        "confidence": confidence,
+    }
+
+
 class MLPredictor:
     """Learns and predicts energy patterns."""
 
@@ -75,7 +147,7 @@ class MLPredictor:
             self._consumption[key] = []
         self._consumption[key].append(sample.consumption_kw)
         if len(self._consumption[key]) > self._max_samples:
-            self._consumption[key] = self._consumption[key][-self._max_samples:]
+            self._consumption[key] = self._consumption[key][-self._max_samples :]
 
     def add_appliance_event(self, hour: int) -> None:
         """Record that an appliance ran at this hour."""
@@ -85,11 +157,11 @@ class MLPredictor:
         """Record planned vs actual for one hour."""
         if sample.hour not in self._plan_accuracy:
             self._plan_accuracy[sample.hour] = []
-        self._plan_accuracy[sample.hour].append(
-            (sample.planned_grid_kw, sample.actual_grid_kw)
-        )
+        self._plan_accuracy[sample.hour].append((sample.planned_grid_kw, sample.actual_grid_kw))
         if len(self._plan_accuracy[sample.hour]) > self._max_samples:
-            self._plan_accuracy[sample.hour] = self._plan_accuracy[sample.hour][-self._max_samples:]
+            self._plan_accuracy[sample.hour] = self._plan_accuracy[sample.hour][
+                -self._max_samples :
+            ]
 
     def add_pressure_pv(self, pressure_hpa: float, pv_ratio: float) -> None:
         """Record pressure → PV forecast accuracy."""
@@ -98,13 +170,21 @@ class MLPredictor:
             self._pressure_pv = self._pressure_pv[-100:]
 
     def add_decision_outcome(
-        self, decision: str, context: dict, outcome: str, laws_ok: bool,
+        self,
+        decision: str,
+        context: dict,
+        outcome: str,
+        laws_ok: bool,
     ) -> None:
         """Record decision + outcome for learning."""
-        self._decision_outcomes.append({
-            "decision": decision, "context": context,
-            "outcome": outcome, "laws_ok": laws_ok,
-        })
+        self._decision_outcomes.append(
+            {
+                "decision": decision,
+                "context": context,
+                "outcome": outcome,
+                "laws_ok": laws_ok,
+            }
+        )
         if len(self._decision_outcomes) > 200:
             self._decision_outcomes = self._decision_outcomes[-200:]
 
@@ -161,19 +241,14 @@ class MLPredictor:
             if key not in by_decision:
                 by_decision[key] = []
             by_decision[key].append(d["laws_ok"])
-        return {
-            k: sum(v) / len(v) if v else 0.5
-            for k, v in by_decision.items()
-        }
+        return {k: sum(v) / len(v) if v else 0.5 for k, v in by_decision.items()}
 
     # ── Serialization ───────────────────────────────────────────
 
     def to_dict(self) -> dict:
         """Serialize for persistent storage."""
         return {
-            "consumption": {
-                f"{k[0]}_{k[1]}": v for k, v in self._consumption.items()
-            },
+            "consumption": {f"{k[0]}_{k[1]}": v for k, v in self._consumption.items()},
             "appliance_hours": self._appliance_hours,
             "pressure_pv": self._pressure_pv[-50:],
             "decision_outcomes": self._decision_outcomes[-50:],

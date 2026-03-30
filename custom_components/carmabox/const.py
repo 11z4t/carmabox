@@ -31,12 +31,25 @@ DEFAULT_BATTERY_2_KWH = 5.0
 DEFAULT_BATTERY_CAP_KWH = DEFAULT_BATTERY_1_KWH + DEFAULT_BATTERY_2_KWH
 DEFAULT_BATTERY_EFFICIENCY = 0.90
 DEFAULT_MAX_DISCHARGE_KW = 5.0
-DEFAULT_BAT_MIN_CHARGE_W: int = 300   # Minimalt meningsfullt laddeffekt
+DEFAULT_BAT_MIN_CHARGE_W: int = 300  # Minimalt meningsfullt laddeffekt
 DEFAULT_BAT_MAX_CHARGE_W: int = 6000  # Max total batteri-laddeffekt (2x GoodWe)
-DEFAULT_PROACTIVE_MIN_GRID_W: float = 300.0  # Min grid-import för proaktiv urladdning
+DEFAULT_PROACTIVE_MIN_GRID_W: float = 300.0  # Min grid-import för proaktiv urladdning (natt)
+DEFAULT_PROACTIVE_MIN_GRID_W_SUN: float = 50.0  # Solrikt dagtid — urladdning vid minimal import
+DEFAULT_PROACTIVE_MIN_GRID_W_CLOUDY: float = 200.0  # Mulet dagtid — måttlig tröskel
+# Surplus chain
+CONSUMER_NEAR_MAX_RATIO = 0.95  # Variable consumer at ≥95% of max_w = "near max"
+
+# P10 safety discharge rates (core/planner.py apply_p10_safety)
+P10_DISCHARGE_CONSERVATIVE_KW = 0.5  # p10 < threshold → minimal urladdning
+P10_DISCHARGE_MODERATE_KW = 1.0  # low confidence → moderate urladdning
+P10_DISCHARGE_NORMAL_KW = 2.0  # normal confidence → full urladdning
+
 DEFAULT_MAX_GRID_CHARGE_KW = 3.0
 DEFAULT_GRID_CHARGE_PRICE_THRESHOLD = 15.0
 DEFAULT_GRID_CHARGE_MAX_SOC = 90.0
+
+# Planning horizon (PLAT-969: Multi-day planning)
+DEFAULT_PLAN_HORIZON_HOURS = 72  # 3 days, configurable 24-168 via input_number
 
 # Consumption
 DEFAULT_DAILY_CONSUMPTION_KWH = 15.0
@@ -270,8 +283,8 @@ CONF_PRICE_AREA = "price_area"
 CONF_HOUSEHOLD_SIZE = "household_size"
 
 # IT-1965: EV SoC target based on 3-day solar forecast
-DEFAULT_SOLAR_GOOD_KWH = 30.0    # Above this = good sun day
-DEFAULT_SOLAR_OK_KWH = 20.0      # 20-30 = OK, below 20 = bad
+DEFAULT_SOLAR_GOOD_KWH = 30.0  # Above this = good sun day
+DEFAULT_SOLAR_OK_KWH = 20.0  # 20-30 = OK, below 20 = bad
 DEFAULT_EV_SOC_MIN_TARGET = 75.0  # Bad sun = conservative
-DEFAULT_EV_SOC_MAX_TARGET = 100.0 # Good sun or bad forecast ahead = charge full
-DEFAULT_EV_SOC_DERATING = 10.0    # Subtract from last known SoC (conservative)
+DEFAULT_EV_SOC_MAX_TARGET = 100.0  # Good sun or bad forecast ahead = charge full
+DEFAULT_EV_SOC_DERATING = 10.0  # Subtract from last known SoC (conservative)

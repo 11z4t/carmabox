@@ -251,7 +251,9 @@ class TestIntegration:
 
     def test_scheduler_plan_includes_evening_strategy(self) -> None:
         """generate_scheduler_plan should include evening_strategy."""
-        from custom_components.carmabox.optimizer.scheduler import generate_scheduler_plan
+        from custom_components.carmabox.optimizer.scheduler import (
+            generate_scheduler_plan,
+        )
 
         prices = [20.0] * 6 + [50.0] * 11 + [100.0] * 5 + [20.0] * 2
         plan = generate_scheduler_plan(
@@ -269,7 +271,9 @@ class TestIntegration:
 
     def test_scheduler_with_tomorrow_prices(self) -> None:
         """generate_scheduler_plan with explicit tomorrow prices."""
-        from custom_components.carmabox.optimizer.scheduler import generate_scheduler_plan
+        from custom_components.carmabox.optimizer.scheduler import (
+            generate_scheduler_plan,
+        )
 
         prices_today = [20.0] * 6 + [50.0] * 11 + [100.0] * 5 + [20.0] * 2
         prices_tomorrow = [15.0] * 6 + [80.0] * 12 + [40.0] * 6

@@ -83,8 +83,16 @@ class TestSolcastRead:
 
     def test_hourly_forecast(self) -> None:
         hourly = [
-            {"period_start": "2026-03-18T08:00:00", "pv_estimate10": 1000, "pv_estimate": 1500},
-            {"period_start": "2026-03-18T09:00:00", "pv_estimate10": 2000, "pv_estimate": 2500},
+            {
+                "period_start": "2026-03-18T08:00:00",
+                "pv_estimate10": 1000,
+                "pv_estimate": 1500,
+            },
+            {
+                "period_start": "2026-03-18T09:00:00",
+                "pv_estimate10": 2000,
+                "pv_estimate": 2500,
+            },
         ]
         hass = _make_hass(attrs={"detailedHourly": hourly})
         adapter = SolcastAdapter(hass)
@@ -161,17 +169,61 @@ class TestSolcastTomorrowHourly:
     def test_tomorrow_hourly_sunny_day(self) -> None:
         """Sunny day: significant PV forecast across daylight hours."""
         hourly_data = [
-            {"period_start": "2026-03-22T07:00:00", "pv_estimate10": 500, "pv_estimate": 800},
-            {"period_start": "2026-03-22T08:00:00", "pv_estimate10": 1500, "pv_estimate": 2000},
-            {"period_start": "2026-03-22T09:00:00", "pv_estimate10": 3000, "pv_estimate": 4000},
-            {"period_start": "2026-03-22T10:00:00", "pv_estimate10": 4500, "pv_estimate": 5500},
-            {"period_start": "2026-03-22T11:00:00", "pv_estimate10": 5000, "pv_estimate": 6000},
-            {"period_start": "2026-03-22T12:00:00", "pv_estimate10": 5200, "pv_estimate": 6200},
-            {"period_start": "2026-03-22T13:00:00", "pv_estimate10": 4800, "pv_estimate": 5800},
-            {"period_start": "2026-03-22T14:00:00", "pv_estimate10": 3500, "pv_estimate": 4500},
-            {"period_start": "2026-03-22T15:00:00", "pv_estimate10": 2000, "pv_estimate": 3000},
-            {"period_start": "2026-03-22T16:00:00", "pv_estimate10": 800, "pv_estimate": 1200},
-            {"period_start": "2026-03-22T17:00:00", "pv_estimate10": 200, "pv_estimate": 400},
+            {
+                "period_start": "2026-03-22T07:00:00",
+                "pv_estimate10": 500,
+                "pv_estimate": 800,
+            },
+            {
+                "period_start": "2026-03-22T08:00:00",
+                "pv_estimate10": 1500,
+                "pv_estimate": 2000,
+            },
+            {
+                "period_start": "2026-03-22T09:00:00",
+                "pv_estimate10": 3000,
+                "pv_estimate": 4000,
+            },
+            {
+                "period_start": "2026-03-22T10:00:00",
+                "pv_estimate10": 4500,
+                "pv_estimate": 5500,
+            },
+            {
+                "period_start": "2026-03-22T11:00:00",
+                "pv_estimate10": 5000,
+                "pv_estimate": 6000,
+            },
+            {
+                "period_start": "2026-03-22T12:00:00",
+                "pv_estimate10": 5200,
+                "pv_estimate": 6200,
+            },
+            {
+                "period_start": "2026-03-22T13:00:00",
+                "pv_estimate10": 4800,
+                "pv_estimate": 5800,
+            },
+            {
+                "period_start": "2026-03-22T14:00:00",
+                "pv_estimate10": 3500,
+                "pv_estimate": 4500,
+            },
+            {
+                "period_start": "2026-03-22T15:00:00",
+                "pv_estimate10": 2000,
+                "pv_estimate": 3000,
+            },
+            {
+                "period_start": "2026-03-22T16:00:00",
+                "pv_estimate10": 800,
+                "pv_estimate": 1200,
+            },
+            {
+                "period_start": "2026-03-22T17:00:00",
+                "pv_estimate10": 200,
+                "pv_estimate": 400,
+            },
         ]
         tomorrow_state = MagicMock()
         tomorrow_state.state = "25.0"
@@ -192,12 +244,36 @@ class TestSolcastTomorrowHourly:
     def test_tomorrow_hourly_cloudy_day(self) -> None:
         """Cloudy day: low PV forecast."""
         hourly_data = [
-            {"period_start": "2026-03-22T09:00:00", "pv_estimate10": 200, "pv_estimate": 400},
-            {"period_start": "2026-03-22T10:00:00", "pv_estimate10": 500, "pv_estimate": 800},
-            {"period_start": "2026-03-22T11:00:00", "pv_estimate10": 600, "pv_estimate": 900},
-            {"period_start": "2026-03-22T12:00:00", "pv_estimate10": 700, "pv_estimate": 1000},
-            {"period_start": "2026-03-22T13:00:00", "pv_estimate10": 500, "pv_estimate": 700},
-            {"period_start": "2026-03-22T14:00:00", "pv_estimate10": 300, "pv_estimate": 500},
+            {
+                "period_start": "2026-03-22T09:00:00",
+                "pv_estimate10": 200,
+                "pv_estimate": 400,
+            },
+            {
+                "period_start": "2026-03-22T10:00:00",
+                "pv_estimate10": 500,
+                "pv_estimate": 800,
+            },
+            {
+                "period_start": "2026-03-22T11:00:00",
+                "pv_estimate10": 600,
+                "pv_estimate": 900,
+            },
+            {
+                "period_start": "2026-03-22T12:00:00",
+                "pv_estimate10": 700,
+                "pv_estimate": 1000,
+            },
+            {
+                "period_start": "2026-03-22T13:00:00",
+                "pv_estimate10": 500,
+                "pv_estimate": 700,
+            },
+            {
+                "period_start": "2026-03-22T14:00:00",
+                "pv_estimate10": 300,
+                "pv_estimate": 500,
+            },
         ]
         tomorrow_state = MagicMock()
         tomorrow_state.state = "3.0"

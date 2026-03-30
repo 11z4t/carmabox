@@ -11,7 +11,12 @@ import logging
 from typing import Any
 
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
 
 from .const import (
@@ -96,7 +101,12 @@ GRID_OPERATORS = {
         "top_n": 3,
         "night_weight": 0.5,
     },
-    "eon": {"name": "E.ON Energidistribution", "cost_per_kw": 70, "top_n": 1, "night_weight": 1.0},
+    "eon": {
+        "name": "E.ON Energidistribution",
+        "cost_per_kw": 70,
+        "top_n": 1,
+        "night_weight": 1.0,
+    },
     "goteborg_energi": {
         "name": "Göteborg Energi",
         "cost_per_kw": 78,
@@ -165,7 +175,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="confirm",
             description_placeholders={
-                "detected": "\n".join(detected_text) if detected_text else "Inget hittad",
+                "detected": ("\n".join(detected_text) if detected_text else "Inget hittad"),
             },
         )
 
@@ -584,7 +594,15 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         # ── Inverter entities (scan real states, fallback to prefix) ──
         inverters = self._detected.get("inverters", [])
         # Exclude computed/aggregate sensors (total, imbalance, etc.)
-        _exclude = ("total", "imbalance", "available", "trend", "charging", "discharging", "mode")
+        _exclude = (
+            "total",
+            "imbalance",
+            "available",
+            "trend",
+            "charging",
+            "discharging",
+            "mode",
+        )
         battery_soc_entities = [
             e
             for e in self._find_entities("sensor", "pv_battery_soc_")
@@ -604,13 +622,17 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 suffix = soc_eid.split("pv_battery_soc_")[-1]
                 mappings[f"battery_soc_{i}"] = soc_eid
                 mappings[f"battery_power_{i}"] = self._find_by_suffix(
-                    battery_power_entities, suffix, f"sensor.goodwe_battery_power_{suffix}"
+                    battery_power_entities,
+                    suffix,
+                    f"sensor.goodwe_battery_power_{suffix}",
                 )
                 mappings[f"battery_ems_{i}"] = self._find_by_suffix(
                     battery_ems_entities, suffix, f"select.goodwe_{suffix}_ems_mode"
                 )
                 mappings[f"battery_limit_{i}"] = self._find_by_suffix(
-                    battery_limit_entities, suffix, f"number.goodwe_{suffix}_peak_shaving_power"
+                    battery_limit_entities,
+                    suffix,
+                    f"number.goodwe_{suffix}_peak_shaving_power",
                 )
         else:
             # Fallback: build from detected prefixes
@@ -872,7 +894,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                         "name": INVERTER_DOMAINS[domain],
                         "entry_id": entry.entry_id,
                         "device_ids": device_ids,
-                        "prefix": entry.title.lower().replace(" ", "_") if entry.title else domain,
+                        "prefix": (
+                            entry.title.lower().replace(" ", "_") if entry.title else domain
+                        ),
                     }
                 )
 
@@ -995,7 +1019,8 @@ class CarmaboxOptionsFlow(OptionsFlow):
                     vol.Required(
                         "grid_charge_price_threshold",
                         default=opts.get(
-                            "grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
+                            "grid_charge_price_threshold",
+                            DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
                         ),
                     ): vol.All(vol.Coerce(float), vol.Range(min=0, max=100)),
                     vol.Required(

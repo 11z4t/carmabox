@@ -259,7 +259,10 @@ class TestRateGuard:
 
         guard = SafetyGuard(max_mode_changes_per_hour=2)
         # Add old timestamps (>1h ago)
-        guard._mode_change_timestamps = [time.monotonic() - 3700, time.monotonic() - 3600]
+        guard._mode_change_timestamps = [
+            time.monotonic() - 3700,
+            time.monotonic() - 3600,
+        ]
         # Should pass since old entries are pruned
         assert guard.check_rate_limit().ok
 
@@ -330,7 +333,9 @@ class TestSafetyLog:
         assert guard.recent_block_count(3600) == 5
 
     def test_log_max_size(self) -> None:
-        from custom_components.carmabox.optimizer.safety_guard import MAX_SAFETY_LOG_ENTRIES
+        from custom_components.carmabox.optimizer.safety_guard import (
+            MAX_SAFETY_LOG_ENTRIES,
+        )
 
         guard = SafetyGuard()
         for _ in range(MAX_SAFETY_LOG_ENTRIES + 10):

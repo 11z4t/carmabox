@@ -139,12 +139,12 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "cold_lock_active": coord._cold_lock_active,
         "cell_temp_kontor": (
             coord.data.battery_min_cell_temp_1
-            if coord.data and hasattr(coord.data, 'battery_min_cell_temp_1')
+            if coord.data and hasattr(coord.data, "battery_min_cell_temp_1")
             else None
         ),
         "cell_temp_forrad": (
             coord.data.battery_min_cell_temp_2
-            if coord.data and hasattr(coord.data, 'battery_min_cell_temp_2')
+            if coord.data and hasattr(coord.data, "battery_min_cell_temp_2")
             else None
         ),
     }
@@ -250,9 +250,11 @@ def _battery_efficiency_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "avg_buy_price_ore": avg_buy,
         "avg_sell_price_ore": avg_sell,
         "ratio": ratio,
-        "summary": f"Köpte {avg_buy:.0f} öre, sålde {avg_sell:.0f} öre = {ratio:.1f}x"
-        if ratio > 0
-        else "Ingen data",
+        "summary": (
+            f"Köpte {avg_buy:.0f} öre, sålde {avg_sell:.0f} öre = {ratio:.1f}x"
+            if ratio > 0
+            else "Ingen data"
+        ),
         "charge_from_grid_kwh": round(s.charge_from_grid_kwh, 2),
         "discharge_offset_kwh": round(s.discharge_offset_kwh, 2),
     }
@@ -314,9 +316,11 @@ def _grid_charge_efficiency_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     return {
         "avg_charge_price_ore": avg_buy,
         "avg_daily_price_ore": avg_daily,
-        "summary": f"Nätladdade vid {avg_buy:.0f} öre (snitt {avg_daily:.0f} öre)"
-        if avg_buy > 0
-        else "Ingen data",
+        "summary": (
+            f"Nätladdade vid {avg_buy:.0f} öre (snitt {avg_daily:.0f} öre)"
+            if avg_buy > 0
+            else "Ingen data"
+        ),
         "total_grid_charge_kwh": round(s.charge_from_grid_kwh, 2),
         "price_min": round(min(prices), 1) if prices else 0.0,
         "price_max": round(max(prices), 1) if prices else 0.0,
@@ -513,8 +517,6 @@ def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     if not coord.data:
         return {"status": "no_data"}
 
-    state = coord.data
-
     # Define all rules with metadata
     all_rules = [
         {
@@ -546,7 +548,10 @@ def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
             "id": "RULE_1_5",
             "name": "Cheap grid charge",
             "priority": 4,
-            "condition": f"Pris < {coord._cfg.get('grid_charge_price_threshold', 15):.0f} öre + SoC < 90% → grid_charge",
+            "condition": (
+                f"Pris < {coord._cfg.get('grid_charge_price_threshold', 15):.0f}"
+                f" öre + SoC < 90% → grid_charge"
+            ),
             "parameters": {
                 "price_threshold_ore": float(coord._cfg.get("grid_charge_price_threshold", 15)),
                 "max_soc": float(coord._cfg.get("grid_charge_max_soc", 90)),
@@ -751,7 +756,7 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        value_fn=lambda coord: round(coord.data.total_battery_soc, 0) if coord.data else 0,
+        value_fn=lambda coord: (round(coord.data.total_battery_soc, 0) if coord.data else 0),
     ),
     CarmaboxSensorDescription(
         key="grid_import",

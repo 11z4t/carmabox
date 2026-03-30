@@ -5,7 +5,11 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
-from custom_components.carmabox.optimizer.models import CarmaboxState, Decision, HourActual
+from custom_components.carmabox.optimizer.models import (
+    CarmaboxState,
+    Decision,
+    HourActual,
+)
 from custom_components.carmabox.optimizer.savings import SavingsState
 from custom_components.carmabox.sensor import (
     SENSOR_DESCRIPTIONS,
@@ -32,7 +36,12 @@ def _make_sensor_deps(
     coord.hourly_actuals = []
     coord.executor_enabled = True
     coord.status_text = "Allt fungerar"
-    coord.system_health = {"kontor": "ok", "forrad": "ok", "sakerhet": "ok", "styrning": "ok"}
+    coord.system_health = {
+        "kontor": "ok",
+        "forrad": "ok",
+        "sakerhet": "ok",
+        "styrning": "ok",
+    }
     coord.plan_score = MagicMock(
         return_value={
             "score_today": None,
@@ -60,7 +69,7 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 20  # IT-1937 added carma_box_rules
+        assert len(SENSOR_DESCRIPTIONS) == 28  # IT-1937 added carma_box_rules (updated count)
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
         assert "plan_accuracy" in keys
         assert "decision" in keys
@@ -175,7 +184,10 @@ class TestBatterySocSensor:
     def test_dual_battery_weighted(self) -> None:
         """Weighted SoC: 80%×15 + 60%×5 = 75%."""
         state = CarmaboxState(
-            battery_soc_1=80, battery_soc_2=60, battery_cap_1_kwh=15, battery_cap_2_kwh=5
+            battery_soc_1=80,
+            battery_soc_2=60,
+            battery_cap_1_kwh=15,
+            battery_cap_2_kwh=5,
         )
         coord, entry = _make_sensor_deps(state=state)
         sensor = _get_sensor("battery_soc", coord, entry)

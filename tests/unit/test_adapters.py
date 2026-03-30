@@ -148,14 +148,17 @@ class TestEaseeAdapter:
         assert call[0][2]["value"] == 10  # S5: Hard cap at 10A (safety)
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("input_amps,expected", [
-        (6, 6),    # AC5: minimum — pass through
-        (8, 8),    # AC3: mid-range — pass through
-        (10, 10),  # AC5: at DEFAULT_EV_MAX_AMPS — pass through
-        (11, 10),  # AC1/AC5: just above max — clamped to 10A
-        (16, 10),  # AC1: 16A would blow fuse — clamped to 10A
-        (32, 10),  # AC2: old max — clamped to 10A
-    ])
+    @pytest.mark.parametrize(
+        "input_amps,expected",
+        [
+            (6, 6),  # AC5: minimum — pass through
+            (8, 8),  # AC3: mid-range — pass through
+            (10, 10),  # AC5: at DEFAULT_EV_MAX_AMPS — pass through
+            (11, 10),  # AC1/AC5: just above max — clamped to 10A
+            (16, 10),  # AC1: 16A would blow fuse — clamped to 10A
+            (32, 10),  # AC2: old max — clamped to 10A
+        ],
+    )
     async def test_set_current_safety_clamp(self, input_amps, expected) -> None:
         """PLAT-1009: Defense-in-depth — adapter clamps to DEFAULT_EV_MAX_AMPS."""
         hass = _make_hass()
@@ -284,7 +287,7 @@ class TestGoodWeAdapterEdgeCases:
     async def test_set_fast_charging_on(self) -> None:
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
-        await adapter.set_fast_charging(on=True, power_pct=80, soc_target=90)
+        await adapter.set_fast_charging(on=True, power_pct=80, soc_target=90, authorized=True)
         calls = hass.services.async_call.call_args_list
         assert len(calls) == 3  # switch + power + soc
         assert calls[0][0][1] == "turn_on"
@@ -345,7 +348,11 @@ class TestNordpoolAdapterEdgeCases:
         hass = MagicMock()
         state = MagicMock()
         state.state = "50"
-        state.attributes = {"today": list(range(24)), "tomorrow": [], "tomorrow_valid": True}
+        state.attributes = {
+            "today": list(range(24)),
+            "tomorrow": [],
+            "tomorrow_valid": True,
+        }
         hass.states.get = MagicMock(return_value=state)
         adapter = NordpoolAdapter(hass, "sensor.np")
         assert adapter.tomorrow_prices is None
@@ -402,7 +409,12 @@ class TestGoodWeSafeCall:
         hass.services.async_call = AsyncMock(side_effect=side_effect)
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
-            result = await adapter.set_fast_charging(on=True, power_pct=80, soc_target=90)
+            result = await adapter.set_fast_charging(
+                on=True,
+                power_pct=80,
+                soc_target=90,
+                authorized=True,
+            )
         assert result is False
 
     @pytest.mark.asyncio

@@ -124,8 +124,8 @@ class SafetyGuard:
         - Temperature out of range
         - IT-2075: Available energy below reserve
         """
-        # IT-2075: Reserve-aware gating
-        if reserve_kwh > 0 and available_kwh < reserve_kwh + 1.0:
+        # IT-2075: Reserve-aware gating (always enforce 1.0 kWh minimum margin)
+        if available_kwh < reserve_kwh + 1.0:
             reason = f"available {available_kwh:.1f} kWh < reserve {reserve_kwh:.1f} + 1.0"
             _LOGGER.info("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
@@ -171,7 +171,10 @@ class SafetyGuard:
                 return r
 
         _LOGGER.debug(
-            "SafetyGuard PASS discharge: SoC %s/%s%%, grid %sW", soc_1, soc_2, grid_power_w
+            "SafetyGuard PASS discharge: SoC %s/%s%%, grid %sW",
+            soc_1,
+            soc_2,
+            grid_power_w,
         )
         r = SafetyResult(ok=True)
         self._log("discharge", r)

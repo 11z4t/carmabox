@@ -149,7 +149,12 @@ class TestWhatIf:
     def test_basic(self):
         state = ROIState()
         record_month(
-            state, 2026, 1, baseline_cost_kr=3000, actual_cost_kr=2000, peak_savings_kr=500
+            state,
+            2026,
+            1,
+            baseline_cost_kr=3000,
+            actual_cost_kr=2000,
+            peak_savings_kr=500,
         )
         w = whatif_summary(state)
         assert w["total_without_carma_kr"] == 3000

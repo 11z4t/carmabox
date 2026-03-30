@@ -6,8 +6,10 @@ from custom_components.carmabox.core.plan_executor import (
     ExecutorState,
     PlanAction,
     calculate_ev_amps,
+    calculate_ev_start_amps,
     check_replan_needed,
     execute_plan_hour,
+    should_charge_ev_full,
 )
 
 
@@ -21,8 +23,12 @@ def _plan(
     hour: int = 14,
 ) -> PlanAction:
     return PlanAction(
-        hour=hour, action=action, battery_kw=battery_kw,
-        grid_kw=grid_kw, price=price, battery_soc=battery_soc,
+        hour=hour,
+        action=action,
+        battery_kw=battery_kw,
+        grid_kw=grid_kw,
+        price=price,
+        battery_soc=battery_soc,
         ev_soc=ev_soc,
     )
 
@@ -38,15 +44,23 @@ def _state(
     target_kw: float = 2.0,
     weight: float = 1.0,
     headroom_kw: float = 1.0,
+    ev_last_full_charge_days: int = 0,
 ) -> ExecutorState:
     return ExecutorState(
-        grid_import_w=grid_w, pv_power_w=pv_w,
-        battery_soc_1=soc1, battery_soc_2=soc2,
-        battery_power_1=0, battery_power_2=0,
-        ev_power_w=0, ev_soc=ev_soc,
+        grid_import_w=grid_w,
+        pv_power_w=pv_w,
+        battery_soc_1=soc1,
+        battery_soc_2=soc2,
+        battery_power_1=0,
+        battery_power_2=0,
+        ev_power_w=0,
+        ev_soc=ev_soc,
         ev_connected=ev_connected,
-        current_price=price, target_kw=target_kw,
-        ellevio_weight=weight, headroom_kw=headroom_kw,
+        current_price=price,
+        target_kw=target_kw,
+        ellevio_weight=weight,
+        headroom_kw=headroom_kw,
+        ev_last_full_charge_days=ev_last_full_charge_days,
     )
 
 
@@ -267,6 +281,77 @@ class TestReplanNeeded:
 
     def test_no_plan_needs_replan(self):
         replan, _ = check_replan_needed(
-            None, _state(), deviation_count=0,
+            None,
+            _state(),
+            deviation_count=0,
         )
         assert replan is True
+
+
+class TestEVStartAmps:
+    def test_ev_start_amps_plenty_of_time(self):
+        """8h to go, need 10% of 92kWh = 9.2kWh → 9.2/8=1.15kW → 2A → clamp to min 6A."""
+        amps = calculate_ev_start_amps(
+            ev_soc=65,
+            ev_target_soc=75,
+            ev_cap_kwh=92,
+            hours_until_departure=8,
+        )
+        assert amps == 6  # min_amps, plenty of time
+
+    def test_ev_start_amps_tight(self):
+        """2h to go, need 20% of 92kWh = 18.4kWh → 9.2kW → ceil(9200/690) = 14A → clamp ≤10 → 10."""
+        amps = calculate_ev_start_amps(
+            ev_soc=55,
+            ev_target_soc=75,
+            ev_cap_kwh=92,
+            hours_until_departure=2,
+        )
+        assert amps >= 8
+        # With default max_amps=10, 14A is clamped to 10
+        assert amps == 10
+
+    def test_ev_start_amps_already_full(self):
+        """SoC >= target → 0."""
+        amps = calculate_ev_start_amps(
+            ev_soc=80,
+            ev_target_soc=75,
+            ev_cap_kwh=92,
+            hours_until_departure=5,
+        )
+        assert amps == 0
+
+    def test_ev_start_amps_impossible(self):
+        """1h, need 50% of 92kWh = 46kWh → 46kW → way over max → max_amps."""
+        amps = calculate_ev_start_amps(
+            ev_soc=25,
+            ev_target_soc=75,
+            ev_cap_kwh=92,
+            hours_until_departure=1,
+        )
+        assert amps == 10  # DEFAULT_EV_MAX_AMPS
+
+
+class TestEVFullCharge:
+    """IT-GAP05: EV 100% charge every 7th day for battery calibration."""
+
+    def test_ev_full_charge_after_7_days(self):
+        """7 days since last full charge → target 100%."""
+        cmd = execute_plan_hour(
+            _plan(action="i"),
+            _state(grid_w=1500, target_kw=2.0, weight=1.0, ev_last_full_charge_days=7),
+        )
+        assert cmd.ev_target_soc == 100
+
+    def test_ev_normal_charge_before_7_days(self):
+        """3 days since last full charge → target 75%."""
+        cmd = execute_plan_hour(
+            _plan(action="i"),
+            _state(grid_w=1500, target_kw=2.0, weight=1.0, ev_last_full_charge_days=3),
+        )
+        assert cmd.ev_target_soc == 75
+
+    def test_should_charge_ev_full_boundary(self):
+        """Boundary: 6 days → False, 7 days → True."""
+        assert should_charge_ev_full(6) is False
+        assert should_charge_ev_full(7) is True

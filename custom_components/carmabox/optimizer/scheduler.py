@@ -48,7 +48,10 @@ from ..const import (
     SCHEDULER_MINER_EXPORT_MIN_W,
     SCHEDULER_PLAN_HOURS,
 )
-from .evening_optimizer import apply_strategy_to_battery_schedule, evaluate_evening_strategy
+from .evening_optimizer import (
+    apply_strategy_to_battery_schedule,
+    evaluate_evening_strategy,
+)
 from .grid_logic import ellevio_weight
 from .models import (
     BreachCorrection,
@@ -349,11 +352,7 @@ def _schedule_battery(
     # Moderate solar → drain to 30% by sunrise
     solar_confident = tomorrow_pv_kwh > 25.0
     solar_moderate = tomorrow_pv_kwh > 15.0
-    sunrise_target_pct = (
-        battery_min_soc if solar_confident
-        else 30.0 if solar_moderate
-        else 50.0
-    )
+    sunrise_target_pct = battery_min_soc if solar_confident else 30.0 if solar_moderate else 50.0
     sunrise_target_kwh = sunrise_target_pct / 100 * battery_cap_kwh
 
     # ── Find sunrise hour (first hour with PV > 1kW) ────────────
@@ -366,14 +365,19 @@ def _schedule_battery(
 
     # ── Calculate drain budget: how much to discharge before sunrise
     drain_budget_kwh = max(0, soc_kwh - sunrise_target_kwh)
-    slots_to_sunrise = max(1, sunrise_slot)
+    max(1, sunrise_slot)
 
     _LOGGER.debug(
         "Arbitrage: median=%.0f, discharge_thr=%.0f, aggressive_thr=%.0f, "
         "tomorrow_pv=%.1f kWh, sunrise_slot=%d, drain_budget=%.1f kWh, "
         "sunrise_target=%.0f%%",
-        median_price, discharge_price_threshold, aggressive_discharge_threshold,
-        tomorrow_pv_kwh, sunrise_slot, drain_budget_kwh, sunrise_target_pct,
+        median_price,
+        discharge_price_threshold,
+        aggressive_discharge_threshold,
+        tomorrow_pv_kwh,
+        sunrise_slot,
+        drain_budget_kwh,
+        sunrise_target_pct,
     )
 
     for i in range(num_hours):
@@ -435,8 +439,7 @@ def _schedule_battery(
 
         # Priority 5: Pre-sunrise drain — empty battery before solar refill
         # Don't let batteries sit full when sun will fill them for free
-        elif (before_sunrise and drain_budget_kwh > 0.5
-              and available > 0.3 and net > 0.1):
+        elif before_sunrise and drain_budget_kwh > 0.5 and available > 0.3 and net > 0.1:
             # Spread drain evenly across remaining pre-sunrise slots
             remaining_slots = max(1, sunrise_slot - i)
             remaining_drain = max(0, soc_kwh - sunrise_target_kwh)
@@ -460,17 +463,16 @@ def _schedule_battery(
                     discharge = min(support_need, available, max_discharge_kw)
                     battery_kw = -discharge
                     soc_kwh -= discharge
-                    action = "d"
+                action = "d"
 
         # Priority 7: Anti-idle — if battery is >80% and no action taken,
         # discharge a small amount to cover house load (avoid idle waste)
-        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3:
-            if available > 0.3:
-                idle_discharge = min(net * 0.5, available, 1.5)
-                if idle_discharge > 0.2:
-                    battery_kw = -idle_discharge
-                    soc_kwh -= idle_discharge
-                    action = "d"
+        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3 and available > 0.3:
+            idle_discharge = min(net * 0.5, available, 1.5)
+            if idle_discharge > 0.2:
+                battery_kw = -idle_discharge
+                soc_kwh -= idle_discharge
+                action = "d"
 
         soc_kwh = max(0.0, min(soc_kwh, battery_cap_kwh))
         result[i] = (round(battery_kw, 2), action)
@@ -851,11 +853,7 @@ def _apply_corrections(
             # Move EV from source hour to target hour (idx = destination)
             # V2: Safe param parsing
             try:
-                params = dict(
-                    p.split("=", 1)
-                    for p in corr.param.split(",")
-                    if "=" in p
-                )
+                params = dict(p.split("=", 1) for p in corr.param.split(",") if "=" in p)
             except (ValueError, TypeError):
                 params = {}
             shift_from = int(params.get("shift_from", corr.source_breach_hour))
@@ -876,11 +874,7 @@ def _apply_corrections(
         elif corr.action == "add_discharge":
             # Add battery discharge at this hour
             try:
-                params = dict(
-                    p.split("=", 1)
-                    for p in corr.param.split(",")
-                    if "=" in p
-                )
+                params = dict(p.split("=", 1) for p in corr.param.split(",") if "=" in p)
             except (ValueError, TypeError):
                 params = {}
             discharge_kw = float(params.get("discharge_kw", "2.0"))
@@ -1252,9 +1246,7 @@ def analyze_idle_time(
 
         # Missed discharge: price > avg*1.3 and battery has energy
         if price > avg_price * 1.3 and soc > battery_min_soc + 10:
-            avail = min(
-                2.0, (soc - battery_min_soc) / 100 * battery_cap_kwh
-            )
+            avail = min(2.0, (soc - battery_min_soc) / 100 * battery_cap_kwh)
             missed_discharge += avail
             missed_savings_kr += avail * price / 100
 

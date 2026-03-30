@@ -218,9 +218,9 @@ def roi_summary(state: ROIState) -> dict[str, Any]:
         "payback_progress_pct": payback_progress_pct(state),
         "estimated_payback_months": pb,
         "months_tracked": len(state.monthly_savings),
-        "avg_monthly_savings_kr": round(savings / len(state.monthly_savings), 0)
-        if state.monthly_savings
-        else 0,
+        "avg_monthly_savings_kr": (
+            round(savings / len(state.monthly_savings), 0) if state.monthly_savings else 0
+        ),
         "whatif": whatif_summary(state),
     }
 

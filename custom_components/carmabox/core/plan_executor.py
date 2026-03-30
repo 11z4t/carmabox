@@ -18,9 +18,15 @@ Key principles:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
-from ..const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS
+from ..const import (
+    DEFAULT_EV_FULL_CHARGE_DAYS,
+    DEFAULT_EV_MAX_AMPS,
+    DEFAULT_EV_MIN_AMPS,
+    DEFAULT_EV_NIGHT_TARGET_SOC,
+)
 
 
 @dataclass
@@ -65,6 +71,15 @@ class ExecutorState:
     target_kw: float  # Ellevio weighted target
     ellevio_weight: float  # Current hour weight (0.5 night, 1.0 day)
     headroom_kw: float  # From Grid Guard
+    ev_last_full_charge_days: int = 0  # Days since last 100% charge
+
+
+def should_charge_ev_full(
+    days_since_full: int,
+    full_charge_interval: int = DEFAULT_EV_FULL_CHARGE_DAYS,
+) -> bool:
+    """EV should charge to 100% every N days for battery calibration."""
+    return days_since_full >= full_charge_interval
 
 
 @dataclass
@@ -78,6 +93,7 @@ class ExecutorCommand:
     reason: str
     plan_followed: bool  # True if executor followed the plan
     deviation_pct: float  # How much actual deviates from plan
+    ev_target_soc: int = int(DEFAULT_EV_NIGHT_TARGET_SOC)  # EV SoC target
 
 
 def execute_plan_hour(
@@ -97,9 +113,16 @@ def execute_plan_hour(
     """
     cfg = config or ExecutorConfig()
 
+    # ── EV target SoC: 100% every N days for calibration ────────
+    ev_target_soc = int(DEFAULT_EV_NIGHT_TARGET_SOC)
+    if should_charge_ev_full(state.ev_last_full_charge_days):
+        ev_target_soc = 100
+
     # ── No plan → safe standby ──────────────────────────────────
     if plan_action is None:
-        return _pv_or_standby(state, cfg, "Ingen plan — safe standby")
+        cmd = _pv_or_standby(state, cfg, "Ingen plan — safe standby")
+        cmd.ev_target_soc = ev_target_soc
+        return cmd
 
     # ── PV override: solar MUST be captured ─────────────────────
     # Physics overrides plan — if PV is producing and batteries not full,
@@ -110,8 +133,11 @@ def execute_plan_hour(
         state.battery_soc_2 < 0 or state.battery_soc_2 >= 99
     )
 
+    # ── Execute plan action ─────────────────────────────────────
+    action = plan_action.action
+
     if is_exporting and pv_producing and not batteries_full:
-        return ExecutorCommand(
+        cmd = ExecutorCommand(
             battery_action="charge_pv",
             battery_discharge_w=0,
             ev_action="none",
@@ -121,15 +147,12 @@ def execute_plan_hour(
             deviation_pct=0,
         )
 
-    # ── Execute plan action ─────────────────────────────────────
-    action = plan_action.action
-
-    if action == "d":  # Discharge
-        return _execute_discharge(plan_action, state, cfg)
+    elif action == "d":  # Discharge
+        cmd = _execute_discharge(plan_action, state, cfg)
 
     elif action == "c":  # Charge from PV
         if pv_producing:
-            return ExecutorCommand(
+            cmd = ExecutorCommand(
                 battery_action="charge_pv",
                 battery_discharge_w=0,
                 ev_action="none",
@@ -139,7 +162,7 @@ def execute_plan_hour(
                 deviation_pct=0,
             )
         else:
-            return ExecutorCommand(
+            cmd = ExecutorCommand(
                 battery_action="standby",
                 battery_discharge_w=0,
                 ev_action="none",
@@ -151,7 +174,7 @@ def execute_plan_hour(
 
     elif action == "g":  # Grid charge
         if state.current_price <= cfg.grid_charge_price_threshold:
-            return ExecutorCommand(
+            cmd = ExecutorCommand(
                 battery_action="grid_charge",
                 battery_discharge_w=0,
                 ev_action="none",
@@ -161,7 +184,7 @@ def execute_plan_hour(
                 deviation_pct=0,
             )
         else:
-            return ExecutorCommand(
+            cmd = ExecutorCommand(
                 battery_action="standby",
                 battery_discharge_w=0,
                 ev_action="none",
@@ -175,7 +198,10 @@ def execute_plan_hour(
             )
 
     else:  # 'i' = idle
-        return _execute_idle(plan_action, state, cfg)
+        cmd = _execute_idle(plan_action, state, cfg)
+
+    cmd.ev_target_soc = ev_target_soc
+    return cmd
 
 
 def calculate_ev_amps(
@@ -195,6 +221,36 @@ def calculate_ev_amps(
     if amps < min_amps:
         return 0  # Below minimum → can't charge
     return min(amps, max_amps)
+
+
+def calculate_ev_start_amps(
+    ev_soc: float,
+    ev_target_soc: float,
+    ev_cap_kwh: float,
+    hours_until_departure: float,
+    phase_count: int = 3,
+    voltage: float = 230.0,
+    min_amps: int = DEFAULT_EV_MIN_AMPS,
+    max_amps: int = DEFAULT_EV_MAX_AMPS,
+) -> int:
+    """Calculate minimum EV amps to reach target by departure.
+
+    If plenty of time: start at min_amps (gentler on battery).
+    If tight: start higher.
+    If impossible even at max: return max_amps.
+    Returns 0 if already at/above target.
+    """
+    if ev_soc >= ev_target_soc:
+        return 0
+
+    if hours_until_departure <= 0:
+        return max_amps
+
+    energy_needed_kwh = (ev_target_soc - ev_soc) / 100.0 * ev_cap_kwh
+    kw_needed = energy_needed_kwh / hours_until_departure
+    amps_needed = math.ceil(kw_needed * 1000 / (voltage * phase_count))
+
+    return max(min_amps, min(amps_needed, max_amps))
 
 
 # ── Internal helpers ────────────────────────────────────────────
@@ -224,8 +280,10 @@ def _execute_discharge(
     ev_action = "none"
     if state.ev_connected and state.headroom_kw > 0:
         ev_amps = calculate_ev_amps(
-            state.headroom_kw, cfg.ev_phase_count,
-            cfg.ev_min_amps, cfg.ev_max_amps,
+            state.headroom_kw,
+            cfg.ev_phase_count,
+            cfg.ev_min_amps,
+            cfg.ev_max_amps,
         )
         if ev_amps >= cfg.ev_min_amps:
             ev_action = "start"

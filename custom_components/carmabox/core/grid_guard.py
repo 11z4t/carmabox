@@ -34,6 +34,7 @@ class GridGuardConfig:
     cold_lock_temp_c: float = 4.0
     recovery_hold_s: float = 60.0
     fallback_grid_w: float = 2000.0
+    ev_min_amps: int = 6
 
 
 @dataclass
@@ -157,8 +158,13 @@ class GridGuard:
             if headroom_kw < 0:
                 overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
                 extra_cmds, reason = self._action_ladder(
-                    overshoot_w, consumers, ev_power_w, ev_amps,
-                    ev_phase_count, batteries, kontor_temp_c,
+                    overshoot_w,
+                    consumers,
+                    ev_power_w,
+                    ev_amps,
+                    ev_phase_count,
+                    batteries,
+                    kontor_temp_c,
                 )
                 inv_result.commands.extend(extra_cmds)
                 inv_result.reason += f"; {reason}" if reason else ""
@@ -186,13 +192,20 @@ class GridGuard:
         # OVER LIMIT — action ladder
         overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)  # Convert to actual W
         commands, reason = self._action_ladder(
-            overshoot_w, consumers, ev_power_w, ev_amps,
-            ev_phase_count, batteries, kontor_temp_c,
+            overshoot_w,
+            consumers,
+            ev_power_w,
+            ev_amps,
+            ev_phase_count,
+            batteries,
+            kontor_temp_c,
         )
 
-        self._status = "CRITICAL" if any(
-            c.get("action") in ("pause_ev", "increase_discharge") for c in commands
-        ) else "WARNING"
+        self._status = (
+            "CRITICAL"
+            if any(c.get("action") in ("pause_ev", "increase_discharge") for c in commands)
+            else "WARNING"
+        )
 
         return GridGuardResult(
             status=self._status,
@@ -232,51 +245,55 @@ class GridGuard:
             # INV-1: Never EMS auto
             if bat.ems_mode == "auto":
                 violations.append(f"INV-1: {bat.id} EMS=auto")
-                commands.append({
-                    "action": "set_ems_mode",
-                    "battery_id": bat.id,
-                    "mode": "battery_standby",
-                })
+                commands.append(
+                    {
+                        "action": "set_ems_mode",
+                        "battery_id": bat.id,
+                        "mode": "battery_standby",
+                    }
+                )
 
             # INV-3: Never fast_charging without authorization
             if bat.fast_charging_on and not fast_charge_authorized:
                 violations.append(f"INV-3: {bat.id} fast_charging utan beslut")
-                commands.append({
-                    "action": "set_fast_charging",
-                    "battery_id": bat.id,
-                    "on": False,
-                })
+                commands.append(
+                    {
+                        "action": "set_fast_charging",
+                        "battery_id": bat.id,
+                        "on": False,
+                    }
+                )
 
             # INV-4: Never charge at cold lock
             if bat.cell_temp_c < self.config.cold_lock_temp_c and bat.power_w < -50:
-                violations.append(
-                    f"INV-4: {bat.id} laddar vid {bat.cell_temp_c:.1f}°C"
+                violations.append(f"INV-4: {bat.id} laddar vid {bat.cell_temp_c:.1f}°C")
+                commands.append(
+                    {
+                        "action": "set_ems_mode",
+                        "battery_id": bat.id,
+                        "mode": "battery_standby",
+                    }
                 )
-                commands.append({
-                    "action": "set_ems_mode",
-                    "battery_id": bat.id,
-                    "mode": "battery_standby",
-                })
 
         # INV-5: Never discharge below min_soc
         for bat in batteries:
             effective_min = (
-                self.config.cold_lock_temp_c
-                and bat.cell_temp_c < self.config.cold_lock_temp_c
+                self.config.cold_lock_temp_c and bat.cell_temp_c < self.config.cold_lock_temp_c
             )
             min_soc = 20.0 if effective_min else 15.0  # cold → higher floor
             if bat.soc < 0:
                 continue  # SoC unavailable — skip check
             if bat.soc <= min_soc and bat.power_w > 50:  # discharging below min
                 violations.append(
-                    f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% "
-                    f"(min {min_soc:.0f}%)"
+                    f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% " f"(min {min_soc:.0f}%)"
                 )
-                commands.append({
-                    "action": "set_ems_mode",
-                    "battery_id": bat.id,
-                    "mode": "battery_standby",
-                })
+                commands.append(
+                    {
+                        "action": "set_ems_mode",
+                        "battery_id": bat.id,
+                        "mode": "battery_standby",
+                    }
+                )
 
         # INV-2: Never crosscharge
         if len(batteries) >= 2:
@@ -284,15 +301,16 @@ class GridGuard:
             discharging = [b for b in batteries if b.power_w > 50]
             if charging and discharging:
                 violations.append(
-                    f"INV-2: Korskörning {charging[0].id} laddar, "
-                    f"{discharging[0].id} urladdar"
+                    f"INV-2: Korskörning {charging[0].id} laddar, " f"{discharging[0].id} urladdar"
                 )
                 for bat in batteries:
-                    commands.append({
-                        "action": "set_ems_mode",
-                        "battery_id": bat.id,
-                        "mode": "battery_standby",
-                    })
+                    commands.append(
+                        {
+                            "action": "set_ems_mode",
+                            "battery_id": bat.id,
+                            "mode": "battery_standby",
+                        }
+                    )
 
         return GridGuardResult(
             status="CRITICAL" if violations else "OK",
@@ -361,17 +379,21 @@ class GridGuard:
                 continue  # Skip — too cold
 
             if consumer.entity_climate:
-                commands.append({
-                    "action": "set_hvac_off",
-                    "entity": consumer.entity_climate,
-                    "consumer_id": consumer.id,
-                })
+                commands.append(
+                    {
+                        "action": "set_hvac_off",
+                        "entity": consumer.entity_climate,
+                        "consumer_id": consumer.id,
+                    }
+                )
             elif consumer.entity_switch:
-                commands.append({
-                    "action": "switch_off",
-                    "entity": consumer.entity_switch,
-                    "consumer_id": consumer.id,
-                })
+                commands.append(
+                    {
+                        "action": "switch_off",
+                        "entity": consumer.entity_switch,
+                        "consumer_id": consumer.id,
+                    }
+                )
 
             remaining -= consumer.power_w
             reasons.append(f"{consumer.name} av ({consumer.power_w:.0f}W)")
@@ -381,14 +403,16 @@ class GridGuard:
         if remaining > 0 and ev_power_w > 100 and ev_amps > 0:
             w_per_amp = 230 * ev_phase_count
             amps_to_reduce = math.ceil(remaining / w_per_amp)
-            new_amps = max(6, ev_amps - amps_to_reduce)
+            new_amps = max(self.config.ev_min_amps, ev_amps - amps_to_reduce)
 
-            if new_amps >= 6 and new_amps < ev_amps:
+            if new_amps >= self.config.ev_min_amps and new_amps < ev_amps:
                 reduction_w = (ev_amps - new_amps) * w_per_amp
-                commands.append({
-                    "action": "reduce_ev",
-                    "amps": new_amps,
-                })
+                commands.append(
+                    {
+                        "action": "reduce_ev",
+                        "amps": new_amps,
+                    }
+                )
                 remaining -= reduction_w
                 reasons.append(f"EV {ev_amps}→{new_amps}A")
                 self._actions_taken.append("ev_reduced")
@@ -405,10 +429,12 @@ class GridGuard:
             total_available = sum(b.available_kwh for b in batteries)
             if total_available > 0.3:
                 discharge_w = int(min(remaining, 5000))
-                commands.append({
-                    "action": "increase_discharge",
-                    "watts": discharge_w,
-                })
+                commands.append(
+                    {
+                        "action": "increase_discharge",
+                        "watts": discharge_w,
+                    }
+                )
                 remaining -= discharge_w
                 reasons.append(f"Urladdning +{discharge_w}W")
                 self._actions_taken.append("discharge_increased")

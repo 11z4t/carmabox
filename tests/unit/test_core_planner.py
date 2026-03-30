@@ -5,7 +5,9 @@ from __future__ import annotations
 from custom_components.carmabox.core.planner import (
     PlannerConfig,
     PlannerInput,
+    calculate_night_reserve_kwh,
     generate_carma_plan,
+    max_daytime_discharge_kwh,
 )
 
 
@@ -23,10 +25,14 @@ def _input(
     ev = [0] * n_hours
     return PlannerInput(
         start_hour=start_hour,
-        hourly_prices=prices, hourly_pv=pv,
-        hourly_loads=loads, hourly_ev=ev,
-        battery_soc=battery_soc, battery_cap_kwh=20,
-        ev_soc=ev_soc, ev_cap_kwh=92,
+        hourly_prices=prices,
+        hourly_pv=pv,
+        hourly_loads=loads,
+        hourly_ev=ev,
+        battery_soc=battery_soc,
+        battery_cap_kwh=20,
+        ev_soc=ev_soc,
+        ev_cap_kwh=92,
         pv_forecast_tomorrow_kwh=pv_tomorrow,
         battery_temps=bat_temps,
     )
@@ -92,7 +98,9 @@ class TestColdBattery:
     def test_cold_battery_higher_min_soc(self):
         """Cold battery → min_soc = 20% instead of 15%."""
         cfg = PlannerConfig(
-            battery_min_soc=15, battery_min_soc_cold=20, cold_temp_c=4.0,
+            battery_min_soc=15,
+            battery_min_soc_cold=20,
+            cold_temp_c=4.0,
         )
         plan = generate_carma_plan(
             _input(battery_soc=25, bat_temps=[3.0, 15.0]),
@@ -165,6 +173,7 @@ class TestEdgeCases:
 class TestP10Safety:
     def test_low_p10_conservative(self):
         from custom_components.carmabox.core.planner import apply_p10_safety
+
         r = apply_p10_safety(pv_forecast_p10_kwh=2.0, pv_forecast_estimate_kwh=22.0)
         assert r["strategy"] == "conservative"
         assert r["max_discharge_kw"] == 0.5
@@ -172,11 +181,358 @@ class TestP10Safety:
 
     def test_normal_p10(self):
         from custom_components.carmabox.core.planner import apply_p10_safety
+
         r = apply_p10_safety(pv_forecast_p10_kwh=30.0, pv_forecast_estimate_kwh=35.0)
         assert r["strategy"] == "normal"
         assert r["max_discharge_kw"] == 2.0
 
     def test_moderate_confidence(self):
         from custom_components.carmabox.core.planner import apply_p10_safety
+
         r = apply_p10_safety(pv_forecast_p10_kwh=6.0, pv_forecast_estimate_kwh=25.0)
         assert r["strategy"] == "moderate"
+
+
+class TestWinterGridCharge:
+    """IT-GAP20: Winter grid charging when solar < consumption and price cheap."""
+
+    def test_winter_charge_recommended(self):
+        """Low PV, cheap price, low SoC → recommend grid charge."""
+        from custom_components.carmabox.core.planner import should_grid_charge_winter
+
+        r = should_grid_charge_winter(
+            pv_forecast_kwh=3.0,
+            daily_consumption_kwh=15.0,
+            current_price_ore=20.0,
+            price_threshold_ore=30.0,
+            battery_soc=40.0,
+            max_charge_soc=80.0,
+        )
+        assert r["recommend"] is True
+        assert r["max_charge_soc"] == 80.0
+        assert "Winter grid charge" in r["reason"]
+
+    def test_winter_charge_solar_sufficient(self):
+        """High PV covers consumption → no grid charge needed."""
+        from custom_components.carmabox.core.planner import should_grid_charge_winter
+
+        r = should_grid_charge_winter(
+            pv_forecast_kwh=20.0,
+            daily_consumption_kwh=15.0,
+            current_price_ore=20.0,
+            price_threshold_ore=30.0,
+            battery_soc=40.0,
+            max_charge_soc=80.0,
+        )
+        assert r["recommend"] is False
+        assert "Solar covers consumption" in r["reason"]
+
+    def test_winter_charge_price_too_high(self):
+        """Expensive electricity → no grid charge."""
+        from custom_components.carmabox.core.planner import should_grid_charge_winter
+
+        r = should_grid_charge_winter(
+            pv_forecast_kwh=3.0,
+            daily_consumption_kwh=15.0,
+            current_price_ore=50.0,
+            price_threshold_ore=30.0,
+            battery_soc=40.0,
+            max_charge_soc=80.0,
+        )
+        assert r["recommend"] is False
+        assert "Price too high" in r["reason"]
+
+    def test_winter_charge_battery_full(self):
+        """Battery SoC above max → no grid charge."""
+        from custom_components.carmabox.core.planner import should_grid_charge_winter
+
+        r = should_grid_charge_winter(
+            pv_forecast_kwh=3.0,
+            daily_consumption_kwh=15.0,
+            current_price_ore=20.0,
+            price_threshold_ore=30.0,
+            battery_soc=85.0,
+            max_charge_soc=80.0,
+        )
+        assert r["recommend"] is False
+        assert "already sufficiently charged" in r["reason"]
+
+    def test_winter_charge_borderline(self):
+        """PV exactly equals consumption → no grid charge (>= check)."""
+        from custom_components.carmabox.core.planner import should_grid_charge_winter
+
+        r = should_grid_charge_winter(
+            pv_forecast_kwh=15.0,
+            daily_consumption_kwh=15.0,
+            current_price_ore=20.0,
+            price_threshold_ore=30.0,
+            battery_soc=40.0,
+            max_charge_soc=80.0,
+        )
+        assert r["recommend"] is False
+        assert "Solar covers consumption" in r["reason"]
+
+
+class TestCalculateNightReserve:
+    def test_night_reserve_3phase(self):
+        """3-phase EV at 6A → ~24 kWh reserve."""
+        reserve = calculate_night_reserve_kwh(ev_phase_count=3)
+        # EV = 230*3*6/1000 = 4.14 kW, house = 2.5, grid_max = 4.0
+        # bat_per_hour = max(0, 4.14+2.5-4.0) = 2.64
+        # reserve = 2.64*8 + 3.0 = 24.12
+        assert 23.0 < reserve < 25.0
+
+    def test_night_reserve_1phase(self):
+        """1-phase EV → much less reserve than 3-phase."""
+        reserve_1p = calculate_night_reserve_kwh(ev_phase_count=1)
+        reserve_3p = calculate_night_reserve_kwh(ev_phase_count=3)
+        # 1-phase: EV = 230*1*6/1000 = 1.38 kW
+        # bat_per_hour = max(0, 1.38+2.5-4.0) = 0  (grid covers it)
+        # reserve = 0*8 + 3.0 = 3.0 (just appliance margin)
+        assert reserve_1p < reserve_3p
+        assert reserve_1p == 3.0  # Only appliance margin
+
+
+class TestMaxDaytimeDischarge:
+    def test_max_daytime_discharge_with_reserve(self):
+        """96% SoC, 20 kWh cap, 15 kWh reserve → ~1.2 kWh available."""
+        result = max_daytime_discharge_kwh(
+            battery_soc=96,
+            battery_cap_kwh=20,
+            min_soc=15.0,
+            night_reserve_kwh=15.0,
+        )
+        # available = (96-15)/100 * 20 = 16.2
+        # discharge = 16.2 - 15.0 = 1.2
+        assert abs(result - 1.2) < 0.1
+
+    def test_max_daytime_discharge_no_reserve(self):
+        """96% SoC, no reserve → full available energy."""
+        result = max_daytime_discharge_kwh(
+            battery_soc=96,
+            battery_cap_kwh=20,
+            min_soc=15.0,
+            night_reserve_kwh=0.0,
+        )
+        # available = (96-15)/100 * 20 = 16.2
+        assert abs(result - 16.2) < 0.1
+
+    def test_max_daytime_discharge_insufficient(self):
+        """Low SoC, high reserve → 0 discharge."""
+        result = max_daytime_discharge_kwh(
+            battery_soc=25,
+            battery_cap_kwh=20,
+            min_soc=15.0,
+            night_reserve_kwh=10.0,
+        )
+        # available = (25-15)/100 * 20 = 2.0
+        # 2.0 - 10.0 = -8.0 → clamped to 0
+        assert result == 0.0
+
+
+class TestBuildPriceSchedule:
+    """IT-GAP07: Nordpool tomorrow prices for night optimization."""
+
+    def test_build_price_schedule_with_tomorrow(self):
+        """Combines today remaining + tomorrow prices."""
+        from custom_components.carmabox.core.planner import build_price_schedule
+
+        today = list(range(24))  # 0..23
+        tomorrow = list(range(100, 124))  # 100..123
+        result = build_price_schedule(today, tomorrow, current_hour=20, plan_hours=10)
+        # today[20:] = [20,21,22,23] + tomorrow[0:6] = [100,101,102,103,104,105]
+        assert result == [20, 21, 22, 23, 100, 101, 102, 103, 104, 105]
+
+    def test_build_price_schedule_no_tomorrow(self):
+        """Without tomorrow, repeats today's pattern."""
+        from custom_components.carmabox.core.planner import build_price_schedule
+
+        today = list(range(24))
+        result = build_price_schedule(today, [], current_hour=22, plan_hours=6)
+        # today[22:] = [22, 23], then wraps: [0, 1, 2, 3]
+        assert result == [22, 23, 0, 1, 2, 3]
+
+    def test_build_price_schedule_partial_day(self):
+        """Starting at hour 22 with tomorrow available."""
+        from custom_components.carmabox.core.planner import build_price_schedule
+
+        today = [50.0] * 24
+        tomorrow = [30.0] * 24
+        result = build_price_schedule(today, tomorrow, current_hour=22, plan_hours=8)
+        # 2 hours of today (50) + 6 hours of tomorrow (30)
+        assert len(result) == 8
+        assert result[:2] == [50.0, 50.0]
+        assert result[2:] == [30.0] * 6
+
+
+class TestFindCheapestHours:
+    """IT-GAP07: Find cheapest hours for night charging."""
+
+    def test_find_cheapest_hours(self):
+        """Finds the 3 cheapest hours."""
+        from custom_components.carmabox.core.planner import find_cheapest_hours
+
+        prices = [50, 30, 80, 10, 60, 20, 40]
+        result = find_cheapest_hours(prices, n_hours=3)
+        # Cheapest: index 3 (10), index 5 (20), index 1 (30)
+        assert result == [1, 3, 5]
+
+    def test_find_cheapest_hours_sorted(self):
+        """Result is sorted chronologically, not by price."""
+        from custom_components.carmabox.core.planner import find_cheapest_hours
+
+        prices = [90, 10, 80, 20, 70, 30]
+        result = find_cheapest_hours(prices, n_hours=3)
+        # Cheapest: index 1 (10), index 3 (20), index 5 (30)
+        assert result == [1, 3, 5]
+        # Verify chronological order (ascending indices)
+        assert result == sorted(result)
+
+
+class TestEllevioPeakCost:
+    """IT-GAP08: Ellevio peak cost impact in planner."""
+
+    def test_peak_cost_no_existing(self):
+        """Empty peaks + 3.0 kW → cost calculated from scratch."""
+        from custom_components.carmabox.core.planner import calculate_ellevio_peak_cost
+
+        r = calculate_ellevio_peak_cost(current_peaks_kw=[], new_peak_kw=3.0)
+        # No existing peaks → current_avg = 0, new top 3 = [3.0] → avg = 3.0/3 = 1.0
+        assert r["current_avg_kw"] == 0.0
+        assert r["new_avg_kw"] == 1.0
+        assert r["monthly_cost_increase"] == 80.0  # 1.0 * 80
+        assert r["annual_cost_increase"] == 960.0  # 80 * 12
+        assert r["should_avoid"] is True
+
+    def test_peak_cost_below_existing(self):
+        """New peak lower than all top 3 → 0 increase."""
+        from custom_components.carmabox.core.planner import calculate_ellevio_peak_cost
+
+        r = calculate_ellevio_peak_cost(
+            current_peaks_kw=[5.0, 4.0, 3.0],
+            new_peak_kw=2.0,
+        )
+        # Top 3 stays [5, 4, 3] → avg = 4.0, new top 3 = [5, 4, 3] → avg = 4.0
+        assert r["current_avg_kw"] == 4.0
+        assert r["new_avg_kw"] == 4.0
+        assert r["monthly_cost_increase"] == 0.0
+        assert r["annual_cost_increase"] == 0.0
+        assert r["should_avoid"] is False
+
+    def test_peak_cost_above_existing(self):
+        """New peak raises average → positive increase."""
+        from custom_components.carmabox.core.planner import calculate_ellevio_peak_cost
+
+        r = calculate_ellevio_peak_cost(
+            current_peaks_kw=[5.0, 4.0, 3.0],
+            new_peak_kw=6.0,
+        )
+        # Current avg = (5+4+3)/3 = 4.0
+        # New top 3 = [6, 5, 4] → avg = 5.0
+        assert r["current_avg_kw"] == 4.0
+        assert r["new_avg_kw"] == 5.0
+        assert r["monthly_cost_increase"] == 80.0  # (5.0-4.0) * 80
+        assert r["annual_cost_increase"] == 960.0
+        assert r["should_avoid"] is True
+
+    def test_peak_cost_should_avoid(self):
+        """Large increase → should_avoid True; small → False."""
+        from custom_components.carmabox.core.planner import calculate_ellevio_peak_cost
+
+        # Large increase
+        r_large = calculate_ellevio_peak_cost(
+            current_peaks_kw=[2.0, 2.0, 2.0],
+            new_peak_kw=5.0,
+        )
+        assert r_large["should_avoid"] is True
+        assert r_large["monthly_cost_increase"] > 10.0
+
+        # Tiny increase (just barely displaces bottom peak)
+        r_small = calculate_ellevio_peak_cost(
+            current_peaks_kw=[5.0, 4.0, 3.0],
+            new_peak_kw=3.1,
+        )
+        # New top 3 = [5, 4, 3.1] → avg = 4.0333, increase = 0.0333 * 80 = 2.67
+        assert r_small["should_avoid"] is False
+        assert r_small["monthly_cost_increase"] < 10.0
+
+
+class TestEstimateHourPeak:
+    """IT-GAP08: Estimate where weighted hourly average will land."""
+
+    def test_estimate_hour_peak_midway(self):
+        """30 min elapsed, projects correctly."""
+        from custom_components.carmabox.core.planner import estimate_hour_peak
+
+        result = estimate_hour_peak(
+            current_weighted_kw=2.0,
+            minutes_elapsed=30,
+            remaining_load_kw=4.0,
+        )
+        # (2.0 * 30 + 4.0 * 30) / 60 = (60 + 120) / 60 = 3.0
+        assert abs(result - 3.0) < 0.001
+
+    def test_estimate_hour_peak_end(self):
+        """60 min elapsed → returns current value."""
+        from custom_components.carmabox.core.planner import estimate_hour_peak
+
+        result = estimate_hour_peak(
+            current_weighted_kw=2.5,
+            minutes_elapsed=60,
+            remaining_load_kw=10.0,
+        )
+        assert result == 2.5
+
+
+class TestPressurePvAdjustment:
+    """IT-GAP09: Tempest air pressure → PV forecast correction."""
+
+    def test_pressure_high(self):
+        """1030 hPa → factor 1.1, category high."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1030.0)
+        assert r["confidence_factor"] == 1.1
+        assert r["pressure_category"] == "high"
+
+    def test_pressure_normal(self):
+        """1015 hPa → factor 1.0, category normal (boundary: >1015 is normal)."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1018.0)
+        assert r["confidence_factor"] == 1.0
+        assert r["pressure_category"] == "normal"
+
+    def test_pressure_low(self):
+        """1008 hPa → factor 0.8, category low."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1008.0)
+        assert r["confidence_factor"] == 0.8
+        assert r["pressure_category"] == "low"
+
+    def test_pressure_storm(self):
+        """1000 hPa → factor 0.6, category storm."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1000.0)
+        assert r["confidence_factor"] == 0.6
+        assert r["pressure_category"] == "storm"
+
+    def test_pressure_falling_trend(self):
+        """Normal pressure + falling -4 hPa/3h → factor 1.0 - 0.1 = 0.9."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1018.0, pressure_trend_hpa_3h=-4.0)
+        assert r["confidence_factor"] == 0.9
+        assert r["pressure_category"] == "normal"
+        assert "falling rapidly" in r["reason"]
+
+    def test_pressure_rising_trend(self):
+        """Low pressure + rising +4 hPa/3h → factor 0.8 + 0.05 = 0.85."""
+        from custom_components.carmabox.core.planner import pressure_pv_adjustment
+
+        r = pressure_pv_adjustment(pressure_hpa=1008.0, pressure_trend_hpa_3h=4.0)
+        assert r["confidence_factor"] == 0.85
+        assert r["pressure_category"] == "low"
+        assert "rising" in r["reason"]

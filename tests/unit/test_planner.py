@@ -1,6 +1,9 @@
 """Tests for CARMA Box planner — core optimizer logic."""
 
-from custom_components.carmabox.optimizer.grid_logic import calculate_target, ellevio_weight
+from custom_components.carmabox.optimizer.grid_logic import (
+    calculate_target,
+    ellevio_weight,
+)
 from custom_components.carmabox.optimizer.planner import generate_plan
 
 

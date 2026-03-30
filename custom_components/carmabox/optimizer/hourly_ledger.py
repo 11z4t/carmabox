@@ -158,7 +158,10 @@ class HourEntry:
         }
         if self.appliance_kwh:
             result["appliances"] = {
-                cat: {"kwh": round(kwh, 3), "cost_kr": round(kwh * self.price_ore / 100, 2)}
+                cat: {
+                    "kwh": round(kwh, 3),
+                    "cost_kr": round(kwh * self.price_ore / 100, 2),
+                }
                 for cat, kwh in self.appliance_kwh.items()
                 if kwh > 0.001
             }
