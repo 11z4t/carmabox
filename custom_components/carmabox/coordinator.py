@@ -1198,7 +1198,54 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Price-discharge check failed", exc_info=True)
 
+        # ── EV timing: charge tonight or wait? ──
+        _ev_charge_tonight = True  # Default: charge
         if is_night and ev_connected and 0 <= ev_soc < ev_target and not self._night_ev_active:
+            try:
+                from .core.planner import should_charge_ev_tonight
+
+                nordpool = self.hass.states.get(
+                    opts.get("price_entity", "sensor.nordpool_kwh_se3_sek_3_10_025")
+                )
+                if nordpool:
+                    today_p = nordpool.attributes.get("today", [])
+                    tomorrow_p = nordpool.attributes.get("tomorrow", [])
+                    tonight = [float(p) for p in today_p[22:] + today_p[:6] if p]
+                    tmr_night = (
+                        [float(p) for p in tomorrow_p[22:] + tomorrow_p[:6] if p]
+                        if tomorrow_p
+                        else []
+                    )
+                    pv_tmr = float(
+                        self.hass.states.get(
+                            "sensor.solcast_pv_forecast_forecast_tomorrow",
+                            type("", (), {"state": "0"})(),
+                        ).state
+                    )
+                    ev_timing = should_charge_ev_tonight(
+                        ev_soc_pct=ev_soc,
+                        ev_target_pct=ev_target,
+                        ev_cap_kwh=float(opts.get("ev_capacity_kwh", 92)),
+                        tonight_prices_ore=tonight,
+                        tomorrow_night_prices_ore=tmr_night,
+                        pv_tomorrow_kwh=pv_tmr,
+                    )
+                    _ev_charge_tonight = ev_timing.get("charge", True)
+                    if not _ev_charge_tonight:
+                        _LOGGER.info(
+                            "EV-TIMING: Skip tonight — %s",
+                            ev_timing.get("reason", "")[:60],
+                        )
+            except Exception:
+                _LOGGER.debug("EV timing check failed", exc_info=True)
+
+        if (
+            is_night
+            and ev_connected
+            and 0 <= ev_soc < ev_target
+            and not self._night_ev_active
+            and _ev_charge_tonight
+        ):
             # EV needs charging — start with battery support
             ev_kw = 230 * ev_phase * DEFAULT_EV_MIN_AMPS / 1000  # Min 6A
             house_kw = max(0, state.grid_power_w) / 1000
