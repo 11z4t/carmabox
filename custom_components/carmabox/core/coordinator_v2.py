@@ -66,7 +66,7 @@ class CoordinatorConfig:
     ev_departure_hour: int = 6
     ev_capacity_kwh: float = 92.0
     grid_charge_price_threshold: float = 15.0
-    plan_interval_cycles: int = 10  # 10 × 30s = 5 min
+    plan_interval_cycles: int = 10  # 10 x 30s = 5 min
 
 
 @dataclass

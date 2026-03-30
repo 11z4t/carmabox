@@ -10,7 +10,7 @@ Key principles:
   - EV scheduled backwards from departure (latest possible hours)
   - Battery follows price signal (charge cheap, discharge expensive)
   - Miner ONLY on PV export surplus
-  - Constraint check every hour: total weighted < target × 0.85
+  - Constraint check every hour: total weighted < target x 0.85
   - Auto root-cause analysis on breaches with learning profile
   - Weekly 100% EV charge planning via Solcast
 """
@@ -334,7 +334,7 @@ def _schedule_battery(
     median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
-    # Discharge when price is above median × factor, replacing grid import
+    # Discharge when price is above median x factor, replacing grid import
     # Idle batteries = wasted investment — actively use them!
     discharge_price_threshold = max(40.0, median_price * 0.9)
     # Aggressive discharge: price well above median

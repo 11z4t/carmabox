@@ -13,13 +13,15 @@ Stitches together:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .grid_logic import calculate_reserve, calculate_target, ellevio_weight
-from .models import HourPlan
 from .planner import generate_plan
-from .price_patterns import PriceProfile
-from .pv_correction import PVCorrectionProfile
+
+if TYPE_CHECKING:
+    from .models import HourPlan
+    from .price_patterns import PriceProfile
+    from .pv_correction import PVCorrectionProfile
 
 
 @dataclass

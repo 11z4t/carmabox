@@ -3,7 +3,7 @@
 Pure Python. No HA imports. Fully testable.
 
 Calculates estimated monthly savings from:
-1. Peak reduction (Ellevio top-3 weighted peaks × kr/kW)
+1. Peak reduction (Ellevio top-3 weighted peaks x kr/kW)
 2. Price optimization (discharge at expensive hours, charge at cheap)
 
 All values are accumulated over the current month and reset on month change.
@@ -12,8 +12,10 @@ All values are accumulated over the current month and reset on month change.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 
 @dataclass
@@ -108,7 +110,7 @@ def record_discharge(
 ) -> None:
     """Record a discharge event (battery → house instead of grid).
 
-    Savings = discharged energy × (current_price - average_price) / 100.
+    Savings = discharged energy x (current_price - average_price) / 100.
     The idea: we discharge at expensive hours and saved vs average cost.
 
     Args:
@@ -131,7 +133,7 @@ def record_grid_charge(
 ) -> None:
     """Record a grid charge event (cheap grid → battery for later).
 
-    Savings = charged energy × (average_price - charge_price) / 100.
+    Savings = charged energy x (average_price - charge_price) / 100.
 
     Args:
         state: Current savings state.
@@ -152,8 +154,8 @@ def calculate_peak_savings(
 ) -> float:
     """Calculate peak reduction savings (kr/month).
 
-    Ellevio charges: mean(top-N peaks) × cost_per_kw per month.
-    Savings = (baseline_mean - actual_mean) × cost_per_kw.
+    Ellevio charges: mean(top-N peaks) x cost_per_kw per month.
+    Savings = (baseline_mean - actual_mean) x cost_per_kw.
 
     Args:
         state: Current savings state.

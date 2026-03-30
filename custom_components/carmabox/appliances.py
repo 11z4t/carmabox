@@ -8,9 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
-
-from homeassistant.core import HomeAssistant
+from typing import TYPE_CHECKING, Any
 
 from .const import (
     APPLIANCE_CATEGORIES,
@@ -18,6 +16,9 @@ from .const import (
     APPLIANCE_HINTS,
     DEFAULT_APPLIANCE_THRESHOLD_W,
 )
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 

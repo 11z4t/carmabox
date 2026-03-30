@@ -9,13 +9,16 @@ Uses EMA (Exponential Moving Average) for smooth adaptation.
 
 from __future__ import annotations
 
-from datetime import datetime
+from typing import TYPE_CHECKING
 
 from ..const import DEFAULT_CONSUMPTION_PROFILE
 
+if TYPE_CHECKING:
+    from datetime import datetime
+
 # EMA alpha: 10% new data, 90% history → smooth but responsive
 EMA_ALPHA = 0.1
-MIN_SAMPLES_FOR_LEARNED = 168  # 7 days × 24 hours
+MIN_SAMPLES_FOR_LEARNED = 168  # 7 days x 24 hours
 
 
 class ConsumptionProfile:
@@ -56,7 +59,7 @@ class ConsumptionProfile:
         """Get 24h profile for the given day type.
 
         Falls back to static DEFAULT_CONSUMPTION_PROFILE until at least
-        MIN_SAMPLES_FOR_LEARNED (168 = 7 days × 24h) total samples exist.
+        MIN_SAMPLES_FOR_LEARNED (168 = 7 days x 24h) total samples exist.
         This ensures enough data across both day types before trusting
         the learned profile.
         """

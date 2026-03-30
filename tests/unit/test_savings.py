@@ -67,14 +67,14 @@ class TestRecordPeak:
 class TestRecordDischarge:
     def test_savings_when_price_above_avg(self) -> None:
         state = SavingsState(month=3, year=2026)
-        record_discharge(state, 2.0, 120.0, 80.0)  # 2 kWh × (120-80)/100 = 0.8 kr
+        record_discharge(state, 2.0, 120.0, 80.0)  # 2 kWh x (120-80)/100 = 0.8 kr
         assert abs(state.discharge_savings_kr - 0.8) < 0.01
         assert state.total_discharge_kwh == 2.0
 
     def test_negative_savings_when_price_below_avg(self) -> None:
         """Discharge at cheap price = negative savings (loss)."""
         state = SavingsState(month=3, year=2026)
-        record_discharge(state, 2.0, 50.0, 80.0)  # 2 kWh × (50-80)/100 = -0.6 kr
+        record_discharge(state, 2.0, 50.0, 80.0)  # 2 kWh x (50-80)/100 = -0.6 kr
         assert abs(state.discharge_savings_kr - (-0.6)) < 0.01
         assert state.total_discharge_kwh == 2.0
 
@@ -93,7 +93,7 @@ class TestRecordDischarge:
 class TestRecordGridCharge:
     def test_savings_when_charging_cheap(self) -> None:
         state = SavingsState(month=3, year=2026)
-        record_grid_charge(state, 3.0, 10.0, 80.0)  # 3 kWh × (80-10)/100 = 2.1 kr
+        record_grid_charge(state, 3.0, 10.0, 80.0)  # 3 kWh x (80-10)/100 = 2.1 kr
         assert abs(state.grid_charge_savings_kr - 2.1) < 0.01
         assert state.total_grid_charge_kwh == 3.0
 
@@ -110,7 +110,7 @@ class TestCalculatePeakSavings:
         state.baseline_peak_samples = [4.0, 3.5, 3.0]  # Without
         savings = calculate_peak_savings(state, cost_per_kw=80.0)
         # baseline mean = 3.5, actual mean = 1.77, reduction = 1.73
-        # 1.73 × 80 = 138.7 (approximately)
+        # 1.73 x 80 = 138.7 (approximately)
         assert savings > 100
 
     def test_no_reduction(self) -> None:
@@ -132,7 +132,7 @@ class TestTotalSavings:
         state.discharge_savings_kr = 10.0
         state.grid_charge_savings_kr = 5.0
         result = total_savings(state, cost_per_kw=80.0)
-        # peak: (4-2) × 80 = 160 + 10 + 5 = 175
+        # peak: (4-2) x 80 = 160 + 10 + 5 = 175
         assert result == 175.0
 
 
@@ -230,9 +230,9 @@ class TestCostEstimate:
         state = SavingsState(month=3, year=2026)
         # 2 kWh consumption, 100 öre, 1 kWh from battery
         record_cost_estimate(state, 2.0, 100.0, 1.0)
-        # Without CARMA: 2 kWh × 1 kr = 2 kr
+        # Without CARMA: 2 kWh x 1 kr = 2 kr
         assert abs(state.baseline_cost_kr - 2.0) < 0.01
-        # With CARMA: (2-1) kWh × 1 kr = 1 kr
+        # With CARMA: (2-1) kWh x 1 kr = 1 kr
         assert abs(state.actual_cost_kr - 1.0) < 0.01
 
     def test_no_negative_grid(self) -> None:

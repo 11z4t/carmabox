@@ -144,7 +144,7 @@ class TestConsumptionProfile:
         from custom_components.carmabox.const import DEFAULT_CONSUMPTION_PROFILE
 
         p = ConsumptionProfile()
-        # Simulate 7 days of weekday data (5 days × 24h = 120 samples)
+        # Simulate 7 days of weekday data (5 days x 24h = 120 samples)
         # with higher evening consumption
         for _day in range(7):
             for hour in range(24):

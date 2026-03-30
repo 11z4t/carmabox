@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-
-from homeassistant.core import HomeAssistant
+from typing import TYPE_CHECKING
 
 from . import PVAdapter
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 

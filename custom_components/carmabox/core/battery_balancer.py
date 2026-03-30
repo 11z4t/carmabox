@@ -10,9 +10,9 @@ min_soc is raised (15% → 20%). Discharge still works at cold temps
 but min_soc floor is higher to prevent BMS lockout.
 
 Key formula:
-    available_i = (soc_i - effective_min_soc_i) / 100 × cap_i
+    available_i = (soc_i - effective_min_soc_i) / 100 x cap_i
     share_i = available_i / Σ(available_j)
-    watts_i = total_watts × share_i
+    watts_i = total_watts x share_i
 """
 
 from __future__ import annotations

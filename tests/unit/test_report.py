@@ -71,7 +71,7 @@ class TestGenerateReport:
         assert report.peak_actual_kw == 2.0
         assert report.peak_baseline_kw == 4.0
         assert report.peak_reduction_pct == 50.0
-        assert report.peak_savings_kr == 160.0  # (4-2) × 80
+        assert report.peak_savings_kr == 160.0  # (4-2) x 80
 
     def test_ev_tracking(self) -> None:
         c = ReportCollector(month=3, year=2026)

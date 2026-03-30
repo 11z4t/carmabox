@@ -155,7 +155,7 @@ class LawGuardian:
                     {
                         "channel": "slack",
                         "severity": "critical",
-                        "message": f"LAG 1 brott ×{self._breach_count_hour['LAG_1']}/h: "
+                        "message": f"LAG 1 brott x{self._breach_count_hour['LAG_1']}/h: "
                         f"viktat {c1.actual:.1f} kW > tak {c1.limit:.1f} kW",
                     }
                 )

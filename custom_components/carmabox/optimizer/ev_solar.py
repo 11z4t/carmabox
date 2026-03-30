@@ -63,7 +63,7 @@ def should_stop_solar_ev(
         pv_surplus_kw: Current PV export/surplus.
         stop_threshold_kw: Below this = consider stopping.
         consecutive_low_count: How many cycles surplus has been low.
-        required_consecutive: Cycles (×30s) required before stopping.
+        required_consecutive: Cycles (x30s) required before stopping.
 
     Returns:
         True if should stop.

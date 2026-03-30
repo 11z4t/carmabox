@@ -22,7 +22,7 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 # Minimum samples before prediction is trusted
-MIN_TRAINING_SAMPLES = 168  # 7 days × 24 hours
+MIN_TRAINING_SAMPLES = 168  # 7 days x 24 hours
 
 
 @dataclass
@@ -216,7 +216,7 @@ class ConsumptionPredictor:
     ) -> None:
         """Record an appliance event (dish/tvätt/tork) for pattern learning.
 
-        Called when appliance power > 500W. Stores power per weekday×hour
+        Called when appliance power > 500W. Stores power per weekdayxhour
         to learn when appliances typically run.
         """
         key = f"appl_{category}_{weekday}_{hour}"
@@ -274,7 +274,7 @@ class ConsumptionPredictor:
         soc_delta_pct: float,
         capacity_kwh: float,
     ) -> None:
-        """Record daily EV energy usage (SoC change × capacity).
+        """Record daily EV energy usage (SoC change x capacity).
 
         Called once per day at midnight or when day changes.
         """
@@ -397,7 +397,7 @@ class ConsumptionPredictor:
             day, hour = int(parts[1]), int(parts[2])
             if weekday is not None and day != weekday:
                 continue
-            # Risk score = count × average excess
+            # Risk score = count x average excess
             avg_excess = sum(vals) / len(vals) if vals else 0
             risk[hour] = risk.get(hour, 0) + len(vals) * max(0.1, avg_excess)
 
@@ -431,7 +431,7 @@ class ConsumptionPredictor:
     def accuracy_estimate(self) -> float:
         """Rough accuracy estimate based on data coverage.
 
-        Returns 0-100%. 100% = all 168 weekday×hour slots have data.
+        Returns 0-100%. 100% = all 168 weekdayxhour slots have data.
         """
         filled = sum(1 for v in self.history.values() if len(v) >= 3)
         total_slots = 7 * 24  # 168

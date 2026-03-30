@@ -8,12 +8,15 @@ Self-healing repair flows for common issues:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers import issue_registry as ir
 
 from .const import DEFAULT_BATTERY_MIN_SOC, DOMAIN
+
+if TYPE_CHECKING:
+    from homeassistant import data_entry_flow
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -23,7 +26,6 @@ HUB_OFFLINE_THRESHOLD_S = 86400  # 24 hours
 
 try:
     import voluptuous as vol
-    from homeassistant import data_entry_flow
     from homeassistant.components.repairs import ConfirmRepairFlow, RepairsFlow
 
     class SafetyGuardRepairFlow(RepairsFlow):

@@ -6,9 +6,8 @@ Uses SensorEntityDescription pattern (Shelly-standard).
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -16,11 +15,8 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfPower
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import APPLIANCE_CATEGORIES, DOMAIN
@@ -32,6 +28,13 @@ from .optimizer.savings import (
     savings_whatif,
     total_savings,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+    from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -174,7 +177,7 @@ def _decision_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
 def _plan_accuracy_value(coord: CarmaboxCoordinator) -> float | None:
     """Plan accuracy: how close actual grid matched plan (min/max ratio, weighted average).
 
-    Formula per hour: min(planned, actual) / max(planned, actual) × 100
+    Formula per hour: min(planned, actual) / max(planned, actual) x 100
     Example: plan=2.0, actual=2.3 → 2.0/2.3 = 87%
     Hours where both are near-zero count as 100% (nothing to compare).
     """

@@ -147,7 +147,7 @@ DISCHARGE_LIMIT_HIGH_SOC_W = 1000  # SoC > 60%: aggressive
 DISCHARGE_LIMIT_MID_SOC_W = 1500  # SoC 40-60%: moderate
 DISCHARGE_LIMIT_LOW_SOC_W = 2000  # SoC 20-40%: conservative
 DISCHARGE_LIMIT_VERY_LOW_SOC_W = 3000  # SoC < 20%: very conservative
-DISCHARGE_NIGHT_FACTOR = 2.0  # Night: ×2 (Ellevio weights ×0.5)
+DISCHARGE_NIGHT_FACTOR = 2.0  # Night: x2 (Ellevio weights x0.5)
 
 # ── IT-2067: Cold Temperature Protection ──────────────────────
 COLD_TEMP_THRESHOLD_C = 4.0  # Below this = cold condition

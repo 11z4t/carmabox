@@ -6,11 +6,12 @@ Reads electricity prices via HA's nordpool integration.
 from __future__ import annotations
 
 import logging
-from typing import Any
-
-from homeassistant.core import HomeAssistant
+from typing import TYPE_CHECKING, Any
 
 from . import PriceAdapter
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -10,7 +10,7 @@ from ..const import DEFAULT_NIGHT_END, DEFAULT_NIGHT_START
 
 
 def ellevio_weight(hour: int, night_weight: float = 0.5) -> float:
-    """Ellevio hourly weight: night (22-06) × night_weight, day × 1.0."""
+    """Ellevio hourly weight: night (22-06) x night_weight, day x 1.0."""
     return night_weight if (hour >= DEFAULT_NIGHT_START or hour < DEFAULT_NIGHT_END) else 1.0
 
 

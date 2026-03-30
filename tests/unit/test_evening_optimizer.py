@@ -157,7 +157,7 @@ class TestEvaluateStrategy:
             battery_cap_kwh=20.0,
             prices_today_24h=prices_today,
             ev_need_kwh=20.0,  # Takes most night capacity
-            max_grid_charge_kw=3.0,  # 3kW × 8h = 24 kWh total
+            max_grid_charge_kw=3.0,  # 3kW x 8h = 24 kWh total
         )
 
         # Should still decide but with reduced confidence if A

@@ -1,21 +1,30 @@
 """CARMA Box — GoodWe adapter.
 
 Reads battery state and sends commands via HA's goodwe integration entities.
+
+PLAT-1082: All Modbus writes serialized via asyncio.Lock to prevent
+concurrent bus access (root cause of 2026-03-26 grid spike).
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from typing import TYPE_CHECKING
 
-from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
 from . import InverterAdapter
 
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
+
 _LOGGER = logging.getLogger(__name__)
 
 _RETRY_DELAY_S = 5
+_MODBUS_MIN_INTERVAL_S = 0.1  # Min 100ms between Modbus calls
+_ADAPTER_RATE_LIMIT_S = 2.0  # MANIFEST 10.2: max 1 call per 2s per adapter
 
 
 class GoodWeAdapter(InverterAdapter):
@@ -23,7 +32,19 @@ class GoodWeAdapter(InverterAdapter):
 
     Reads: SoC, battery power, temperature, EMS mode
     Writes: EMS mode, fast charging switch/power, peak shaving limit
+
+    All writes are serialized through a shared Modbus lock to prevent
+    concurrent bus access that caused the 2026-03-26 incident.
     """
+
+    _modbus_lock: asyncio.Lock | None = None  # Shared across all instances
+
+    @classmethod
+    def _get_modbus_lock(cls) -> asyncio.Lock:
+        """Get or create the shared Modbus lock (lazy init for event loop safety)."""
+        if cls._modbus_lock is None:
+            cls._modbus_lock = asyncio.Lock()
+        return cls._modbus_lock
 
     def __init__(
         self,
@@ -41,6 +62,7 @@ class GoodWeAdapter(InverterAdapter):
         self.hass = hass
         self.device_id = device_id
         self.prefix = entity_prefix
+        self._last_call_time: float = 0.0
 
     def _state(self, entity_id: str, default: float = 0.0) -> float:
         """Read float state from HA entity."""
@@ -60,49 +82,68 @@ class GoodWeAdapter(InverterAdapter):
         return state.state
 
     async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
-        """Call HA service with error handling and 1 retry. Returns True on success."""
+        """Call HA service with Modbus serialization, rate limiting, and retry.
+
+        PLAT-1082: All writes go through shared asyncio.Lock to prevent
+        concurrent Modbus bus access. Rate limited to max 1 call per 2s
+        per adapter instance (MANIFEST 10.2).
+
+        Returns True on success.
+        """
         entity_id = data.get("entity_id", "?")
 
         if getattr(self, "_analyze_only", False):
             _LOGGER.info("DRY-RUN GoodWe %s: %s.%s → %s", self.prefix, domain, service, entity_id)
             return True
 
-        for attempt in range(2):
-            try:
-                await self.hass.services.async_call(domain, service, data)
-                return True
-            except ServiceNotFound:
-                _LOGGER.error(
-                    "GoodWe %s: service not found %s.%s → %s",
-                    self.prefix,
-                    domain,
-                    service,
-                    entity_id,
-                )
-                return False
-            except HomeAssistantError as err:
-                _LOGGER.error(
-                    "GoodWe %s: HA error %s.%s → %s: %s (attempt %d/2)",
-                    self.prefix,
-                    domain,
-                    service,
-                    entity_id,
-                    err,
-                    attempt + 1,
-                )
-            except Exception as err:
-                _LOGGER.exception(
-                    "GoodWe %s: unexpected error %s.%s → %s: %s (attempt %d/2)",
-                    self.prefix,
-                    domain,
-                    service,
-                    entity_id,
-                    err,
-                    attempt + 1,
-                )
-            if attempt == 0:
-                await asyncio.sleep(_RETRY_DELAY_S)
-        return False
+        lock = self._get_modbus_lock()
+        async with lock:
+            # Rate limit: enforce minimum interval between calls
+            now = time.monotonic()
+            elapsed = now - self._last_call_time
+            if elapsed < _ADAPTER_RATE_LIMIT_S:
+                await asyncio.sleep(_ADAPTER_RATE_LIMIT_S - elapsed)
+
+            for attempt in range(2):
+                try:
+                    await self.hass.services.async_call(domain, service, data)
+                    self._last_call_time = time.monotonic()
+                    # Min delay before next Modbus call
+                    await asyncio.sleep(_MODBUS_MIN_INTERVAL_S)
+                    return True
+                except ServiceNotFound:
+                    _LOGGER.error(
+                        "GoodWe %s: service not found %s.%s → %s",
+                        self.prefix,
+                        domain,
+                        service,
+                        entity_id,
+                    )
+                    return False
+                except HomeAssistantError as err:
+                    _LOGGER.error(
+                        "GoodWe %s: HA error %s.%s → %s: %s (attempt %d/2)",
+                        self.prefix,
+                        domain,
+                        service,
+                        entity_id,
+                        err,
+                        attempt + 1,
+                    )
+                except Exception as err:
+                    _LOGGER.exception(
+                        "GoodWe %s: unexpected error %s.%s → %s: %s (attempt %d/2)",
+                        self.prefix,
+                        domain,
+                        service,
+                        entity_id,
+                        err,
+                        attempt + 1,
+                    )
+                if attempt == 0:
+                    await asyncio.sleep(_RETRY_DELAY_S)
+            self._last_call_time = time.monotonic()
+            return False
 
     # ── Read ──────────────────────────────────────────────────
 

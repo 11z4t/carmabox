@@ -6,31 +6,31 @@ from custom_components.carmabox.core.startup import StartupState
 
 
 def _s(**kw):
-    d = dict(
-        grid_import_w=2500,
-        ellevio_viktat_kw=1.2,
-        pv_power_w=0,
-        battery_soc_1=80,
-        battery_soc_2=80,
-        battery_power_1=0,
-        battery_power_2=0,
-        battery_temp_1=15,
-        battery_temp_2=15,
-        ems_mode_1="discharge_pv",
-        ems_mode_2="discharge_pv",
-        fast_charging_1=False,
-        fast_charging_2=False,
-        ev_soc=60,
-        ev_power_w=0,
-        ev_connected=True,
-        ev_enabled=True,
-        current_price=50,
-        disk_power_w=0,
-        tvatt_power_w=0,
-        miner_power_w=0,
-        hour=23,
-        minute=30,
-    )
+    d = {
+        "grid_import_w": 2500,
+        "ellevio_viktat_kw": 1.2,
+        "pv_power_w": 0,
+        "battery_soc_1": 80,
+        "battery_soc_2": 80,
+        "battery_power_1": 0,
+        "battery_power_2": 0,
+        "battery_temp_1": 15,
+        "battery_temp_2": 15,
+        "ems_mode_1": "discharge_pv",
+        "ems_mode_2": "discharge_pv",
+        "fast_charging_1": False,
+        "fast_charging_2": False,
+        "ev_soc": 60,
+        "ev_power_w": 0,
+        "ev_connected": True,
+        "ev_enabled": True,
+        "current_price": 50,
+        "disk_power_w": 0,
+        "tvatt_power_w": 0,
+        "miner_power_w": 0,
+        "hour": 23,
+        "minute": 30,
+    }
     d.update(kw)
     return SystemState(**d)
 

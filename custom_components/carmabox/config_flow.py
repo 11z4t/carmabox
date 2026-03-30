@@ -288,31 +288,29 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                     vol.Optional("house_size_m2", default=130): vol.All(
                         vol.Coerce(int), vol.Range(min=20, max=500)
                     ),
-                    vol.Optional("heating_type", default="vp"): vol.In(
-                        {k: v for k, v in HEATING_TYPES.items()}
-                    ),
+                    vol.Optional("heating_type", default="vp"): vol.In(dict(HEATING_TYPES.items())),
                     vol.Optional("has_hot_water_heater", default=False): bool,
                     vol.Optional("solar_kwp", default=0.0): vol.All(
                         vol.Coerce(float), vol.Range(min=0, max=50)
                     ),
                     vol.Optional("solar_direction", default="S"): vol.In(
-                        {k: v for k, v in SOLAR_DIRECTIONS.items()}
+                        dict(SOLAR_DIRECTIONS.items())
                     ),
                     vol.Optional("solar_tilt", default=30): vol.All(
                         vol.Coerce(int), vol.Range(min=0, max=90)
                     ),
                     vol.Optional("battery_brand", default=detected_brand): vol.In(
-                        {k: v for k, v in BATTERY_BRANDS.items()}
+                        dict(BATTERY_BRANDS.items())
                     ),
                     vol.Optional("battery_count", default=battery_count): vol.All(
                         vol.Coerce(int), vol.Range(min=1, max=10)
                     ),
                     vol.Optional("postal_code", default=""): str,
                     vol.Optional("contract_type", default="variable"): vol.In(
-                        {k: v for k, v in CONTRACT_TYPES.items()}
+                        dict(CONTRACT_TYPES.items())
                     ),
                     vol.Optional("electricity_retailer", default="other"): vol.In(
-                        {k: v for k, v in ELECTRICITY_RETAILERS.items()}
+                        dict(ELECTRICITY_RETAILERS.items())
                     ),
                 }
             ),
@@ -349,7 +347,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             return await self.async_step_summary()
 
         # Build dynamic schema: enable checkbox + category selector per sensor
-        category_options = {k: v for k, v in APPLIANCE_CATEGORIES.items()}
+        category_options = dict(APPLIANCE_CATEGORIES.items())
         schema_dict: dict[Any, Any] = {}
         for entity_id, info in self._detected_appliances.items():
             # Checkbox to include/exclude

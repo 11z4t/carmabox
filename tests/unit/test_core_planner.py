@@ -127,7 +127,7 @@ class TestColdBattery:
 
 class TestTarget:
     def test_target_never_below_tak_margin(self):
-        """Target = max(calculated, tak × margin)."""
+        """Target = max(calculated, tak x margin)."""
         cfg = PlannerConfig(ellevio_tak_kw=2.0, grid_guard_margin=0.85)
         plan = generate_carma_plan(_input(), cfg)
         # Plan grid values should respect target 1.7 kW
@@ -750,7 +750,7 @@ class TestSolarAllocation:
 
     def test_solar_alloc_low_confidence(self):
         """Low PV confidence (Tempest falling pressure) → no EV despite enough PV."""
-        # High PV: 8kW each hour, load 2kW → surplus 6kW/h × 6h = 36 kWh
+        # High PV: 8kW each hour, load 2kW → surplus 6kW/h x 6h = 36 kWh
         # Battery needs: (100-70)/100 * 20 = 6 kWh
         # Normal: margin = 36 - 6 = 30 kWh → EV YES
         # Low conf 0.4: adjusted PV = 3.2kW → surplus 1.2kW/h = 7.2 kWh

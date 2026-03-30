@@ -151,7 +151,7 @@ class WeatherProfile:
 
     @property
     def coverage_pct(self) -> float:
-        """Percentage of hour×bin slots with sufficient data."""
+        """Percentage of hourxbin slots with sufficient data."""
         filled = sum(1 for row in self.counts for c in row if c >= MIN_SAMPLES_PER_BIN)
         return round(filled / (24 * NUM_BINS) * 100, 1)
 

@@ -7,7 +7,7 @@ PlanAction objects usable by Plan Executor.
 
 Adds:
   - Solar-aware discharge rate (LAG 7)
-  - Correct Ellevio target (never below tak × margin)
+  - Correct Ellevio target (never below tak x margin)
   - Dynamic min_soc based on temperature
   - PV forecast daily totals for sunrise detection
 """
@@ -254,7 +254,7 @@ def calculate_night_reserve_kwh(
 ) -> float:
     """Calculate battery reserve needed for tonight.
 
-    Reserve = (EV_kW + house_kW - grid_max_night) × hours + appliance_margin
+    Reserve = (EV_kW + house_kW - grid_max_night) x hours + appliance_margin
     """
     ev_kw = 230 * ev_phase_count * ev_min_amps / 1000
     bat_per_hour = max(0, ev_kw + house_baseload_kw - grid_max_night_kw)
@@ -279,7 +279,7 @@ def generate_carma_plan(
     """Generate plan and return as PlanAction list.
 
     Applies CARMA Box business logic on top of raw planner:
-    - Target never below Ellevio tak × margin
+    - Target never below Ellevio tak x margin
     - Dynamic min_soc based on temperature
     - Solar-aware discharge rate
     """
@@ -292,7 +292,7 @@ def generate_carma_plan(
         if min_temp < cfg.cold_temp_c:
             min_soc = cfg.battery_min_soc_cold
 
-    # Target: never below Ellevio tak × margin
+    # Target: never below Ellevio tak x margin
     target_kw = cfg.ellevio_tak_kw * cfg.grid_guard_margin
 
     # Solar-aware max discharge rate
@@ -435,7 +435,7 @@ def calculate_ellevio_peak_cost(
     current_avg = sum(top_current) / top_n if top_current else 0.0
 
     # New top-N average with candidate peak inserted
-    all_peaks = sorted_current + [new_peak_kw]
+    all_peaks = [*sorted_current, new_peak_kw]
     sorted_new = sorted(all_peaks, reverse=True)
     top_new = sorted_new[:top_n]
     new_avg = sum(top_new) / top_n

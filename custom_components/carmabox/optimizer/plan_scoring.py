@@ -9,9 +9,10 @@ Provides actionable insights on where plans deviate.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .models import HourActual
+if TYPE_CHECKING:
+    from .models import HourActual
 
 
 @dataclass

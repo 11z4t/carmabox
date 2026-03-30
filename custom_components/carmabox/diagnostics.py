@@ -7,13 +7,15 @@ All entity IDs are anonymized (hashed).
 from __future__ import annotations
 
 import hashlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-
-from .coordinator import CarmaboxCoordinator
 from .optimizer.savings import savings_breakdown
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+
+    from .coordinator import CarmaboxCoordinator
 
 
 def _hash_entity(entity_id: str) -> str:

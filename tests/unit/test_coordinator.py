@@ -585,7 +585,7 @@ class TestDischargeProportional:
         calls = coord.hass.services.async_call.call_args_list
         # Should have 4 calls: ems1, limit1, ems2, limit2
         assert len(calls) == 4
-        # Battery 1: 80%×15kWh=1200, Battery 2: 20%×5kWh=100, total=1300
+        # Battery 1: 80%x15kWh=1200, Battery 2: 20%x5kWh=100, total=1300
         # Battery 1 gets 1200/1300 of 1000 = 923W
         limit1_call = calls[1]
         assert limit1_call[0][2]["value"] == 923
@@ -1582,7 +1582,7 @@ class TestApplianceTracking:
         coord._track_appliances()
         coord._track_appliances()
 
-        # 1000W × (30/3600)h × 2 calls = 16.67 Wh
+        # 1000W x (30/3600)h x 2 calls = 16.67 Wh
         expected = 1000 * (30 / 3600) * 2
         assert abs(coord.appliance_energy_wh["laundry"] - expected) < 0.01
 

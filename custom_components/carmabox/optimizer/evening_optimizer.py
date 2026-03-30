@@ -153,7 +153,7 @@ def evaluate_evening_strategy(
         # PV refills battery for free → saved battery has no tomorrow value
         b_tomorrow_savings = 0.0
     else:
-        # Battery value tomorrow = energy × peak price avoided
+        # Battery value tomorrow = energy x peak price avoided
         b_tomorrow_savings = battery_for_evening * tomorrow_peak_avg / 100  # kr
 
     b_total = (b_evening_cost + ev_night_cost) - b_tomorrow_savings

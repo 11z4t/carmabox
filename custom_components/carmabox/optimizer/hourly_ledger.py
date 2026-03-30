@@ -4,11 +4,11 @@ Tracks ACTUAL energy flows per hour for transparent cost accounting.
 No estimations — only measured values.
 
 Per hour records:
-- Grid import (kWh) × price (öre) = grid cost (kr)
-- Battery discharge (kWh) × price = avoided cost (kr) — NEGATIVE
+- Grid import (kWh) x price (öre) = grid cost (kr)
+- Battery discharge (kWh) x price = avoided cost (kr) — NEGATIVE
 - Battery charge from PV (kWh) = free — no cost
-- Battery charge from grid (kWh) × price = battery charge cost (kr) — POSITIVE
-- EV charge from grid (kWh) × price = EV cost (kr)
+- Battery charge from grid (kWh) x price = battery charge cost (kr) — POSITIVE
+- EV charge from grid (kWh) x price = EV cost (kr)
 - EV charge from PV (kWh) = free
 
 Daily/weekly/monthly totals derived by summing hourly entries.
@@ -256,7 +256,7 @@ class EnergyLedger:
         self._current_hour = hour
         self._current_date = date_str
 
-        # Convert W × seconds → Wh → kWh
+        # Convert W x seconds → Wh → kWh
         wh_factor = interval_s / 3600  # 30s = 0.00833h
 
         # Grid
@@ -503,7 +503,7 @@ class EnergyLedger:
         if not self.entries:
             return {"status": "no_data", "days": 0}
 
-        dates = sorted(set(e.date for e in self.entries))
+        dates = sorted({e.date for e in self.entries})
         recent = dates[-days:] if len(dates) >= days else dates
 
         total_cost = 0.0

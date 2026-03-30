@@ -18,17 +18,14 @@ import logging
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
 
-from .adapters import EVAdapter, InverterAdapter
 from .adapters.easee import EaseeAdapter
 from .adapters.goodwe import GoodWeAdapter
 from .adapters.nordpool import NordpoolAdapter
@@ -69,6 +66,12 @@ from .optimizer.models import (
     ShadowComparison,
 )
 from .optimizer.savings import SavingsState
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+
+    from .adapters import EVAdapter, InverterAdapter
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -14,9 +14,12 @@ Two isolation problems solved here:
 from __future__ import annotations
 
 import sys
-from collections.abc import Generator
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 _CARMABOX_PREFIX = "custom_components.carmabox"
 # Will be populated by pytest_collection_modifyitems after all test imports

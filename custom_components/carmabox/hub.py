@@ -19,10 +19,9 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import aiohttp
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .optimizer.report import (
@@ -31,6 +30,9 @@ from .optimizer.report import (
     report_to_dict,
 )
 from .optimizer.savings import SavingsState, savings_breakdown
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -54,13 +54,13 @@ class TestSeasonReserveMultiplier:
 
 class TestCalculateReserve:
     def test_sunny_tomorrow_zero_reserve(self) -> None:
-        """Sunny day ahead → no reserve needed (summer ×0.5)."""
+        """Sunny day ahead → no reserve needed (summer x0.5)."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 28, 25],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=27.7 → summer (×0.5), surplus>10 → base=0, ×0.5=0
+        # avg=27.7 → summer (x0.5), surplus>10 → base=0, x0.5=0
         assert reserve == 0
 
     def test_cloudy_tomorrow_needs_reserve(self) -> None:
@@ -70,27 +70,27 @@ class TestCalculateReserve:
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=20.7 → summer (×0.5). Base=5, ×0.5=2.5
+        # avg=20.7 → summer (x0.5). Base=5, x0.5=2.5
         assert reserve == 2.5
 
     def test_multiple_cloudy_days_transition(self) -> None:
-        """3 cloudy days in transition season → ×1.0."""
+        """3 cloudy days in transition season → x1.0."""
         reserve = calculate_reserve(
             pv_forecast_daily=[30, 4, 3, 5, 28],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=14 → transition (×1.0). 3 days × 5 kWh = 15
+        # avg=14 → transition (x1.0). 3 days x 5 kWh = 15
         assert reserve == 15
 
     def test_empty_forecast_winter_reserve(self) -> None:
-        """No forecast → winter assumption (×1.5)."""
+        """No forecast → winter assumption (x1.5)."""
         reserve = calculate_reserve(
             pv_forecast_daily=[],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # winter: 2 × 5 × 1.5 = 15
+        # winter: 2 x 5 x 1.5 = 15
         assert reserve == 15
 
     def test_partial_surplus_summer(self) -> None:
@@ -100,27 +100,27 @@ class TestCalculateReserve:
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=25.3 → summer (×0.5). Base: need 5-3=2, ×0.5=1.0
+        # avg=25.3 → summer (x0.5). Base: need 5-3=2, x0.5=1.0
         assert reserve == 1.0
 
     def test_winter_forecast_high_reserve(self) -> None:
-        """Winter (low PV avg) → 1.5× reserve."""
+        """Winter (low PV avg) → 1.5x reserve."""
         reserve = calculate_reserve(
             pv_forecast_daily=[3, 4, 2],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=3.0 → winter (×1.5). Days: 4kWh→5, 2kWh→5. Base=10, ×1.5=15
+        # avg=3.0 → winter (x1.5). Days: 4kWh→5, 2kWh→5. Base=10, x1.5=15
         assert reserve == 15
 
     def test_transition_season_neutral(self) -> None:
-        """Transition (5-15 kWh avg) → ×1.0."""
+        """Transition (5-15 kWh avg) → x1.0."""
         reserve = calculate_reserve(
             pv_forecast_daily=[10, 4, 3, 28],
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # avg=11.25 → transition (×1.0). Days: 4→5, 3→5. Base=10, ×1.0=10
+        # avg=11.25 → transition (x1.0). Days: 4→5, 3→5. Base=10, x1.0=10
         assert reserve == 10
 
 
@@ -179,20 +179,20 @@ class TestCalculateTarget:
             hourly_weights=[0.5] * 14,  # All night
             reserve_kwh=0,
         )
-        # Night: 4kW × 0.5 = 2kW weighted → target should be ~2
+        # Night: 4kW x 0.5 = 2kW weighted → target should be ~2
         assert target < 3.0
 
 
 class TestEdgeCases:
     def test_reserve_7_day_cap(self) -> None:
         """Reserve caps at 7 days horizon, with season multiplier."""
-        # [30]+[2]*10 → avg≈4.5 → winter (×1.5)
+        # [30]+[2]*10 → avg≈4.5 → winter (x1.5)
         reserve = calculate_reserve(
             pv_forecast_daily=[30] + [2] * 10,
             daily_consumption_kwh=15,
             daily_battery_need_kwh=5,
         )
-        # 7 × 5 × 1.5 = 52.5
+        # 7 x 5 x 1.5 = 52.5
         assert reserve == 52.5
 
     def test_target_empty_loads(self) -> None:

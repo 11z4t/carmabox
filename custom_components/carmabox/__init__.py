@@ -12,8 +12,8 @@ import importlib
 import logging
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import (
     EventStateChangedData,
@@ -21,6 +21,9 @@ from homeassistant.helpers.event import (
 )
 
 from .const import DOMAIN, PLATFORMS
+
+if TYPE_CHECKING:
+    from homeassistant.config_entries import ConfigEntry
 
 # IT-2466: Invalidate module cache on reload to pick up hotfixes
 for _mod in [
@@ -30,7 +33,7 @@ for _mod in [
     "custom_components.carmabox.optimizer.predictor",
 ]:
     if _mod in sys.modules:
-        with contextlib.suppress(Exception):  # noqa: BLE001
+        with contextlib.suppress(Exception):
             importlib.reload(sys.modules[_mod])
 
 # NC-12: Feature flag — use bridge (V2) or legacy coordinator
@@ -38,9 +41,9 @@ for _mod in [
 _USE_BRIDGE = True  # Set True to activate bridge, False for legacy
 
 if _USE_BRIDGE:
-    from .coordinator_bridge import CoordinatorBridge as CarmaboxCoordinator  # noqa: E402
+    from .coordinator_bridge import CoordinatorBridge as CarmaboxCoordinator
 else:
-    from .coordinator import CarmaboxCoordinator  # noqa: E402
+    from .coordinator import CarmaboxCoordinator
 
 CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
 CARD_URL = "/carmabox/carmabox-card.js"

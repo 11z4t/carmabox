@@ -339,7 +339,7 @@ class TestSolcastTomorrowHourly:
 
         # Tomorrow's solar hours should show charge actions (pv surplus)
         # Hours 8-16 tomorrow = indices 12-20 in plan (offset by 4 today hours)
-        solar_hours = [p for p in plan[12:21]]
+        solar_hours = list(plan[12:21])
         charge_actions = [p for p in solar_hours if p.action == "c"]
         assert len(charge_actions) > 0, "Planner should charge from PV on sunny hours"
         assert all(p.pv_kw == 3.0 for p in solar_hours), "PV forecast should be 3.0 kW"

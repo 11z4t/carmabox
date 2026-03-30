@@ -7,10 +7,12 @@ Provides temperature, illuminance, and wind data for optimizer decisions.
 from __future__ import annotations
 
 import logging
-
-from homeassistant.core import HomeAssistant
+from typing import TYPE_CHECKING
 
 from . import WeatherAdapter
+
+if TYPE_CHECKING:
+    from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
 

@@ -14,31 +14,31 @@ from custom_components.carmabox.core.law_guardian import (
 
 
 def _state(**kwargs) -> GuardianState:
-    defaults = dict(
-        grid_import_w=1500,
-        grid_viktat_timmedel_kw=1.5,
-        ellevio_tak_kw=2.0,
-        battery_soc_1=50,
-        battery_soc_2=50,
-        battery_power_1=1000,
-        battery_power_2=500,
-        battery_idle_hours=0,
-        ev_soc=80,
-        ev_target_soc=75,
-        ev_departure_hour=6,
-        current_hour=14,
-        current_price=50,
-        pv_power_w=0,
-        export_w=0,
-        ems_mode_1="discharge_pv",
-        ems_mode_2="discharge_pv",
-        fast_charging_1=False,
-        fast_charging_2=False,
-        cell_temp_1=15,
-        cell_temp_2=15,
-        min_soc=15,
-        cold_lock_temp=4,
-    )
+    defaults = {
+        "grid_import_w": 1500,
+        "grid_viktat_timmedel_kw": 1.5,
+        "ellevio_tak_kw": 2.0,
+        "battery_soc_1": 50,
+        "battery_soc_2": 50,
+        "battery_power_1": 1000,
+        "battery_power_2": 500,
+        "battery_idle_hours": 0,
+        "ev_soc": 80,
+        "ev_target_soc": 75,
+        "ev_departure_hour": 6,
+        "current_hour": 14,
+        "current_price": 50,
+        "pv_power_w": 0,
+        "export_w": 0,
+        "ems_mode_1": "discharge_pv",
+        "ems_mode_2": "discharge_pv",
+        "fast_charging_1": False,
+        "fast_charging_2": False,
+        "cell_temp_1": 15,
+        "cell_temp_2": 15,
+        "min_soc": 15,
+        "cold_lock_temp": 4,
+    }
     defaults.update(kwargs)
     return GuardianState(**defaults)
 

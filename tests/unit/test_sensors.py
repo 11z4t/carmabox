@@ -159,7 +159,7 @@ class TestSavingsSensor:
         coord.savings.baseline_peak_samples = [4.0, 4.0, 4.0]
         coord.savings.discharge_savings_kr = 10.0
         sensor = _get_sensor("savings_month", coord, entry)
-        # Peak: (4-2)×80=160, discharge: 10, total: 170
+        # Peak: (4-2)x80=160, discharge: 10, total: 170
         assert sensor.native_value == 170.0
 
     def test_extra_attributes(self) -> None:
@@ -182,7 +182,7 @@ class TestBatterySocSensor:
         assert sensor.native_value == 85
 
     def test_dual_battery_weighted(self) -> None:
-        """Weighted SoC: 80%×15 + 60%×5 = 75%."""
+        """Weighted SoC: 80%x15 + 60%x5 = 75%."""
         state = CarmaboxState(
             battery_soc_1=80,
             battery_soc_2=60,

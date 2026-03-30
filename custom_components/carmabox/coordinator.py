@@ -20,12 +20,18 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from homeassistant.config_entries import ConfigEntry
+    from homeassistant.core import HomeAssistant
+
+    from .adapters import EVAdapter, InverterAdapter, WeatherAdapter
     from .core.grid_guard import GridGuardResult
+    from .optimizer.models import SchedulerHourSlot
+    from .optimizer.multiday_planner import MultiDayPlan
 
 import contextlib
 
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
@@ -33,7 +39,6 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 
-from .adapters import EVAdapter, InverterAdapter, WeatherAdapter
 from .adapters.easee import EaseeAdapter
 from .adapters.goodwe import GoodWeAdapter
 from .adapters.nordpool import NordpoolAdapter
@@ -460,7 +465,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._miner_on: bool = False
         # Opt #5: Flat line controller — rolling grid average
         self._grid_samples: list[float] = []
-        self._grid_sample_max = 10  # 10 × 30s = 5 min rolling window
+        self._grid_sample_max = 10  # 10 x 30s = 5 min rolling window
         self._ev_last_full_charge_date: str = ""
         self._ev_tonight_soc: float = -1.0
         self._estimated_house_base_kw: float = 2.0
@@ -905,8 +910,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             hyst = getattr(self, "_surplus_hysteresis", None)
             if hyst is not None:
                 data["surplus_hysteresis"] = {
-                    "above": {k: v for k, v in hyst.surplus_above_since.items()},
-                    "below": {k: v for k, v in hyst.surplus_below_since.items()},
+                    "above": dict(hyst.surplus_above_since.items()),
+                    "below": dict(hyst.surplus_below_since.items()),
                 }
             await self._runtime_store.async_save(data)
         except Exception:
@@ -1664,8 +1669,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
     @property
-    def slots(self):
-        """Convert HourPlan → SchedulerHourSlot-compatible for sensor.py."""
+    def slots(self) -> list[SchedulerHourSlot]:
+        """Convert HourPlan -> SchedulerHourSlot-compatible for sensor.py."""
         from .optimizer.models import SchedulerHourSlot
 
         return [
@@ -1911,7 +1916,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _LOGGER.warning("CARMA Box: degraded mode — using last known state")
             return getattr(self, "data", None) or CarmaboxState()
 
-    def _safe_call(self, method_name: str, fn, *args, **kwargs) -> None:
+    def _safe_call(
+        self, method_name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> None:
         """IT-2465: Call a non-critical method with isolation.
 
         If the method raises, disable it for 5 minutes instead of
@@ -2329,12 +2336,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 # Fallback: clock + PV based (original Opt #6)
                 if hour_now >= DEFAULT_NIGHT_START or hour_now < DEFAULT_NIGHT_END:
                     target_cap = target_night
-                elif (
-                    pv_kw > 0.5
-                    and hour_now >= 7
-                    and hour_now < 20
-                    or hour_now >= 17
-                    and state.current_price > 50
+                elif (pv_kw > 0.5 and hour_now >= 7 and hour_now < 20) or (
+                    hour_now >= 17 and state.current_price > 50
                 ):
                     target_cap = target_day
                 elif hour_now >= 20:
@@ -2515,7 +2518,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.exception("Plan generation failed — keeping old plan")
 
-    def _write_plan_to_sensor(self, multiday, start_hour: int) -> None:
+    def _write_plan_to_sensor(self, multiday: MultiDayPlan, start_hour: int) -> None:
         """Write multi-day plan to input_text.v6_battery_plan (AC4, PLAT-969).
 
         Compact JSON format optimized for 4096-char limit:
@@ -3824,7 +3827,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if self._last_known_ev_soc > 0:
                 ev_soc = max(0, self._last_known_ev_soc * (1 - derating / 100))
                 _LOGGER.debug(
-                    "CARMA EV: using last_known %.0f%% × %.0f%% = %.0f%%",
+                    "CARMA EV: using last_known %.0f%% x %.0f%% = %.0f%%",
                     self._last_known_ev_soc,
                     100 - derating,
                     ev_soc,
@@ -3838,7 +3841,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Track full charge for weekly full-charge logic
             if ev_soc >= 99:
                 self._ev_last_full_charge_date = datetime.now().strftime("%Y-%m-%d")
-            # Continuous EV plan: estimate tonight SoC = current × (1 - derating/100)
+            # Continuous EV plan: estimate tonight SoC = current x (1 - derating/100)
             ev_derating_pct = float(self._cfg.get("ev_soc_derating", 10.0))
             self._ev_tonight_soc = max(0, ev_soc * (1 - ev_derating_pct / 100))
             ev_capacity = float(self._cfg.get("ev_capacity_kwh", 87.5))
@@ -4604,7 +4607,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # ── Recommendations (only >90% confidence) ────────────────
         recommendations: list[dict[str, Any]] = []
 
-        # R1: If max > 2× target → high confidence suggestion
+        # R1: If max > 2x target → high confidence suggestion
         if ellevio_max > self.target_kw * 2:
             recommendations.append(
                 {
@@ -4635,7 +4638,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 }
             )
 
-        # R3: If most expensive hour > 2× cheapest → shift consumption
+        # R3: If most expensive hour > 2x cheapest → shift consumption
         if most_expensive and cheapest:
             price_ratio = most_expensive["price_ore"] / max(1, cheapest["price_ore"])
             if price_ratio > 2:
@@ -4986,7 +4989,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 power_w = 0.0
 
             category_power[category] = category_power.get(category, 0.0) + power_w
-            # Accumulate energy (Wh) = power_w × interval_hours
+            # Accumulate energy (Wh) = power_w x interval_hours
             self.appliance_energy_wh[category] = (
                 self.appliance_energy_wh.get(category, 0.0) + power_w * interval_h
             )
@@ -5041,7 +5044,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         n = len(self._meter_state.samples)
         current_avg = sum(self._meter_state.samples) / n
         # K3: Clamp remaining to avoid negative/zero when n > 120
-        expected_total = 120  # 30s intervals × 60 min
+        expected_total = 120  # 30s intervals x 60 min
         remaining = max(1, expected_total - min(n, expected_total))
         recent = self._meter_state.samples[-5:] if n >= 5 else self._meter_state.samples
         recent_avg = sum(recent) / len(recent)
@@ -5272,7 +5275,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Rough: each 30s sample contributes 1/120 of an hour
         # If CARMA has lower weighted kW → it would reduce the peak → saves money
         delta_weighted = actual_weighted - carma_weighted  # Positive = CARMA is better
-        # Annual cost impact (very rough): delta × peak_cost / samples_per_hour
+        # Annual cost impact (very rough): delta x peak_cost / samples_per_hour
         carma_better_kr = delta_weighted * peak_cost / 120 if delta_weighted > 0.01 else 0.0
 
         # Also price optimization: if CARMA says "don't discharge" at cheap price but v6 does
@@ -5567,7 +5570,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
             )
 
-    def _feed_predictor_ml(self, state) -> None:
+    def _feed_predictor_ml(self, state: CarmaboxState) -> None:
         """Feed all ML data to predictor every cycle."""
         from datetime import datetime
 
@@ -5620,7 +5623,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         elif hour == 0:
             self._ev_usage_tracked_today = False
 
-    def _check_daily_goals(self, state) -> dict:
+    def _check_daily_goals(self, state: CarmaboxState) -> dict:
         """Check daily goals and generate root cause if breached.
 
         Goals:
@@ -6454,7 +6457,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._async_save_runtime()
         else:
             # Legacy: raw entity-based control
-            # Energy-proportional split (SoC × capacity)
+            # Energy-proportional split (SoC x capacity)
             opts = self._cfg
             cap1 = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
             cap2 = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
