@@ -1122,6 +1122,67 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         elif cmd.ev_action == "stop" and self._ev_enabled:
             await self._cmd_ev_stop()
 
+        # ── PV Solar Allocation — EV from surplus if battery can still fill ──
+        if (
+            not is_night
+            and not self._night_ev_active
+            and ev_connected
+            and state.pv_power_w > 500
+            and state.total_battery_soc < 99
+        ):
+            try:
+                from .core.planner import plan_solar_allocation
+
+                # Get Solcast hourly forecast
+                solcast_today = self.hass.states.get("sensor.solcast_pv_forecast_forecast_today")
+                hourly_pv: list[float] = []
+                if solcast_today:
+                    detail = solcast_today.attributes.get("detailedForecast", [])
+                    # Each entry is 30min → pair into hourly
+                    for j in range(0, len(detail), 2):
+                        kw = detail[j].get("pv_estimate", 0) if isinstance(detail[j], dict) else 0
+                        hourly_pv.append(float(kw))
+
+                if len(hourly_pv) > hour:
+                    hourly_pv = hourly_pv[hour:]  # From current hour
+
+                hourly_load = [2.5] * len(hourly_pv)  # Baseload estimate
+                ev_phase = int(opts.get("ev_phase_count", 3))
+
+                alloc = plan_solar_allocation(
+                    battery_soc_pct=state.total_battery_soc,
+                    battery_cap_kwh=float(opts.get("battery_1_kwh", 15))
+                    + float(opts.get("battery_2_kwh", 5)),
+                    ev_soc_pct=float(ev_soc) if ev_soc >= 0 else 100,
+                    ev_target_pct=float(opts.get("ev_target_soc", 75)),
+                    ev_cap_kwh=float(opts.get("ev_capacity_kwh", 92)),
+                    hourly_pv_kw=hourly_pv,
+                    hourly_consumption_kw=hourly_load,
+                    current_hour=hour,
+                    ev_phase_count=ev_phase,
+                )
+
+                if alloc.ev_can_charge and alloc.ev_recommended_amps > 0:
+                    if not self._ev_enabled:
+                        _LOGGER.info(
+                            "SOLAR-EV: PV surplus → start EV %dA " "(margin %.1f kWh, bat %.0f%%)",
+                            alloc.ev_recommended_amps,
+                            alloc.surplus_after_battery_kwh,
+                            state.total_battery_soc,
+                        )
+                        await self._cmd_ev_start(alloc.ev_recommended_amps)
+                    elif alloc.ev_recommended_amps != self._ev_current_amps:
+                        await self._cmd_ev_adjust(alloc.ev_recommended_amps)
+                elif self._ev_enabled and not self._night_ev_active:
+                    # No margin → stop solar EV
+                    _LOGGER.info(
+                        "SOLAR-EV: Margin gone → stop EV " "(%.1f kWh surplus)",
+                        alloc.surplus_after_battery_kwh,
+                    )
+                    await self._cmd_ev_stop()
+            except Exception:
+                _LOGGER.debug("SOLAR-EV: allocation failed", exc_info=True)
+
         # ── Surplus chain — ALWAYS runs ──────────────────────────
         if not hasattr(self, "_surplus_hysteresis"):
             from .core.surplus_chain import HysteresisState

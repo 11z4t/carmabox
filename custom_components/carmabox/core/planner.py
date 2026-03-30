@@ -68,15 +68,17 @@ def plan_solar_allocation(
 
     Returns SolarAllocationResult with recommendation and reasoning.
     """
-    # Edge case: EV already at or above target
-    if ev_soc_pct >= ev_target_pct:
+    # EV at 100% → nothing to charge
+    if ev_soc_pct >= 100:
         return SolarAllocationResult(
             ev_can_charge=False,
             ev_recommended_amps=0,
             battery_hours_to_full=0.0,
             surplus_after_battery_kwh=0.0,
-            reason=f"EV already at {ev_soc_pct:.0f}% >= target {ev_target_pct:.0f}%",
+            reason="EV already at 100%",
         )
+    # Note: we do NOT skip when ev_soc >= target. Target is for NIGHT charging.
+    # During daytime, free solar kWh to EV is ALWAYS better than export.
 
     # Hours of sun remaining
     hours_left = max(0, sunset_hour - current_hour)

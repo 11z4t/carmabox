@@ -622,8 +622,9 @@ class TestSolarAllocation:
         assert result.ev_recommended_amps == 0
         assert "No solar hours" in result.reason
 
-    def test_solar_alloc_ev_at_target(self):
-        """EV already at 80% >= target 75% → ev_can_charge=False."""
+    def test_solar_alloc_ev_above_target_still_charges(self):
+        """EV at 80% > target 75% but solar is FREE → still charges if margin."""
+        # Daytime solar charging ignores target — free kWh always good
         result = plan_solar_allocation(
             battery_soc_pct=50.0,
             battery_cap_kwh=20.0,
@@ -635,9 +636,23 @@ class TestSolarAllocation:
             current_hour=14,
             sunset_hour=19,
         )
+        assert result.ev_can_charge is True  # Free solar → always charge
+        assert result.ev_recommended_amps >= 6
+
+    def test_solar_alloc_ev_at_100_no_charge(self):
+        """EV at 100% → nothing to charge."""
+        result = plan_solar_allocation(
+            battery_soc_pct=50.0,
+            battery_cap_kwh=20.0,
+            ev_soc_pct=100.0,
+            ev_target_pct=75.0,
+            ev_cap_kwh=92.0,
+            hourly_pv_kw=[8.0, 8.0, 8.0, 8.0],
+            hourly_consumption_kw=[2.0, 2.0, 2.0, 2.0],
+            current_hour=14,
+            sunset_hour=19,
+        )
         assert result.ev_can_charge is False
-        assert result.ev_recommended_amps == 0
-        assert "already at" in result.reason
 
     def test_solar_alloc_battery_full(self):
         """Battery at 100% → all surplus to EV."""
