@@ -783,3 +783,228 @@ class TestSolarAllocation:
         )
         assert result_normal.ev_can_charge is True  # Normal: enough margin
         assert result_low.ev_can_charge is False  # Low confidence: margin gone
+
+
+class TestShouldDischargeNow:
+    """Price-driven discharge decisions — don't waste cheap hours."""
+
+    def test_should_discharge_expensive_now(self):
+        """Current price 80 ore, upcoming avg ~50 → discharge."""
+        from custom_components.carmabox.core.planner import should_discharge_now
+
+        # Upcoming: mix of cheap and expensive, top 25% avg ~ 80
+        upcoming = [30, 40, 50, 60, 70, 80, 90, 100]
+        r = should_discharge_now(
+            current_price_ore=80.0,
+            upcoming_prices_ore=upcoming,
+            battery_soc_pct=70.0,
+        )
+        assert r["discharge"] is True
+        assert r["recommended_kw"] > 0
+        assert r["current_price"] == 80.0
+        assert r["avg_expensive"] > 0
+
+    def test_should_discharge_cheap_now(self):
+        """Current price 5 ore, upcoming has 80 → DON'T discharge (save for later)."""
+        from custom_components.carmabox.core.planner import should_discharge_now
+
+        upcoming = [10, 20, 30, 40, 50, 60, 70, 80]
+        r = should_discharge_now(
+            current_price_ore=5.0,
+            upcoming_prices_ore=upcoming,
+            battery_soc_pct=70.0,
+        )
+        assert r["discharge"] is False
+        assert r["recommended_kw"] == 0.0
+        assert "save battery" in r["reason"].lower()
+
+    def test_should_discharge_low_battery(self):
+        """Price 80 but SoC 20% → DON'T discharge (preserve reserve)."""
+        from custom_components.carmabox.core.planner import should_discharge_now
+
+        upcoming = [30, 40, 50, 60, 70, 80, 90, 100]
+        r = should_discharge_now(
+            current_price_ore=80.0,
+            upcoming_prices_ore=upcoming,
+            battery_soc_pct=20.0,
+        )
+        assert r["discharge"] is False
+        assert r["recommended_kw"] == 0.0
+        assert "too low" in r["reason"].lower() or "reserve" in r["reason"].lower()
+
+    def test_should_discharge_no_upcoming(self):
+        """No upcoming prices → don't discharge."""
+        from custom_components.carmabox.core.planner import should_discharge_now
+
+        r = should_discharge_now(
+            current_price_ore=80.0,
+            upcoming_prices_ore=[],
+            battery_soc_pct=70.0,
+        )
+        assert r["discharge"] is False
+
+    def test_should_discharge_at_min_soc(self):
+        """Battery exactly at min_soc → don't discharge."""
+        from custom_components.carmabox.core.planner import should_discharge_now
+
+        r = should_discharge_now(
+            current_price_ore=80.0,
+            upcoming_prices_ore=[30, 40, 50, 60],
+            battery_soc_pct=15.0,
+            min_soc=15.0,
+        )
+        assert r["discharge"] is False
+
+
+class TestOptimalDischargeHours:
+    """Find most profitable discharge hours based on price spread."""
+
+    def test_optimal_discharge_hours_sorted(self):
+        """Finds most profitable hours first."""
+        from custom_components.carmabox.core.planner import optimal_discharge_hours
+
+        # Prices: cheap at start, expensive in middle
+        prices = [10, 15, 20, 80, 90, 100, 50, 30, 20, 10]
+        result = optimal_discharge_hours(
+            prices_ore=prices,
+            start_hour=0,
+            battery_kwh_available=20.0,
+            max_discharge_kw=5.0,
+            min_profitable_spread_ore=20.0,
+        )
+        assert len(result) > 0
+        # Most profitable first (highest savings)
+        for i in range(len(result) - 1):
+            assert result[i]["savings_ore"] >= result[i + 1]["savings_ore"]
+        # Hour 5 (100 ore) should be first — highest spread
+        assert result[0]["price"] == 100
+
+    def test_optimal_discharge_min_spread(self):
+        """Filters hours below min spread."""
+        from custom_components.carmabox.core.planner import optimal_discharge_hours
+
+        # All prices close together — spread < 20
+        prices = [40, 42, 45, 48, 50, 52, 55]
+        result = optimal_discharge_hours(
+            prices_ore=prices,
+            start_hour=0,
+            battery_kwh_available=20.0,
+            max_discharge_kw=5.0,
+            min_profitable_spread_ore=20.0,
+        )
+        # Max spread = 55 - 40 = 15 < 20 → no hours qualify
+        assert len(result) == 0
+
+    def test_optimal_discharge_limited_by_battery(self):
+        """Battery energy limits total discharge hours."""
+        from custom_components.carmabox.core.planner import optimal_discharge_hours
+
+        prices = [10, 80, 90, 100, 70, 60]
+        result = optimal_discharge_hours(
+            prices_ore=prices,
+            start_hour=0,
+            battery_kwh_available=5.0,  # Only 5 kWh — enough for ~1 hour
+            max_discharge_kw=5.0,
+            min_profitable_spread_ore=20.0,
+        )
+        # Should get at most 1 full hour at 5kW
+        total_kw = sum(h["discharge_kw"] for h in result)
+        assert total_kw <= 5.0
+
+    def test_optimal_discharge_empty_prices(self):
+        """Empty price list → empty result."""
+        from custom_components.carmabox.core.planner import optimal_discharge_hours
+
+        result = optimal_discharge_hours(
+            prices_ore=[],
+            start_hour=0,
+            battery_kwh_available=20.0,
+        )
+        assert result == []
+
+    def test_optimal_discharge_hour_wrapping(self):
+        """Start hour 22 → hours wrap past midnight."""
+        from custom_components.carmabox.core.planner import optimal_discharge_hours
+
+        prices = [10, 10, 10, 80, 90]  # Hours 22,23,0,1,2
+        result = optimal_discharge_hours(
+            prices_ore=prices,
+            start_hour=22,
+            battery_kwh_available=20.0,
+            max_discharge_kw=5.0,
+            min_profitable_spread_ore=20.0,
+        )
+        assert len(result) > 0
+        # Hour indices should wrap: 22+3=1, 22+4=2
+        hours = [h["hour"] for h in result]
+        assert all(0 <= h <= 23 for h in hours)
+
+
+class TestShouldChargeEvTonight:
+    """EV charge timing — tonight vs tomorrow vs free PV."""
+
+    def test_ev_tonight_cheap(self):
+        """Tonight 10 ore, tomorrow 80 ore -> charge tonight (>20% cheaper)."""
+        from custom_components.carmabox.core.planner import should_charge_ev_tonight
+
+        r = should_charge_ev_tonight(
+            ev_soc_pct=50.0,
+            ev_target_pct=80.0,
+            ev_cap_kwh=92.0,
+            tonight_prices_ore=[10.0] * 8,
+            tomorrow_night_prices_ore=[80.0] * 8,
+            pv_tomorrow_kwh=10.0,  # Not enough PV
+        )
+        assert r["charge"] is True
+        assert r["tonight_cost_kr"] < r["tomorrow_cost_kr"]
+        assert r["pv_covers"] is False
+
+    def test_ev_tonight_expensive(self):
+        """Tonight 80 ore, tomorrow 10 ore -> wait (tomorrow cheaper)."""
+        from custom_components.carmabox.core.planner import should_charge_ev_tonight
+
+        r = should_charge_ev_tonight(
+            ev_soc_pct=50.0,
+            ev_target_pct=80.0,
+            ev_cap_kwh=92.0,
+            tonight_prices_ore=[80.0] * 8,
+            tomorrow_night_prices_ore=[10.0] * 8,
+            pv_tomorrow_kwh=10.0,  # Not enough PV
+        )
+        assert r["charge"] is False
+        assert r["tonight_cost_kr"] > r["tomorrow_cost_kr"]
+
+    def test_ev_tonight_pv_covers(self):
+        """46 kWh PV tomorrow -> wait for free solar."""
+        from custom_components.carmabox.core.planner import should_charge_ev_tonight
+
+        # EV need = (80-50)/100 * 92 = 27.6 kWh
+        # PV coverage threshold = 27.6 + 15 = 42.6 kWh
+        # 46 > 42.6 -> PV covers
+        r = should_charge_ev_tonight(
+            ev_soc_pct=50.0,
+            ev_target_pct=80.0,
+            ev_cap_kwh=92.0,
+            tonight_prices_ore=[20.0] * 8,
+            tomorrow_night_prices_ore=[20.0] * 8,
+            pv_tomorrow_kwh=46.0,
+        )
+        assert r["charge"] is False
+        assert r["pv_covers"] is True
+        assert "free solar" in r["reason"]
+
+    def test_ev_tonight_near_target(self):
+        """EV 74%, target 75% -> small charge (1% of 92 kWh = 0.92 kWh)."""
+        from custom_components.carmabox.core.planner import should_charge_ev_tonight
+
+        r = should_charge_ev_tonight(
+            ev_soc_pct=74.0,
+            ev_target_pct=75.0,
+            ev_cap_kwh=92.0,
+            tonight_prices_ore=[10.0] * 8,
+            tomorrow_night_prices_ore=[80.0] * 8,
+            pv_tomorrow_kwh=5.0,
+        )
+        assert r["charge"] is True
+        assert r["ev_need_kwh"] == 0.92
+        assert r["hours_needed"] == 1  # ceil(0.92 / 4.14) = 1

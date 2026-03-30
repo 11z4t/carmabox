@@ -1153,6 +1153,51 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if not hasattr(self, "_night_ev_active"):
             self._night_ev_active = False
+
+        # ── Price-aware discharge: should we discharge NOW? ──
+        try:
+            from .core.planner import should_discharge_now
+
+            nordpool = self.hass.states.get(
+                opts.get("price_entity", "sensor.nordpool_kwh_se3_sek_3_10_025")
+            )
+            if nordpool:
+                today_prices = nordpool.attributes.get("today", [])
+                tomorrow_prices = nordpool.attributes.get("tomorrow", [])
+                upcoming = [float(p) for p in (today_prices[hour:] + tomorrow_prices) if p][:24]
+                current_price = (
+                    float(nordpool.state)
+                    if nordpool.state not in ["unknown", "unavailable"]
+                    else 50.0
+                )
+
+                discharge_decision = should_discharge_now(
+                    current_price_ore=current_price,
+                    upcoming_prices_ore=upcoming,
+                    battery_soc_pct=state.total_battery_soc,
+                )
+                if discharge_decision.get("discharge") and not self._night_ev_active:
+                    _LOGGER.info(
+                        "PRICE-DISCHARGE: %s (%.0f öre, avg_exp %.0f)",
+                        discharge_decision.get("reason", "")[:60],
+                        current_price,
+                        discharge_decision.get("avg_expensive", 0),
+                    )
+                    # Set discharge via EMS
+                    discharge_decision.get("recommended_kw", 2.0)
+                    for adapter in self.inverter_adapters:
+                        await adapter.set_ems_mode("discharge_pv")
+                    self._price_discharge_active = True
+                elif getattr(self, "_price_discharge_active", False) and not discharge_decision.get(
+                    "discharge"
+                ):
+                    _LOGGER.info("PRICE-DISCHARGE: Stopped — price no longer profitable")
+                    for adapter in self.inverter_adapters:
+                        await adapter.set_ems_mode("charge_pv")
+                    self._price_discharge_active = False
+        except Exception:
+            _LOGGER.debug("Price-discharge check failed", exc_info=True)
+
         if is_night and ev_connected and 0 <= ev_soc < ev_target and not self._night_ev_active:
             # EV needs charging — start with battery support
             ev_kw = 230 * ev_phase * DEFAULT_EV_MIN_AMPS / 1000  # Min 6A

@@ -610,6 +610,139 @@ def pressure_pv_adjustment(
     }
 
 
+def should_discharge_now(
+    current_price_ore: float,
+    upcoming_prices_ore: list[float],
+    battery_soc_pct: float,
+    min_soc: float = 15.0,
+    discharge_threshold_factor: float = 0.7,
+) -> dict:
+    """Decide if battery should discharge NOW based on price comparison.
+
+    Logic:
+    1. Find the AVERAGE of the top 25% most expensive upcoming hours
+    2. If current price >= expensive_avg x threshold -> discharge (it's expensive NOW)
+    3. If current price < cheapest upcoming hours -> DON'T discharge (save for later)
+    4. If battery < 30% -> don't discharge regardless
+
+    Returns:
+        dict with discharge, recommended_kw, reason, current_price,
+        avg_expensive, cheapest_upcoming.
+    """
+    result = {
+        "discharge": False,
+        "recommended_kw": 0.0,
+        "reason": "",
+        "current_price": current_price_ore,
+        "avg_expensive": 0.0,
+        "cheapest_upcoming": 0.0,
+    }
+
+    # Guard: low battery
+    if battery_soc_pct < 30.0:
+        result["reason"] = f"Battery too low ({battery_soc_pct:.0f}% < 30%) — preserving reserve"
+        return result
+
+    # Guard: no upcoming prices
+    if not upcoming_prices_ore:
+        result["reason"] = "No upcoming price data available"
+        return result
+
+    # Guard: below min_soc
+    if battery_soc_pct <= min_soc:
+        result["reason"] = f"Battery at min SoC ({battery_soc_pct:.0f}% <= {min_soc:.0f}%)"
+        return result
+
+    # Calculate top 25% expensive average
+    sorted_prices = sorted(upcoming_prices_ore, reverse=True)
+    top_count = max(1, len(sorted_prices) // 4)
+    top_expensive = sorted_prices[:top_count]
+    avg_expensive = sum(top_expensive) / len(top_expensive)
+    result["avg_expensive"] = round(avg_expensive, 2)
+
+    # Cheapest upcoming
+    cheapest = min(upcoming_prices_ore)
+    result["cheapest_upcoming"] = cheapest
+
+    # Decision: is current price expensive enough to discharge?
+    threshold = avg_expensive * discharge_threshold_factor
+    if current_price_ore >= threshold:
+        # Scale discharge rate based on how expensive current price is
+        # relative to the expensive average
+        ratio = min(current_price_ore / max(1, avg_expensive), 1.5)
+        recommended_kw = round(min(5.0, max(0.5, ratio * 3.0)), 1)
+        result["discharge"] = True
+        result["recommended_kw"] = recommended_kw
+        result["reason"] = (
+            f"Price {current_price_ore:.0f} ore >= threshold "
+            f"{threshold:.0f} ore (top25% avg {avg_expensive:.0f} x "
+            f"{discharge_threshold_factor}) — discharge at {recommended_kw} kW"
+        )
+    else:
+        result["reason"] = (
+            f"Price {current_price_ore:.0f} ore < threshold "
+            f"{threshold:.0f} ore — save battery for expensive hours "
+            f"(top25% avg {avg_expensive:.0f} ore)"
+        )
+
+    return result
+
+
+def optimal_discharge_hours(
+    prices_ore: list[float],
+    start_hour: int,
+    battery_kwh_available: float,
+    max_discharge_kw: float = 5.0,
+    house_load_kw: float = 2.5,
+    min_profitable_spread_ore: float = 20.0,
+) -> list[dict]:
+    """Find the best hours to discharge battery for maximum savings.
+
+    Returns list of {hour, price, discharge_kw, savings_ore} sorted by
+    profitability. Only includes hours where price spread vs cheapest
+    exceeds min_profitable_spread.
+    """
+    if not prices_ore or battery_kwh_available <= 0:
+        return []
+
+    cheapest_price = min(prices_ore)
+    candidates = []
+
+    for i, price in enumerate(prices_ore):
+        spread = price - cheapest_price
+        if spread >= min_profitable_spread_ore:
+            hour = (start_hour + i) % 24
+            # Discharge covers house load (offset grid import)
+            discharge_kw = min(max_discharge_kw, house_load_kw + max_discharge_kw * 0.5)
+            discharge_kw = min(discharge_kw, max_discharge_kw)
+            savings_ore = spread * discharge_kw  # ore saved per hour
+            candidates.append(
+                {
+                    "hour": hour,
+                    "price": price,
+                    "discharge_kw": round(discharge_kw, 1),
+                    "savings_ore": round(savings_ore, 1),
+                }
+            )
+
+    # Sort by savings (most profitable first)
+    candidates.sort(key=lambda x: x["savings_ore"], reverse=True)
+
+    # Limit by available battery energy (each hour = discharge_kw * 1h)
+    result = []
+    remaining_kwh = battery_kwh_available
+    for c in candidates:
+        if remaining_kwh <= 0:
+            break
+        actual_kw = min(c["discharge_kw"], remaining_kwh)
+        c["discharge_kw"] = round(actual_kw, 1)
+        c["savings_ore"] = round((c["price"] - cheapest_price) * actual_kw, 1)
+        remaining_kwh -= actual_kw
+        result.append(c)
+
+    return result
+
+
 def should_grid_charge_winter(
     pv_forecast_kwh: float,
     daily_consumption_kwh: float = 15.0,
@@ -660,4 +793,119 @@ def should_grid_charge_winter(
             f"consumption {daily_consumption_kwh:.1f} kWh, "
             f"price {current_price_ore:.0f} öre < {price_threshold_ore:.0f} öre"
         ),
+    }
+
+
+def should_charge_ev_tonight(
+    ev_soc_pct: float,
+    ev_target_pct: float,
+    ev_cap_kwh: float,
+    tonight_prices_ore: list[float],  # 8 prices for kl 22-06
+    tomorrow_night_prices_ore: list[float],  # 8 prices for tomorrow 22-06 (may be empty)
+    pv_tomorrow_kwh: float,  # PV forecast tomorrow
+    ev_charge_kw: float = 4.14,  # 6A 3-phase
+) -> dict:
+    """Decide: charge EV tonight or wait for cheaper/free opportunity.
+
+    Compares three options:
+    A) Charge tonight at tonight's cheapest hours
+    B) Wait and charge tomorrow night at tomorrow's prices
+    C) Wait and charge from PV tomorrow (free!)
+
+    Logic:
+    - If EV already at target: no charge
+    - If PV tomorrow covers EV need + house + battery: wait (free!)
+    - If tonight < tomorrow * 0.8: charge tonight (20% cheaper)
+    - Otherwise: wait for better opportunity
+    """
+    ev_need_kwh = (ev_target_pct - ev_soc_pct) / 100.0 * ev_cap_kwh
+
+    # Already at or above target
+    if ev_need_kwh <= 0:
+        return {
+            "charge": False,
+            "reason": "EV already at or above target",
+            "ev_need_kwh": 0.0,
+            "hours_needed": 0,
+            "tonight_cost_kr": 0.0,
+            "tomorrow_cost_kr": 0.0,
+            "pv_covers": False,
+        }
+
+    hours_needed = math.ceil(ev_need_kwh / ev_charge_kw)
+
+    # Tonight cost: cheapest N hours
+    tonight_sorted = sorted(tonight_prices_ore)
+    tonight_hours = tonight_sorted[: min(hours_needed, len(tonight_sorted))]
+    tonight_cost_kr = sum(tonight_hours) * ev_charge_kw / 100.0
+
+    # Tomorrow night cost (if available)
+    if tomorrow_night_prices_ore:
+        tomorrow_sorted = sorted(tomorrow_night_prices_ore)
+        tomorrow_hours = tomorrow_sorted[: min(hours_needed, len(tomorrow_sorted))]
+        tomorrow_cost_kr = sum(tomorrow_hours) * ev_charge_kw / 100.0
+    else:
+        tomorrow_cost_kr = 0.0
+
+    # PV coverage: tomorrow_kwh > ev_need + 15 (house + battery headroom)
+    pv_covers = pv_tomorrow_kwh > ev_need_kwh + 15.0
+
+    # Decision logic
+    # Option C: PV covers everything -- wait for free solar
+    if pv_covers:
+        return {
+            "charge": False,
+            "reason": (
+                f"PV tomorrow {pv_tomorrow_kwh:.1f} kWh covers "
+                f"EV need {ev_need_kwh:.1f} kWh + 15 kWh headroom — wait for free solar"
+            ),
+            "ev_need_kwh": round(ev_need_kwh, 2),
+            "hours_needed": hours_needed,
+            "tonight_cost_kr": round(tonight_cost_kr, 2),
+            "tomorrow_cost_kr": round(tomorrow_cost_kr, 2),
+            "pv_covers": True,
+        }
+
+    # Option A vs B: compare tonight vs tomorrow night prices
+    if tomorrow_night_prices_ore and tomorrow_cost_kr > 0:
+        if tonight_cost_kr < tomorrow_cost_kr * 0.8:
+            # Tonight is 20%+ cheaper -- charge now
+            return {
+                "charge": True,
+                "reason": (
+                    f"Tonight {tonight_cost_kr:.2f} kr < tomorrow "
+                    f"{tomorrow_cost_kr:.2f} kr x 0.8 — charge tonight"
+                ),
+                "ev_need_kwh": round(ev_need_kwh, 2),
+                "hours_needed": hours_needed,
+                "tonight_cost_kr": round(tonight_cost_kr, 2),
+                "tomorrow_cost_kr": round(tomorrow_cost_kr, 2),
+                "pv_covers": False,
+            }
+        else:
+            # Tomorrow is same or cheaper -- wait
+            return {
+                "charge": False,
+                "reason": (
+                    f"Tomorrow night {tomorrow_cost_kr:.2f} kr not much more "
+                    f"than tonight {tonight_cost_kr:.2f} kr — wait for better opportunity"
+                ),
+                "ev_need_kwh": round(ev_need_kwh, 2),
+                "hours_needed": hours_needed,
+                "tonight_cost_kr": round(tonight_cost_kr, 2),
+                "tomorrow_cost_kr": round(tomorrow_cost_kr, 2),
+                "pv_covers": False,
+            }
+
+    # No tomorrow prices available -- charge tonight as default
+    return {
+        "charge": True,
+        "reason": (
+            f"No tomorrow prices available — charge tonight at " f"{tonight_cost_kr:.2f} kr"
+        ),
+        "ev_need_kwh": round(ev_need_kwh, 2),
+        "hours_needed": hours_needed,
+        "tonight_cost_kr": round(tonight_cost_kr, 2),
+        "tomorrow_cost_kr": 0.0,
+        "pv_covers": False,
     }
