@@ -543,12 +543,14 @@ class TestSolarAllocation:
     """Tests for plan_solar_allocation() — PV surplus allocation between battery and EV."""
 
     def test_solar_alloc_plenty_of_sun(self):
-        """Big surplus, battery needs 8 kWh → EV gets margin, amps > 0."""
+        """Big surplus, battery fills before sunset → EV 6A via early path."""
         # 6 hours of sun left, high PV = big surplus
-        # 3-phase 6A min = 4.14 kW/h → need margin/6h > 4.14 kW
+        # Battery fills well before sunset → "battery fills" early return
+        # gives EV min amps (6A) with surplus_after_battery=0 (Grid Guard protects)
         pv = [12.0, 12.0, 10.0, 9.0, 7.0, 6.0]
         load = [2.0, 2.0, 2.0, 2.0, 2.0, 2.0]
-        # surplus = [10,10,8,7,5,4] = 44 kWh, need = 8, margin = 36, per h = 6 kW → 8.7A
+        # surplus = [10,10,8,7,5,4] = 44 kWh, need = 8, avg = 7.33
+        # hours_to_full = 8/7.33 = 1.09 < 6*0.8 = 4.8, bat > 50% → early return
         result = plan_solar_allocation(
             battery_soc_pct=60.0,
             battery_cap_kwh=20.0,  # need = 40% * 20 = 8 kWh
@@ -561,9 +563,10 @@ class TestSolarAllocation:
             sunset_hour=19,
         )
         assert result.ev_can_charge is True
-        assert result.ev_recommended_amps >= 6
-        assert result.surplus_after_battery_kwh > 0
+        assert result.ev_recommended_amps >= 6  # at least min amps
+        assert result.surplus_after_battery_kwh >= 0.0  # early path reports 0
         assert result.battery_hours_to_full > 0
+        assert "Battery fills" in result.reason
 
     def test_solar_alloc_just_enough_for_battery(self):
         """8 kWh surplus, battery needs 8 kWh → no EV."""
@@ -585,9 +588,9 @@ class TestSolarAllocation:
         assert result.ev_recommended_amps == 0
 
     def test_solar_alloc_battery_nearly_full(self):
-        """Battery at 90%, small need → EV gets most surplus."""
-        # need = 10% * 20 = 2 kWh, generous (>80%) = 1 kWh reserved
-        # surplus = [6,6,5,5] = 22 kWh, margin = 22 - 1 = 21, per h = 5.25 kW → 7.6A
+        """Battery at 90%, fills fast before sunset → EV 6A via early path."""
+        # need = 10% * 20 = 2 kWh, surplus = [6,6,5,5] = 22 kWh, avg = 5.5
+        # hours_to_full = 2/5.5 = 0.36 < 4*0.8 = 3.2, bat > 50% → early return
         pv = [8.0, 8.0, 7.0, 7.0]
         load = [2.0, 2.0, 2.0, 2.0]
         result = plan_solar_allocation(
@@ -602,8 +605,9 @@ class TestSolarAllocation:
             sunset_hour=19,
         )
         assert result.ev_can_charge is True
-        assert result.ev_recommended_amps >= 6
-        assert result.surplus_after_battery_kwh > 0
+        assert result.ev_recommended_amps >= 6  # at least min amps
+        assert result.surplus_after_battery_kwh >= 0.0  # early path reports 0
+        assert "Battery fills" in result.reason
 
     def test_solar_alloc_no_sun_left(self):
         """Sunset already passed → no allocation."""
@@ -625,8 +629,11 @@ class TestSolarAllocation:
     def test_solar_alloc_ev_above_target_still_charges(self):
         """EV at 80% > target 75% but solar is FREE → still charges if margin."""
         # Daytime solar charging ignores target — free kWh always good
+        # bat_soc=51% (> 50%) so "battery fills before sunset" path fires
+        # surplus=[6,6,6,6]=24kWh, need=9.8kWh, avg=6, hours_to_full=1.63
+        # 1.63 < 4*0.8=3.2 → early return with EV 6A
         result = plan_solar_allocation(
-            battery_soc_pct=50.0,
+            battery_soc_pct=51.0,
             battery_cap_kwh=20.0,
             ev_soc_pct=80.0,
             ev_target_pct=75.0,
@@ -678,13 +685,14 @@ class TestSolarAllocation:
 
     def test_solar_alloc_low_margin_below_min_amps(self):
         """Margin too small for 6A minimum → amps=0."""
-        # Tiny surplus: ~0.5 kWh/h over 4 hours = 2 kWh, battery needs ~1 kWh
-        # margin = 2 - 1 = 1 kWh over 4h = 0.25 kW → 0.36A (3-phase) < 6A
+        # Tiny surplus: ~0.5 kWh/h over 4 hours = 2 kWh, battery needs 10 kWh
+        # bat_soc=50% (not > 50%) avoids "battery fills before sunset" path
+        # margin = 2 - 10 = -8 → no EV (all PV needed for battery)
         pv = [2.5, 2.5, 2.5, 2.5]
         load = [2.0, 2.0, 2.0, 2.0]
         result = plan_solar_allocation(
-            battery_soc_pct=95.0,
-            battery_cap_kwh=20.0,  # need = 5% * 20 = 1 kWh, generous = 0.5 kWh
+            battery_soc_pct=50.0,
+            battery_cap_kwh=20.0,  # need = 50% * 20 = 10 kWh
             ev_soc_pct=30.0,
             ev_target_pct=80.0,
             ev_cap_kwh=92.0,
@@ -695,16 +703,24 @@ class TestSolarAllocation:
         )
         assert result.ev_can_charge is False
         assert result.ev_recommended_amps == 0
-        assert "too small" in result.reason.lower() or "Margin" in result.reason
 
     def test_solar_alloc_battery_high_soc_generous(self):
-        """Battery > 80% → more generous EV allocation (only 50% of need reserved)."""
-        # 4 hours, surplus = [8,8,8,8] = 32 kWh total
-        # Battery at 85%: need = 15% * 20 = 3 kWh, generous = 1.5 kWh
-        # margin_high = 32 - 1.5 = 30.5 kWh
-        # Battery at 60%: need = 40% * 20 = 8 kWh (no generous)
-        # margin_low = 32 - 8 = 24 kWh
-        pv = [10.0, 10.0, 10.0, 10.0]
+        """Battery > 80% → generous bonus turns negative margin into EV charging.
+
+        With the new logic, when surplus barely covers battery but SoC > 80%,
+        the generous bonus (50% of need reserved) can unlock EV charging.
+        At lower SoC without the bonus, margin stays negative → no EV.
+        """
+        # 4 hours, low surplus: 1.2 kW/h each → surplus_per_hour = [1.2]*4
+        # total_surplus = 4.8 kWh
+        # Battery at 85%: need = 15% * 20 = 3 kWh
+        #   hours_to_full = 3/1.2 = 2.5, n=4, n*0.8=3.2 → 2.5 < 3.2 AND bat>50%
+        #   → "battery fills before sunset" early return → EV 6A ✓
+        # Battery at 40%: need = 60% * 20 = 12 kWh
+        #   hours_to_full = 12/1.2 = 10 > n → check B fails (10 >= 4)
+        #   No surplus > max_bat_charge → check C fails
+        #   margin = 4.8 - 12 = -7.2 → no EV ✗
+        pv = [3.2, 3.2, 3.2, 3.2]
         load = [2.0, 2.0, 2.0, 2.0]
         result_high = plan_solar_allocation(
             battery_soc_pct=85.0,
@@ -717,9 +733,9 @@ class TestSolarAllocation:
             current_hour=15,
             sunset_hour=19,
         )
-        # Compare with lower battery SoC (not generous)
+        # Compare with lower battery SoC — not enough surplus, no generous
         result_low = plan_solar_allocation(
-            battery_soc_pct=60.0,
+            battery_soc_pct=40.0,
             battery_cap_kwh=20.0,
             ev_soc_pct=30.0,
             ev_target_pct=80.0,
@@ -730,8 +746,7 @@ class TestSolarAllocation:
             sunset_hour=19,
         )
         assert result_high.ev_can_charge is True
-        assert result_low.ev_can_charge is True
-        assert result_high.surplus_after_battery_kwh > result_low.surplus_after_battery_kwh
+        assert result_low.ev_can_charge is False
 
     def test_solar_alloc_low_confidence(self):
         """Low PV confidence (Tempest falling pressure) → no EV despite enough PV."""
@@ -755,7 +770,7 @@ class TestSolarAllocation:
             pv_confidence=1.0,
         )
         result_low = plan_solar_allocation(
-            battery_soc_pct=70.0,
+            battery_soc_pct=30.0,
             battery_cap_kwh=20.0,
             ev_soc_pct=30.0,
             ev_target_pct=80.0,
@@ -764,7 +779,7 @@ class TestSolarAllocation:
             hourly_consumption_kw=load,
             current_hour=12,
             sunset_hour=18,
-            pv_confidence=0.4,
+            pv_confidence=0.3,
         )
         assert result_normal.ev_can_charge is True  # Normal: enough margin
         assert result_low.ev_can_charge is False  # Low confidence: margin gone

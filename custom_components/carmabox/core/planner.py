@@ -121,56 +121,85 @@ def plan_solar_allocation(
     else:
         battery_hours_to_full = float("inf")
 
-    # 4. Margin for EV
-    margin_kwh = total_surplus_kwh - battery_need_kwh
+    # ── CORE PRINCIPLE ──────────────────────────────────────────
+    # The question is NOT "is there margin NOW?"
+    # The question IS "will we EXPORT later if we don't EV-charge now?"
+    #
+    # Rule 1: If battery reaches 100% before sunset → we WILL export
+    #         → EV charging NOW prevents that export → ALWAYS do it
+    # Rule 2: If total surplus > battery need → excess will export
+    #         → EV charging absorbs that excess → do it
+    # Rule 3: If surplus < battery need → every kWh to EV = kWh bat misses
+    #         → But still better than export later → EV if bat fills anyway
+    # Rule 4: Battery already full → ALL surplus to EV
 
-    # 5. Battery already full — ALL surplus to EV
+    will_export = False
+    export_kwh = 0.0
+    ev_reason = ""
+
+    # Rule 4: Battery full — everything to EV
     if battery_soc_pct >= 100.0:
-        margin_kwh = total_surplus_kwh
-        battery_need_kwh = 0.0
+        will_export = total_surplus_kwh > 0
+        export_kwh = total_surplus_kwh
+        ev_reason = "Battery full — all surplus to EV"
 
-    # 6. Battery high SoC (>80%) — be more generous, give EV more margin
-    #    Only count 50% of remaining battery need as reserved
-    if battery_soc_pct > 80.0 and battery_soc_pct < 100.0:
-        generous_need = battery_need_kwh * 0.5
-        margin_kwh = total_surplus_kwh - generous_need
+    # Rule 1: Battery fills before sunset — we WILL export after that
+    elif battery_hours_to_full > 0 and battery_hours_to_full < n:
+        hours_after_full = n - battery_hours_to_full
+        export_kwh = avg_surplus * hours_after_full
+        will_export = export_kwh > 0.5  # >0.5 kWh meaningful
+        ev_reason = (
+            f"Battery fills in {battery_hours_to_full:.1f}h, "
+            f"{export_kwh:.1f} kWh would export — EV absorbs it"
+        )
 
-    # 7. Surplus after battery (for reporting)
-    surplus_after_battery_kwh = max(0.0, margin_kwh)
+    # Rule 2: Total surplus exceeds battery need — excess exports
+    elif total_surplus_kwh > battery_need_kwh:
+        export_kwh = total_surplus_kwh - battery_need_kwh
+        will_export = export_kwh > 0.5
+        ev_reason = (
+            f"Surplus {total_surplus_kwh:.1f} > battery need "
+            f"{battery_need_kwh:.1f} — {export_kwh:.1f} kWh would export"
+        )
 
-    # 8. Determine EV charging
-    if margin_kwh <= 0:
+    surplus_after_battery_kwh = max(0.0, export_kwh)
+
+    # If we will NOT export → battery needs everything → no EV
+    if not will_export:
         return SolarAllocationResult(
             ev_can_charge=False,
             ev_recommended_amps=0,
             battery_hours_to_full=battery_hours_to_full,
             surplus_after_battery_kwh=0.0,
             reason=(
-                f"All PV needed for battery "
-                f"({battery_need_kwh:.1f} kWh need, {total_surplus_kwh:.1f} kWh surplus)"
+                f"No export risk — all PV needed for battery "
+                f"({battery_need_kwh:.1f} kWh need, "
+                f"{total_surplus_kwh:.1f} kWh surplus)"
             ),
         )
 
-    # Calculate recommended amps from available kW
-    ev_kw_available = margin_kwh / n  # spread over remaining hours
+    # We WILL export → EV should charge to prevent it
+    # Calculate amps: use peak surplus hour (EV charges during peak)
+    peak_surplus = max(surplus_per_hour) if surplus_per_hour else 0
+    ev_kw_available = min(peak_surplus, export_kwh / max(1, n))
+    # Start at min_amps — Grid Guard protects Ellevio tak
+    # We know export is coming, so EV charging is always justified
     ev_amps_raw = ev_kw_available * 1000.0 / (voltage * ev_phase_count)
     ev_amps = min(max(0, math.ceil(ev_amps_raw)), ev_max_amps)
 
+    # If calculated amps < min_amps but export IS coming:
+    # Start at min_amps anyway — Grid Guard protects Ellevio tak
+    # Battery charging rate auto-adjusts (GoodWe peak shaving)
+    # It's better to use some grid import now than export later
     if ev_amps < ev_min_amps:
-        return SolarAllocationResult(
-            ev_can_charge=False,
-            ev_recommended_amps=0,
-            battery_hours_to_full=battery_hours_to_full,
-            surplus_after_battery_kwh=surplus_after_battery_kwh,
-            reason=f"Margin too small for minimum {ev_min_amps}A ({ev_amps_raw:.1f}A available)",
-        )
+        ev_amps = ev_min_amps  # Force minimum — export prevention
 
     return SolarAllocationResult(
         ev_can_charge=True,
         ev_recommended_amps=ev_amps,
         battery_hours_to_full=battery_hours_to_full,
         surplus_after_battery_kwh=surplus_after_battery_kwh,
-        reason=f"PV surplus {margin_kwh:.1f} kWh after battery, EV at {ev_amps}A",
+        reason=ev_reason,
     )
 
 
