@@ -8,7 +8,7 @@ testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--ignore=tests/e2e"
+addopts = "--ignore=tests/e2e --ignore=tests/integration"
 markers = ["e2e: end-to-end tests requiring HA + browser (deselected by default)"]
 
 [tool.ruff]

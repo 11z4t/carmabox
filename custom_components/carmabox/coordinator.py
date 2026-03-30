@@ -5411,7 +5411,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             for ph in self.plan:
                 if ph.hour == hour:
                     actual_grid = max(0, state.grid_power_w) / 1000
-                    self.predictor.add_plan_feedback(hour, weekday, ph.grid_kw, actual_grid)
+                    self.predictor.add_plan_feedback(hour, ph.grid_kw, actual_grid)
                     break
 
         # EV usage (once per day at 22:00)
