@@ -237,6 +237,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Start at threshold-1 so first update generates a plan immediately
         self._plan_counter = (PLAN_INTERVAL_SECONDS // SCAN_INTERVAL_SECONDS) - 1
         self._last_command = BatteryCommand.IDLE
+        self._last_battery_action = "charge_pv"  # PLAT-1099: safe default
         self._last_discharge_w = 0
 
         # EV executor state (PLAT-949)
@@ -1063,6 +1064,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             cmd.reason,
         )
 
+        # Track desired battery action for EMS enforcement (PLAT-1099)
+        self._last_battery_action = cmd.battery_action
+
         # ── Execute battery command ─────────────────────────────
         if cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
             # Proportional split
@@ -1100,6 +1104,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             for adapter in self.inverter_adapters:
                 await adapter.set_ems_mode("charge_pv")
                 await adapter.set_fast_charging(on=False)
+                # PLAT-1099: Zero ems_power_limit immediately — defense-in-depth.
+                # Non-zero limit in charge_pv causes autonomous grid discharge
+                # by GoodWe firmware (PLAT-1040).
+                with contextlib.suppress(Exception):
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {
+                            "entity_id": f"number.goodwe_{adapter.prefix}_ems_power_limit",
+                            "value": 0,
+                        },
+                    )
 
         elif cmd.battery_action == "grid_charge":
             self._fast_charge_authorized = True
@@ -1117,90 +1133,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await adapter.set_ems_mode("battery_standby")
                 await adapter.set_fast_charging(on=False)
 
-        # ── EMS Mode Enforcement — EVERY cycle ──────────────────
-        # Verify that actual EMS mode on inverters matches the decided
-        # battery_action.  GoodWe firmware or manual intervention can
-        # change the mode between cycles → crosscharge / stale discharge.
-        ems_mode_map = {
-            "charge_pv": "charge_pv",
-            "grid_charge": "charge_pv",
-            "discharge": "discharge_pv",
-            "standby": "battery_standby",
-        }
-        desired_ems = ems_mode_map.get(cmd.battery_action, "charge_pv")
-
-        for _idx, _adp in enumerate(self.inverter_adapters):
-            _prefix = "kontor" if _idx == 0 else "forrad"
-
-            # --- PLAT-1040: ems_power_limit MUST be 0 when charge_pv ---
-            # Non-zero ems_power_limit in charge_pv causes autonomous
-            # grid charging by GoodWe firmware.
-            if desired_ems == "charge_pv":
-                try:
-                    _lim_entity = f"number.goodwe_{_adp.prefix}_ems_power_limit"
-                    _lim_state = self.hass.states.get(_lim_entity)
-                    _lim_val = (
-                        float(_lim_state.state)
-                        if _lim_state and _lim_state.state not in ("unknown", "unavailable")
-                        else 0.0
-                    )
-                    if _lim_val != 0.0:
-                        _LOGGER.info(
-                            "EMS PLAT-1040: %s limit %.0f→0",
-                            _adp.prefix,
-                            _lim_val,
-                        )
-                        await self.hass.services.async_call(
-                            "number",
-                            "set_value",
-                            {"entity_id": _lim_entity, "value": 0},
-                        )
-                except Exception:
-                    _LOGGER.warning("EMS ENFORCE: %s failed to reset ems_power_limit", _adp.prefix)
-
-            # --- Drift correction: re-apply mode if actual != desired ---
-            _current_ems = _adp.ems_mode
-            if _current_ems and _current_ems != desired_ems:
-                # During discharge, individual batteries may legitimately
-                # be in standby (allocation=0W).  Only correct if the
-                # battery was supposed to be active.
-                if cmd.battery_action == "discharge" and _current_ems == "battery_standby":
-                    # Skip: 0-allocation batteries are intentionally standby
-                    continue
-                _LOGGER.info(
-                    "EMS ENFORCE: %s drift detected %s → %s (action=%s)",
-                    _adp.prefix,
-                    _current_ems,
-                    desired_ems,
-                    cmd.battery_action,
-                )
-                await _adp.set_ems_mode(desired_ems)
-
-        # ── INV-1 Crosscharge Prevention — EMS-level ────────────
-        # If one inverter is discharging and another is charging at EMS
-        # level, force ALL to charge_pv immediately.  This catches
-        # firmware-level crosscharge that the power-based safety check
-        # in _watchdog may miss due to sensor lag.
-        if len(self.inverter_adapters) >= 2:
-            _ems_modes = [a.ems_mode for a in self.inverter_adapters]
-            if "discharge_pv" in _ems_modes and "charge_pv" in _ems_modes:
-                _LOGGER.error(
-                    "INV-1 CROSSCHARGE EMS: %s — forcing all to charge_pv",
-                    _ems_modes,
-                )
-                for _adp in self.inverter_adapters:
-                    await _adp.set_ems_mode("charge_pv")
-                    await _adp.set_fast_charging(on=False)
-                    # PLAT-1040: zero the limit when forcing charge_pv
-                    with contextlib.suppress(Exception):
-                        await self.hass.services.async_call(
-                            "number",
-                            "set_value",
-                            {
-                                "entity_id": f"number.goodwe_{_adp.prefix}_ems_power_limit",
-                                "value": 0,
-                            },
-                        )
+        # PLAT-1099: EMS enforcement moved to _enforce_ems_modes() — runs
+        # from main update loop EVERY cycle, even when Grid Guard acts.
+        await self._enforce_ems_modes()
 
         # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
         is_night = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
@@ -1548,6 +1483,115 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         await adapter.set_fast_charging(on=False)
             except Exception as err:
                 _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err)
+
+    # ── PLAT-1099: EMS Mode Enforcement — runs EVERY 30s cycle ──────
+    # Extracted from _execute_v2() so it runs even when Grid Guard acts.
+    # Previously, grid_guard_acted=True skipped _execute_v2() entirely,
+    # leaving stale EMS modes (e.g., manual discharge_pv) uncorrected.
+
+    async def _enforce_ems_modes(self) -> None:
+        """Enforce EMS mode on ALL inverters every cycle (PLAT-1099).
+
+        1. Map _last_battery_action → desired EMS mode
+        2. For each inverter: check actual mode, re-apply if drifted
+        3. Zero ems_power_limit when charge_pv (PLAT-1040)
+        4. Detect INV-2 crosscharge at EMS level (using enforced modes,
+           not stale adapter reads)
+        """
+        if not self.inverter_adapters:
+            return
+
+        battery_action = getattr(self, "_last_battery_action", "charge_pv")
+
+        ems_mode_map = {
+            "charge_pv": "charge_pv",
+            "grid_charge": "charge_pv",
+            "discharge": "discharge_pv",
+            "standby": "battery_standby",
+        }
+        desired_ems = ems_mode_map.get(battery_action, "charge_pv")
+
+        # Track what each adapter SHOULD be after enforcement (for INV-2 check).
+        # Using stale adapter.ems_mode after drift correction would cause
+        # false INV-2 triggers during legitimate discharge.
+        enforced_modes: list[str] = []
+
+        for _idx, _adp in enumerate(self.inverter_adapters):
+            # --- PLAT-1040: ems_power_limit MUST be 0 when charge_pv ---
+            if desired_ems == "charge_pv":
+                try:
+                    _lim_entity = f"number.goodwe_{_adp.prefix}_ems_power_limit"
+                    _lim_state = self.hass.states.get(_lim_entity)
+                    _lim_val = (
+                        float(_lim_state.state)
+                        if _lim_state and _lim_state.state not in ("unknown", "unavailable")
+                        else 0.0
+                    )
+                    if _lim_val != 0.0:
+                        _LOGGER.info(
+                            "EMS PLAT-1040: %s limit %.0f→0",
+                            _adp.prefix,
+                            _lim_val,
+                        )
+                        await self.hass.services.async_call(
+                            "number",
+                            "set_value",
+                            {"entity_id": _lim_entity, "value": 0},
+                        )
+                except Exception:
+                    _LOGGER.warning(
+                        "EMS ENFORCE: %s failed to reset ems_power_limit",
+                        _adp.prefix,
+                    )
+
+            # --- Drift correction: re-apply mode if actual != desired ---
+            _current_ems = _adp.ems_mode
+            if _current_ems and _current_ems != desired_ems:
+                # During discharge, individual batteries may legitimately
+                # be in standby (allocation=0W).  Only correct if the
+                # battery was supposed to be active.
+                if battery_action == "discharge" and _current_ems == "battery_standby":
+                    enforced_modes.append("battery_standby")
+                    continue
+                _LOGGER.info(
+                    "EMS ENFORCE: %s drift detected %s → %s (action=%s)",
+                    _adp.prefix,
+                    _current_ems,
+                    desired_ems,
+                    battery_action,
+                )
+                await _adp.set_ems_mode(desired_ems)
+                enforced_modes.append(desired_ems)
+            else:
+                enforced_modes.append(_current_ems or desired_ems)
+
+        # ── INV-2 Crosscharge Prevention — EMS-level ────────────
+        # Use enforced_modes (what we just told inverters to be), NOT
+        # stale adapter.ems_mode reads.  This prevents false triggers
+        # when drift correction was just applied.
+        has_crosscharge = (
+            len(enforced_modes) >= 2
+            and "discharge_pv" in enforced_modes
+            and "charge_pv" in enforced_modes
+        )
+        if has_crosscharge:
+            _LOGGER.error(
+                "INV-2 CROSSCHARGE EMS: %s — forcing all to charge_pv",
+                enforced_modes,
+            )
+            for _adp in self.inverter_adapters:
+                await _adp.set_ems_mode("charge_pv")
+                await _adp.set_fast_charging(on=False)
+                # PLAT-1040: zero the limit when forcing charge_pv
+                with contextlib.suppress(Exception):
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {
+                            "entity_id": f"number.goodwe_{_adp.prefix}_ems_power_limit",
+                            "value": 0,
+                        },
+                    )
 
     async def _execute_grid_guard_commands(
         self,
@@ -1969,6 +2013,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 await self._execute_v2(state)
             else:
                 _LOGGER.info("GRID GUARD: Skippar execute — guard har kontroll")
+
+            # PLAT-1099: EMS enforcement runs EVERY cycle — even when Grid
+            # Guard acted and _execute_v2 was skipped.  Catches stale
+            # manual overrides (e.g., discharge_pv left from yesterday) and
+            # INV-2 crosscharge at EMS level.
+            await self._enforce_ems_modes()
+
             await self._watchdog(state)
             # IT-2465: Non-critical methods wrapped with isolation
             self._safe_call("track_shadow", self._track_shadow, state)

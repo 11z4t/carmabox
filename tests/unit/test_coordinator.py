@@ -56,6 +56,7 @@ def _make_coordinator(
     coord.plan = []
     coord._plan_counter = 0
     coord._last_command = BatteryCommand.IDLE
+    coord._last_battery_action = "charge_pv"  # PLAT-1099: safe default
     coord._last_discharge_w = 0
     coord._pending_write_verifies = []
     coord.target_kw = options.get("target_weighted_kw", 2.0) if options else 2.0
