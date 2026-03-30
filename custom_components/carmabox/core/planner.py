@@ -14,9 +14,11 @@ Adds:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from ..const import (
+    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PEAK_TOP_N,
@@ -26,6 +28,148 @@ from ..const import (
 )
 from ..optimizer.planner import generate_plan
 from .plan_executor import PlanAction
+
+
+@dataclass
+class SolarAllocationResult:
+    """Result of solar allocation planning."""
+
+    ev_can_charge: bool  # Is there margin to charge EV from PV?
+    ev_recommended_amps: int  # 0 = don't charge, 6-10 = charge
+    battery_hours_to_full: float  # Hours until batteries reach 100%
+    surplus_after_battery_kwh: float  # kWh available for EV after battery needs
+    reason: str
+
+
+def plan_solar_allocation(
+    battery_soc_pct: float,
+    battery_cap_kwh: float,
+    ev_soc_pct: float,
+    ev_target_pct: float,
+    ev_cap_kwh: float,
+    hourly_pv_kw: list[float],  # Remaining hours today, from Solcast
+    hourly_consumption_kw: list[float],  # Remaining hours today
+    current_hour: int,
+    sunset_hour: int = 19,
+    ev_phase_count: int = 3,
+    ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
+    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    voltage: float = 230.0,
+    pv_confidence: float = 1.0,
+) -> SolarAllocationResult:
+    """Allocate remaining solar production between battery and EV.
+
+    Pure function. Decides whether there is enough PV surplus (after covering
+    battery charging needs and household consumption) to also charge the EV.
+
+    Args:
+        pv_confidence: 0.5-1.2 adjustment factor from Tempest pressure +
+            Solcast p10. Lower = less trust in PV forecast = prioritize battery.
+
+    Returns SolarAllocationResult with recommendation and reasoning.
+    """
+    # Edge case: EV already at or above target
+    if ev_soc_pct >= ev_target_pct:
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            battery_hours_to_full=0.0,
+            surplus_after_battery_kwh=0.0,
+            reason=f"EV already at {ev_soc_pct:.0f}% >= target {ev_target_pct:.0f}%",
+        )
+
+    # Hours of sun remaining
+    hours_left = max(0, sunset_hour - current_hour)
+
+    # Edge case: no PV hours left (sunset passed or empty lists)
+    if hours_left <= 0 or not hourly_pv_kw or not hourly_consumption_kw:
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            battery_hours_to_full=0.0,
+            surplus_after_battery_kwh=0.0,
+            reason="No solar hours remaining",
+        )
+
+    # 1. Battery need
+    battery_need_kwh = max(0.0, (100.0 - battery_soc_pct) / 100.0 * battery_cap_kwh)
+
+    # 2. Calculate total surplus from PV after consumption
+    n = min(hours_left, len(hourly_pv_kw), len(hourly_consumption_kw))
+    if n <= 0:
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            battery_hours_to_full=0.0,
+            surplus_after_battery_kwh=0.0,
+            reason="No solar hours remaining",
+        )
+
+    # Apply PV confidence (Tempest pressure + Solcast p10)
+    adjusted_pv = [pv * pv_confidence for pv in hourly_pv_kw]
+    surplus_per_hour = [max(0.0, adjusted_pv[h] - hourly_consumption_kw[h]) for h in range(n)]
+    total_surplus_kwh = sum(surplus_per_hour)
+
+    # 3. Battery hours to full
+    avg_surplus = total_surplus_kwh / n if n > 0 else 0.0
+    if avg_surplus > 0 and battery_need_kwh > 0:
+        battery_hours_to_full = battery_need_kwh / avg_surplus
+    elif battery_need_kwh <= 0:
+        battery_hours_to_full = 0.0
+    else:
+        battery_hours_to_full = float("inf")
+
+    # 4. Margin for EV
+    margin_kwh = total_surplus_kwh - battery_need_kwh
+
+    # 5. Battery already full — ALL surplus to EV
+    if battery_soc_pct >= 100.0:
+        margin_kwh = total_surplus_kwh
+        battery_need_kwh = 0.0
+
+    # 6. Battery high SoC (>80%) — be more generous, give EV more margin
+    #    Only count 50% of remaining battery need as reserved
+    if battery_soc_pct > 80.0 and battery_soc_pct < 100.0:
+        generous_need = battery_need_kwh * 0.5
+        margin_kwh = total_surplus_kwh - generous_need
+
+    # 7. Surplus after battery (for reporting)
+    surplus_after_battery_kwh = max(0.0, margin_kwh)
+
+    # 8. Determine EV charging
+    if margin_kwh <= 0:
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            battery_hours_to_full=battery_hours_to_full,
+            surplus_after_battery_kwh=0.0,
+            reason=(
+                f"All PV needed for battery "
+                f"({battery_need_kwh:.1f} kWh need, {total_surplus_kwh:.1f} kWh surplus)"
+            ),
+        )
+
+    # Calculate recommended amps from available kW
+    ev_kw_available = margin_kwh / n  # spread over remaining hours
+    ev_amps_raw = ev_kw_available * 1000.0 / (voltage * ev_phase_count)
+    ev_amps = min(max(0, math.ceil(ev_amps_raw)), ev_max_amps)
+
+    if ev_amps < ev_min_amps:
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            battery_hours_to_full=battery_hours_to_full,
+            surplus_after_battery_kwh=surplus_after_battery_kwh,
+            reason=f"Margin too small for minimum {ev_min_amps}A ({ev_amps_raw:.1f}A available)",
+        )
+
+    return SolarAllocationResult(
+        ev_can_charge=True,
+        ev_recommended_amps=ev_amps,
+        battery_hours_to_full=battery_hours_to_full,
+        surplus_after_battery_kwh=surplus_after_battery_kwh,
+        reason=f"PV surplus {margin_kwh:.1f} kWh after battery, EV at {ev_amps}A",
+    )
 
 
 @dataclass
