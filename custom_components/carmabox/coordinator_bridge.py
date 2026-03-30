@@ -95,7 +95,8 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         self._cfg: dict[str, Any] = {**entry.data, **entry.options}
 
         # ── Feature flag: V2 cycle enable ──────────────────────
-        self._use_v2: bool = bool(self._cfg.get("use_coordinator_v2", False))
+        # Shadow mode default: V2 runs but does NOT execute commands
+        self._use_v2: bool = bool(self._cfg.get("use_coordinator_v2", True))
 
         # ── Build V2 config from HA config entry ───────────────
         v2_config = CoordinatorConfig(
@@ -747,11 +748,27 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                     sys_state = self._collect_system_state()
                     result: CycleResult = self._v2.cycle(sys_state)
 
-                    # Execute commands
+                    # Execute commands (or log in shadow mode)
                     if self.executor_enabled:
                         await self._execute_battery_commands(result.battery_commands)
                         await self._execute_ev_command(result.ev_command)
                         await self._execute_surplus_actions(result.surplus_actions)
+                    else:
+                        # Shadow mode: log what WOULD happen
+                        if result.battery_commands or result.ev_command or result.surplus_actions:
+                            _LOGGER.info(
+                                "SHADOW: V2 would: bat=%s, ev=%s, surplus=%s, reason=%s",
+                                [c.get("mode", "?") for c in result.battery_commands]
+                                if result.battery_commands
+                                else "none",
+                                result.ev_command.get("action", "none")
+                                if result.ev_command
+                                else "none",
+                                [a.get("action", "?") for a in result.surplus_actions]
+                                if result.surplus_actions
+                                else "none",
+                                result.reason[:80] if result.reason else "",
+                            )
 
                     # Update decision log
                     self.last_decision = Decision(
@@ -839,6 +856,11 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             return CarmaboxState()
 
     # ── Properties for sensor.py compatibility ─────────────────
+
+    async def on_ev_cable_connected(self) -> None:
+        """Handle EV cable plug-in event."""
+        _LOGGER.info("BRIDGE: EV cable connected — V2 will handle in next cycle")
+        # V2 handles EV in its cycle — no immediate action needed in shadow mode
 
     @property
     def cable_locked_entity(self) -> str:

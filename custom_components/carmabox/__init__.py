@@ -33,7 +33,14 @@ for _mod in [
         with contextlib.suppress(Exception):  # noqa: BLE001
             importlib.reload(sys.modules[_mod])
 
-from .coordinator import CarmaboxCoordinator  # noqa: E402
+# NC-12: Feature flag — use bridge (V2) or legacy coordinator
+# Shadow mode: bridge runs V2 cycle + logs decisions, but does NOT execute commands
+_USE_BRIDGE = True  # Set True to activate bridge, False for legacy
+
+if _USE_BRIDGE:
+    from .coordinator_bridge import CoordinatorBridge as CarmaboxCoordinator  # noqa: E402
+else:
+    from .coordinator import CarmaboxCoordinator  # noqa: E402
 
 CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
 CARD_URL = "/carmabox/carmabox-card.js"
