@@ -2090,7 +2090,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # ── LAYER 0: Grid Guard — runs FIRST, every cycle ──
             self._grid_guard_result = self._evaluate_grid_guard(state)
-            grid_guard_acted = False
 
             if self._grid_guard_result.invariant_violations:
                 _LOGGER.warning(
@@ -2101,7 +2100,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._grid_guard_result.commands,
                     state,
                 )
-                grid_guard_acted = True
 
             if self._grid_guard_result.status in ("WARNING", "CRITICAL"):
                 _LOGGER.warning(
@@ -2115,7 +2113,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._grid_guard_result.commands,
                     state,
                 )
-                grid_guard_acted = True
 
             if self._grid_guard_result.replan_needed:
                 _LOGGER.info("GRID GUARD: Triggar omplanering")
@@ -2133,10 +2130,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # Breach Prevention Monitor — runs every cycle (30s)
             self._safe_call("update_hourly_meter", self._update_hourly_meter, state)
 
-            if not grid_guard_acted:
-                await self._execute_v2(state)
-            else:
-                _LOGGER.info("GRID GUARD: Skippar execute — guard har kontroll")
+            # _execute_v2 runs ALWAYS — contains night-EV, price discharge,
+            # surplus chain, and PV allocation. Grid Guard restricts actions
+            # inside _execute_v2 (via headroom), doesn't block the whole method.
+            await self._execute_v2(state)
 
             # PLAT-1099: EMS enforcement runs EVERY cycle — even when Grid
             # Guard acted and _execute_v2 was skipped.  Catches stale
