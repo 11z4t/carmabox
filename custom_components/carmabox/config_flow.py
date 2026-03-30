@@ -257,7 +257,12 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                         vol.Coerce(int), vol.Range(min=1, max=10)
                     ),
                     vol.Optional("has_pool_pump", default=False): bool,
+                    vol.Optional("use_coordinator_v2", default=True): bool,
                     vol.Optional("executor_enabled", default=False): bool,
+                    vol.Optional("ev_phase_mode_auto", default=True): bool,
+                    vol.Optional("ellevio_tak_kw", default=2.0): vol.All(
+                        vol.Coerce(float), vol.Range(min=0.5, max=10.0)
+                    ),
                 }
             ),
         )
@@ -550,6 +555,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             # Household
             "household_size": self._user_input.get("household_size", 4),
             "has_pool_pump": self._user_input.get("has_pool_pump", False),
+            "use_coordinator_v2": self._user_input.get("use_coordinator_v2", True),
+            "ev_phase_mode_auto": self._user_input.get("ev_phase_mode_auto", True),
+            "ellevio_tak_kw": self._user_input.get("ellevio_tak_kw", 2.0),
             # Household profile (PLAT-962)
             "house_size_m2": self._user_input.get("house_size_m2", 0),
             "heating_type": self._user_input.get("heating_type", ""),
@@ -1034,9 +1042,21 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         default=opts.get("has_pool_pump", False),
                     ): bool,
                     vol.Optional(
+                        "use_coordinator_v2",
+                        default=opts.get("use_coordinator_v2", True),
+                    ): bool,
+                    vol.Optional(
                         "executor_enabled",
                         default=opts.get("executor_enabled", False),
                     ): bool,
+                    vol.Optional(
+                        "ev_phase_mode_auto",
+                        default=opts.get("ev_phase_mode_auto", True),
+                    ): bool,
+                    vol.Optional(
+                        "ellevio_tak_kw",
+                        default=opts.get("ellevio_tak_kw", 2.0),
+                    ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=10.0)),
                     # Household profile (PLAT-962)
                     vol.Optional(
                         "house_size_m2",
