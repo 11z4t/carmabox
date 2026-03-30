@@ -1139,9 +1139,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
         is_night = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
-        # Ensure Easee initialized (smart_charging OFF, limits set)
-        if self.ev_adapter and not getattr(self.ev_adapter, "_initialized", False):
-            await self.ev_adapter.ensure_initialized()
+        # Ensure Easee initialized EVERY cycle when EV plugged
+        # Easee Cloud re-enables smart_charging autonomously → force re-init
+        if self.ev_adapter:
+            plug_state = self.hass.states.get(f"binary_sensor.{self.ev_adapter.prefix}_plug")
+            if plug_state and plug_state.state == "on":
+                await self.ev_adapter.ensure_initialized(force=True)
 
         ev_connected = (
             (self.ev_adapter and self.ev_adapter.cable_locked) if self.ev_adapter else False
