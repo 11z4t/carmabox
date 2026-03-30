@@ -250,7 +250,7 @@ class CoordinatorV2:
                     bat_commands.append(
                         {
                             "id": bat_id,
-                            "mode": cmd["mode"],
+                            "mode": cmd.get("mode", "battery_standby"),
                             "power_limit": 0,
                             "fast_charging": False,
                         }

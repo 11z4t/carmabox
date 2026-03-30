@@ -36,9 +36,10 @@ class SolarAllocationResult:
 
     ev_can_charge: bool  # Is there margin to charge EV from PV?
     ev_recommended_amps: int  # 0 = don't charge, 6-10 = charge
-    battery_hours_to_full: float  # Hours until batteries reach 100%
-    surplus_after_battery_kwh: float  # kWh available for EV after battery needs
-    reason: str
+    ev_phase_mode: str = "3_phase"  # "1_phase" or "3_phase"
+    battery_hours_to_full: float = 0.0  # Hours until batteries reach 100%
+    surplus_after_battery_kwh: float = 0.0  # kWh available after battery needs
+    reason: str = ""
 
 
 def plan_solar_allocation(
@@ -179,27 +180,64 @@ def plan_solar_allocation(
         )
 
     # We WILL export → EV should charge to prevent it
-    # Calculate amps: use peak surplus hour (EV charges during peak)
-    peak_surplus = max(surplus_per_hour) if surplus_per_hour else 0
-    ev_kw_available = min(peak_surplus, export_kwh / max(1, n))
-    # Start at min_amps — Grid Guard protects Ellevio tak
-    # We know export is coming, so EV charging is always justified
-    ev_amps_raw = ev_kw_available * 1000.0 / (voltage * ev_phase_count)
-    ev_amps = min(max(0, math.ceil(ev_amps_raw)), ev_max_amps)
+    # Default: 3-phase. Dynamically step down if not enough PV.
+    #
+    # Ladder: 3-fas 10A (6.9kW) → 3-fas 8A → 3-fas 6A (4.1kW)
+    #         → 1-fas 6A (1.4kW) → stop (0)
+    #
+    # Constraint: grid import MUST stay under Ellevio tak (LAG 1 absolute)
+    # grid_import = consumption + ev_kw - pv_now
+    # max_ev_kw = pv_now - consumption + tak_kw (where tak is ~2.0 daytime)
 
-    # If calculated amps < min_amps but export IS coming:
-    # Start at min_amps anyway — Grid Guard protects Ellevio tak
-    # Battery charging rate auto-adjusts (GoodWe peak shaving)
-    # It's better to use some grid import now than export later
-    if ev_amps < ev_min_amps:
-        ev_amps = ev_min_amps  # Force minimum — export prevention
+    # Current PV available for EV (after house consumption)
+    max(0, sum(surplus_per_hour) / max(1, n))
+    # Max grid import allowed (Ellevio tak)
+    tak_kw = 2.0  # TODO: from config
+
+    # How much EV power can we add without breaking tak?
+    # grid_with_ev = consumption - pv + ev_kw
+    # constraint: grid_with_ev <= tak_kw
+    # → ev_kw <= pv - consumption + tak_kw = surplus + tak_kw
+    avg_consumption = sum(hourly_consumption_kw[:n]) / max(1, n)
+    avg_pv = sum(adjusted_pv[:n]) / max(1, n)
+    max_ev_kw = max(0, avg_pv - avg_consumption + tak_kw)
+
+    # Try 3-phase first (default), fall back to 1-phase
+    ev_3phase_kw = ev_min_amps * voltage * ev_phase_count / 1000  # 4.14kW
+    ev_1phase_kw = ev_min_amps * voltage / 1000  # 1.38kW
+
+    if max_ev_kw >= ev_3phase_kw:
+        # 3-phase fits within tak
+        phase_mode = "3_phase"
+        ev_amps_raw = max_ev_kw * 1000 / (voltage * ev_phase_count)
+        ev_amps = min(max(ev_min_amps, math.ceil(ev_amps_raw)), ev_max_amps)
+    elif max_ev_kw >= ev_1phase_kw:
+        # 1-phase fits — lower power but still charges
+        phase_mode = "1_phase"
+        ev_amps_raw = max_ev_kw * 1000 / voltage
+        ev_amps = min(max(ev_min_amps, math.ceil(ev_amps_raw)), ev_max_amps)
+    else:
+        # Not even 1-phase fits without breaking tak
+        return SolarAllocationResult(
+            ev_can_charge=False,
+            ev_recommended_amps=0,
+            ev_phase_mode="3_phase",
+            battery_hours_to_full=battery_hours_to_full,
+            surplus_after_battery_kwh=surplus_after_battery_kwh,
+            reason=(
+                f"Export risk {export_kwh:.1f} kWh but EV "
+                f"min 1-fas {ev_1phase_kw:.1f}kW > headroom "
+                f"{max_ev_kw:.1f}kW — would break tak"
+            ),
+        )
 
     return SolarAllocationResult(
         ev_can_charge=True,
         ev_recommended_amps=ev_amps,
+        ev_phase_mode=phase_mode,
         battery_hours_to_full=battery_hours_to_full,
         surplus_after_battery_kwh=surplus_after_battery_kwh,
-        reason=ev_reason,
+        reason=f"{ev_reason} — {phase_mode} {ev_amps}A",
     )
 
 
