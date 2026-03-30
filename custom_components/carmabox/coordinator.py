@@ -1212,6 +1212,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         ps_limit,
                     )
                     self._price_discharge_active = True
+                    self._last_battery_action = "discharge"
                 elif getattr(self, "_price_discharge_active", False) and not discharge_decision.get(
                     "discharge"
                 ):
@@ -1219,6 +1220,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     for adapter in self.inverter_adapters:
                         await adapter.set_ems_mode("charge_pv")
                     self._price_discharge_active = False
+                    self._last_battery_action = "charge_pv"
         except Exception:
             _LOGGER.debug("Price-discharge check failed", exc_info=True)
 

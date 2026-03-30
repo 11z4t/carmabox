@@ -38,7 +38,7 @@ for _mod in [
 
 # NC-12: Feature flag — use bridge (V2) or legacy coordinator
 # Shadow mode: bridge runs V2 cycle + logs decisions, but does NOT execute commands
-_USE_BRIDGE = True  # Set True to activate bridge, False for legacy
+_USE_BRIDGE = False  # Legacy until bridge has ALL features (price discharge, EV timing, EMS)
 
 if _USE_BRIDGE:
     from .coordinator_bridge import CoordinatorBridge as CarmaboxCoordinator
