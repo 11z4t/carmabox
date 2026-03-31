@@ -19,6 +19,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+# EXP-07: Cold-lock discharge blocking (LFP safety)
+COLD_DISCHARGE_BLOCK_C = 0.0  # Below 0°C: block discharge entirely
+COLD_DISCHARGE_DERATING_C = 4.0  # 0-4°C: reduce discharge by 50%
+
 
 @dataclass
 class BatteryInfo:
@@ -144,6 +148,13 @@ def calculate_proportional_discharge(
         watts = int(total_watts * share)
         # Clamp to per-battery max
         watts = min(watts, int(bat.max_discharge_w))
+
+        # EXP-07: Cold-lock discharge blocking (LFP safety)
+        if bat.cell_temp_c < COLD_DISCHARGE_BLOCK_C:
+            watts = 0
+        elif bat.cell_temp_c < COLD_DISCHARGE_DERATING_C:
+            watts = int(watts * 0.5)
+
         actual_total += watts
 
         allocations.append(

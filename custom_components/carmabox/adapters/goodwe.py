@@ -26,6 +26,7 @@ _RETRY_DELAY_S = 5
 _MODBUS_MIN_INTERVAL_S = 0.1  # Min 100ms between Modbus calls
 _ADAPTER_RATE_LIMIT_S = 2.0  # MANIFEST 10.2: max 1 call per 2s per adapter
 _MAX_PEAK_SHAVING_W = 10000  # Safety clamp: inverter rated power
+_VERIFY_DELAY_S = 1.0  # EXP-08: Wait before read-back verification
 
 
 class GoodWeAdapter(InverterAdapter):
@@ -239,13 +240,19 @@ class GoodWeAdapter(InverterAdapter):
         }
     )
 
-    async def set_ems_mode(self, mode: str) -> bool:
-        """Set EMS mode (charge_pv, charge_battery, discharge_battery, battery_standby)."""
+    async def set_ems_mode(self, mode: str, verify: bool = False) -> bool:
+        """Set EMS mode with optional read-back verification.
+
+        EXP-08: When verify=True, waits 1s and reads back the mode to confirm
+        the Modbus write was accepted. Retries once on verify failure.
+        Default verify=False for backward compatibility — coordinator should
+        pass verify=True for critical mode changes.
+        """
         if mode not in self.VALID_EMS_MODES:
             _LOGGER.error("GoodWe %s: REJECTED invalid EMS mode '%s'", self.prefix, mode)
             return False
-        _LOGGER.info("GoodWe %s: set EMS → %s", self.prefix, mode)
-        return await self._safe_call(
+        _LOGGER.info("GoodWe %s: set EMS -> %s", self.prefix, mode)
+        ok = await self._safe_call(
             "select",
             "select_option",
             {
@@ -253,6 +260,40 @@ class GoodWeAdapter(InverterAdapter):
                 "option": mode,
             },
         )
+        if not ok:
+            return False
+        # EXP-08: Verify write was accepted
+        if verify:
+            await asyncio.sleep(_VERIFY_DELAY_S)
+            actual = self.ems_mode
+            if actual != mode:
+                _LOGGER.warning(
+                    "GoodWe %s: EMS verify FAILED — wrote '%s', read '%s' — retrying",
+                    self.prefix,
+                    mode,
+                    actual,
+                )
+                # Retry once
+                ok = await self._safe_call(
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": f"select.goodwe_{self.prefix}_ems_mode",
+                        "option": mode,
+                    },
+                )
+                if ok:
+                    await asyncio.sleep(_VERIFY_DELAY_S)
+                    actual = self.ems_mode
+                    if actual != mode:
+                        _LOGGER.error(
+                            "GoodWe %s: EMS verify FAILED after retry — '%s' != '%s'",
+                            self.prefix,
+                            actual,
+                            mode,
+                        )
+                        return False
+        return True
 
     async def set_fast_charging(
         self,

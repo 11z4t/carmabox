@@ -80,7 +80,7 @@ class TestGoodWeAdapter:
     async def test_set_ems_mode(self) -> None:
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
-        await adapter.set_ems_mode("battery_standby")
+        await adapter.set_ems_mode("battery_standby", verify=False)
         hass.services.async_call.assert_called_once_with(
             "select",
             "select_option",
@@ -160,6 +160,49 @@ class TestGoodWeBMSLimits:
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         assert adapter.soh_pct == 100.0
+
+
+class TestGoodWeWriteVerification:
+    """EXP-08: Write verification with read-back."""
+
+    @pytest.mark.asyncio
+    async def test_set_ems_mode_verify_success(self) -> None:
+        """Write + verify succeeds when read-back matches."""
+        hass = _make_hass(("select.goodwe_kontor_ems_mode", "discharge_pv"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_ems_mode("discharge_pv", verify=True)
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_set_ems_mode_no_verify(self) -> None:
+        """verify=False skips read-back."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_ems_mode("charge_pv", verify=False)
+        assert result is True
+        # Only 1 service call (no retry)
+        assert hass.services.async_call.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_set_ems_mode_verify_mismatch_retries(self) -> None:
+        """Read-back mismatch triggers retry."""
+        # State returns wrong mode — verify will fail both times
+        hass = _make_hass(("select.goodwe_kontor_ems_mode", "charge_pv"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_ems_mode("discharge_pv", verify=True)
+        # Returns False because state never matches
+        assert result is False
+        # 2 calls: initial + retry
+        assert hass.services.async_call.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_set_ems_mode_invalid_rejected(self) -> None:
+        """Invalid mode rejected before any write."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        result = await adapter.set_ems_mode("invalid_mode")
+        assert result is False
+        hass.services.async_call.assert_not_called()
 
 
 class TestGoodWePeakShavingLimit:

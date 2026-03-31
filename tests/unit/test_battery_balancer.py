@@ -124,17 +124,18 @@ class TestProportionalDischarge:
         assert all(a.watts == 0 for a in result.allocations)
 
     def test_cold_lock_higher_min(self):
-        """Cold battery → min_soc=20%, less available."""
+        """Cold battery (3C) -> min_soc=20% + EXP-07 50% discharge derating."""
         bats = [
-            _bat("kontor", soc=25, cap_kwh=15.0, cell_temp_c=3.0),  # cold → min=20%
-            _bat("forrad", soc=25, cap_kwh=5.0, cell_temp_c=15.0),  # warm → min=15%
+            _bat("kontor", soc=25, cap_kwh=15.0, cell_temp_c=3.0),  # cold: min=20%, 50% derating
+            _bat("forrad", soc=25, cap_kwh=5.0, cell_temp_c=15.0),  # warm: min=15%
         ]
         result = calculate_proportional_discharge(bats, 1000)
         k = next(a for a in result.allocations if a.id == "kontor")
         f = next(a for a in result.allocations if a.id == "forrad")
-        # kontor: (25-20)/100*15 = 0.75 kWh
-        # forrad: (25-15)/100*5 = 0.5 kWh
-        assert k.watts > f.watts  # kontor has more available
+        # kontor: available but 50% derating at 3C (EXP-07)
+        # forrad: warm, no derating
+        assert k.watts > 0  # kontor still contributes
+        assert f.watts > 0  # forrad contributes
 
     def test_cold_battery_at_cold_min(self):
         """Cold battery at 18% → below cold min 20% → zero."""
@@ -319,7 +320,7 @@ class TestBMSCurrentLimits:
         assert result.total_w == 1500  # Only 1500W possible out of 5000 requested
 
     def test_asymmetric_cold_bms_limit(self) -> None:
-        """Cold kontor (BMS 2800W), warm forrad (8800W) — caps correctly."""
+        """Cold kontor (BMS 2800W), warm forrad (8800W) — caps + EXP-07 derating."""
         bats = [
             _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=3.0, max_discharge_w=2800),
             _bat("forrad", soc=80, cap_kwh=5.0, cell_temp_c=15.0, max_discharge_w=8800),
@@ -329,8 +330,8 @@ class TestBMSCurrentLimits:
         f = next(a for a in result.allocations if a.id == "forrad")
         # kontor cold: min_soc=20%, available = (80-20)/100*15 = 9.0 kWh
         # forrad warm: min_soc=15%, available = (80-15)/100*5 = 3.25 kWh
-        # kontor share = 9.0/12.25 = 73.5% of 4000 = 2938 → capped 2800
-        assert k.watts == 2800
+        # kontor share = 9.0/12.25 = 73.5% of 4000 = 2938 → BMS cap 2800 → EXP-07 50% = 1400
+        assert k.watts == 1400
         assert f.watts > 0
 
 
@@ -362,3 +363,44 @@ class TestSoHDerating:
         )
         # Cold: base = min_soc_cold = 20%, SoH < 80%: +5% → 25%
         assert effective_min_soc(bat) == 25.0
+
+
+class TestColdDischargeBlock:
+    """EXP-07: Cold-lock discharge blocking for LFP safety."""
+
+    def test_below_zero_blocks_discharge(self):
+        """Battery below 0C gets 0W discharge (LFP safety)."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=-5.0),
+            _bat("forrad", soc=80, cap_kwh=5.0, cell_temp_c=15.0),
+        ]
+        result = calculate_proportional_discharge(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 0  # Blocked by cold-lock
+        assert f.watts > 0
+
+    def test_between_0_and_4_reduces_50pct(self):
+        """Battery between 0-4C gets 50% discharge reduction."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=2.0),
+        ]
+        result_cold = calculate_proportional_discharge(bats, 2000)
+        k_cold = result_cold.allocations[0]
+
+        bats_warm = [
+            _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=15.0),
+        ]
+        result_warm = calculate_proportional_discharge(bats_warm, 2000)
+        k_warm = result_warm.allocations[0]
+
+        # Cold battery should get ~50% of what warm battery gets
+        assert k_cold.watts == int(k_warm.watts * 0.5)
+
+    def test_above_4_no_derating(self):
+        """Battery above 4C gets full discharge (no cold derating)."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=5.0),
+        ]
+        result = calculate_proportional_discharge(bats, 2000)
+        assert result.allocations[0].watts == 2000
