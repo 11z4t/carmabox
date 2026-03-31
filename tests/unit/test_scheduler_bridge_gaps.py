@@ -384,11 +384,6 @@ class TestCoordinatorBridgeBatch18:
         """Short PV → padding loop (line 612). zero battery → weighted=bat_soc_1 (line 639)."""
         import asyncio as _asyncio
 
-        from custom_components.carmabox.coordinator_bridge import (
-            NordpoolAdapter,
-            SolcastAdapter,
-        )
-
         bridge = _make_bridge()
         bridge._last_plan_time = 0.0  # type: ignore[union-attr]  # Force plan generation
         bridge._cfg = {"battery_1_kwh": "0", "battery_2_kwh": "0"}  # type: ignore[union-attr]
@@ -402,9 +397,16 @@ class TestCoordinatorBridgeBatch18:
         mock_solcast.tomorrow_hourly_kw = []
         mock_solcast.tomorrow_kwh = 5.0
 
+        # Patch classes in the coordinator_bridge module namespace (avoids __new__ pollution)
         with (
-            patch.object(NordpoolAdapter, "__new__", return_value=mock_nordpool),
-            patch.object(SolcastAdapter, "__new__", return_value=mock_solcast),
+            patch(
+                "custom_components.carmabox.coordinator_bridge.NordpoolAdapter",
+                return_value=mock_nordpool,
+            ),
+            patch(
+                "custom_components.carmabox.coordinator_bridge.SolcastAdapter",
+                return_value=mock_solcast,
+            ),
         ):
             _asyncio.get_event_loop().run_until_complete(
                 bridge._generate_plan()  # type: ignore[union-attr]
@@ -414,13 +416,14 @@ class TestCoordinatorBridgeBatch18:
         """Exception inside _generate_plan → caught, logs (lines 724-725)."""
         import asyncio as _asyncio
 
-        from custom_components.carmabox.coordinator_bridge import NordpoolAdapter
-
         bridge = _make_bridge()
         bridge._last_plan_time = 0.0  # type: ignore[union-attr]
 
         # Make NordpoolAdapter raise → caught by outer except in _generate_plan
-        with patch.object(NordpoolAdapter, "__new__", side_effect=RuntimeError("nordpool fail")):
+        with patch(
+            "custom_components.carmabox.coordinator_bridge.NordpoolAdapter",
+            side_effect=RuntimeError("nordpool fail"),
+        ):
             _asyncio.get_event_loop().run_until_complete(
                 bridge._generate_plan()  # type: ignore[union-attr]
             )
