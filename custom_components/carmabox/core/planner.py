@@ -242,6 +242,185 @@ def plan_solar_allocation(
 
 
 @dataclass
+class PVSurplusAllocation:
+    """Result of real-time PV surplus allocation.
+
+    Follows priority stack:
+    1. House consumption (always, implicit)
+    2. Appliances (if running — implicit, already consuming)
+    3. EV charging (if home + sol > hus) — BEFORE battery on weekends
+    4. Battery charging (fill to 100% before sunset)
+    5. Controllable consumers (miner, VP, pool, elvärmare)
+    6. Export (NEVER if any above can absorb)
+    """
+
+    surplus_w: float  # Net PV surplus after house (positive = exporting)
+    ev_action: str  # "charge", "hold", "stop"
+    ev_amps: int  # Recommended amps (0 = don't charge)
+    battery_action: str  # "charge", "hold", "discharge"
+    battery_target_w: int  # Charge/discharge watts
+    consumers_action: str  # "activate", "hold", "deactivate"
+    consumers_available_w: float  # Surplus available for consumers after EV+battery
+    will_export: bool  # True if surplus remains after all allocation
+    export_w: float  # Remaining export watts
+    reason: str
+
+
+def allocate_pv_surplus(
+    pv_now_w: float,
+    grid_now_w: float,
+    house_consumption_w: float,
+    battery_soc_pct: float,
+    battery_cap_kwh: float,
+    ev_soc_pct: float,
+    ev_connected: bool,
+    ev_target_pct: float,
+    is_workday: bool,
+    hours_to_sunset: float,
+    hourly_pv_remaining_kw: list[float],
+    pv_confidence: float = 1.0,
+    ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
+    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    voltage: float = 230.0,
+    ellevio_tak_w: float = 2000.0,
+    battery_max_charge_w: float = 5000,
+) -> PVSurplusAllocation:
+    """Real-time PV surplus allocation — called every 30s cycle.
+
+    Implements the user's priority stack:
+    1. House (implicit — already consuming)
+    2. Appliances (implicit — already consuming if running)
+    3. EV (if home + surplus) — BEFORE battery on weekends/when car home
+    4. Battery (fill 100% before sunset)
+    5. Controllable consumers (miner, VP, pool)
+    6. Export (NEVER if consumers can absorb)
+
+    Key insight: On weekends/holidays the car is often home during PV peak.
+    EV charging from PV is FREE. Battery can charge LATER (PV fills both).
+    Workdays: car typically away → PV goes to battery directly.
+    """
+    # Net surplus: positive = exporting, negative = importing
+    surplus_w = pv_now_w - house_consumption_w
+    if surplus_w < 0:
+        surplus_w = 0.0
+
+    # If importing (no surplus) — no allocation possible
+    if pv_now_w < house_consumption_w:
+        return PVSurplusAllocation(
+            surplus_w=0,
+            ev_action="hold",
+            ev_amps=0,
+            battery_action="hold",
+            battery_target_w=0,
+            consumers_action="deactivate",
+            consumers_available_w=0,
+            will_export=False,
+            export_w=0,
+            reason="No PV surplus — house consuming all",
+        )
+
+    remaining_w = surplus_w
+
+    # ── Battery need calculation ─────────────────────────────
+    battery_need_kwh = max(0, (100 - battery_soc_pct) / 100 * battery_cap_kwh)
+    # Can battery fill before sunset from remaining PV?
+    remaining_pv_kwh = sum(hourly_pv_remaining_kw) * pv_confidence
+    battery_fills_from_pv = remaining_pv_kwh >= battery_need_kwh + 1.0  # 1 kWh margin
+
+    # ── EV allocation ────────────────────────────────────────
+    ev_action = "hold"
+    ev_amps = 0
+
+    ev_can_charge = (
+        ev_connected and ev_soc_pct < 100 and ev_soc_pct >= 0  # -1 = unknown
+    )
+
+    if ev_can_charge:
+        # EV charging min power: 3-phase 6A = 4140W
+        ev_min_w = ev_min_amps * voltage * 3
+        ev_max_w = ev_max_amps * voltage * 3
+
+        # KEY DECISION: EV vs Battery priority
+        # Weekend/car home + battery will fill anyway → EV FIRST
+        # Workday/battery won't fill → battery first, EV only from excess
+        ev_priority = (
+            (not is_workday and battery_fills_from_pv)
+            or battery_soc_pct >= 95  # Battery nearly full → EV
+            or battery_need_kwh < 1.0  # Very little battery need → EV
+        )
+
+        if ev_priority and remaining_w >= ev_min_w:
+            # Allocate to EV (capped by headroom and max amps)
+            ev_headroom_w = min(remaining_w, ev_max_w)
+            # Don't exceed Ellevio tak: ev_kw + import < tak
+            ev_headroom_w = min(ev_headroom_w, ellevio_tak_w + surplus_w)
+            ev_amps_raw = ev_headroom_w / (voltage * 3)
+            ev_amps = min(max(ev_min_amps, int(ev_amps_raw)), ev_max_amps)
+            actual_ev_w = ev_amps * voltage * 3
+            remaining_w -= actual_ev_w
+            ev_action = "charge"
+        elif not ev_priority and remaining_w > battery_max_charge_w + ev_min_w:
+            # Battery first, but excess over battery max goes to EV
+            battery_alloc = min(remaining_w, battery_max_charge_w)
+            ev_excess = remaining_w - battery_alloc
+            if ev_excess >= ev_min_w:
+                ev_amps_raw = min(ev_excess, ev_max_w) / (voltage * 3)
+                ev_amps = min(max(ev_min_amps, int(ev_amps_raw)), ev_max_amps)
+                actual_ev_w = ev_amps * voltage * 3
+                remaining_w -= actual_ev_w
+                ev_action = "charge"
+
+    # ── Battery allocation ───────────────────────────────────
+    battery_action = "hold"
+    battery_target_w = 0
+
+    if battery_soc_pct < 100 and remaining_w > 300:
+        # Charge battery from remaining surplus
+        charge_w = min(int(remaining_w), battery_max_charge_w)
+        battery_action = "charge"
+        battery_target_w = charge_w
+        remaining_w -= charge_w
+
+    # ── Controllable consumers ───────────────────────────────
+    consumers_action = "hold"
+    consumers_available_w = 0
+
+    if remaining_w > 200:
+        consumers_action = "activate"
+        consumers_available_w = remaining_w
+        remaining_w = 0  # Consumers absorb everything
+
+    # ── Export check ─────────────────────────────────────────
+    will_export = remaining_w > 50
+    export_w = max(0, remaining_w)
+
+    # Build reason
+    parts = []
+    if ev_action == "charge":
+        parts.append(f"EV {ev_amps}A")
+    if battery_action == "charge":
+        parts.append(f"Bat {battery_target_w}W")
+    if consumers_action == "activate":
+        parts.append(f"Consumers {consumers_available_w:.0f}W")
+    if will_export:
+        parts.append(f"Export {export_w:.0f}W")
+    reason = f"PV {pv_now_w:.0f}W surplus {surplus_w:.0f}W -> " + " + ".join(parts or ["idle"])
+
+    return PVSurplusAllocation(
+        surplus_w=surplus_w,
+        ev_action=ev_action,
+        ev_amps=ev_amps,
+        battery_action=battery_action,
+        battery_target_w=battery_target_w,
+        consumers_action=consumers_action,
+        consumers_available_w=consumers_available_w,
+        will_export=will_export,
+        export_w=export_w,
+        reason=reason,
+    )
+
+
+@dataclass
 class PlannerConfig:
     """Planner configuration."""
 
