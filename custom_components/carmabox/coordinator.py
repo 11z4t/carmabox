@@ -437,6 +437,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Features only active if licensed
         config_executor = bool(self._cfg.get("executor_enabled", False))
+        # EXP-DEPLOY: Also check HA input_boolean for runtime toggle
+        ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
+        if ha_toggle and ha_toggle.state == "on":
+            config_executor = True
         self.executor_enabled = config_executor and self._has_feature("executor")
         if config_executor and not self._has_feature("executor"):
             _LOGGER.warning(
@@ -536,8 +540,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._license_features = data.get("features", [])
                     self._license_valid_until = data.get("valid_until", "")
 
-                    # Update executor based on new license
+                    # Update executor based on new license + HA toggle
                     config_exec = bool(self._cfg.get("executor_enabled", False))
+                    ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
+                    if ha_toggle and ha_toggle.state == "on":
+                        config_exec = True
                     self.executor_enabled = config_exec and self._has_feature("executor")
 
                     _LOGGER.info(
