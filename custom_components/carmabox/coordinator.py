@@ -81,6 +81,7 @@ from .const import (
     DEFAULT_WATCHDOG_EXPORT_W,
     DEFAULT_WATCHDOG_MIN_SOC_PCT,
     EV_RAMP_INTERVAL_S,
+    EV_RAMP_STEPS,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
@@ -4592,13 +4593,26 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         await self._async_save_runtime()
 
     async def _cmd_ev_adjust(self, amps: int) -> None:
-        """Adjust EV amps without enable/disable."""
+        """Adjust EV amps without enable/disable.
+
+        EXP-04: Ramp UP follows EV_RAMP_STEPS (6→8→10) one step at a time.
+        Ramp DOWN goes directly to target (safe, no surge risk).
+        """
         if not self.ev_adapter or not self._ev_enabled:
             return
         amps = max(DEFAULT_EV_MIN_AMPS, min(amps, DEFAULT_EV_MAX_AMPS))
         if amps == self._ev_current_amps:
             return
-        _LOGGER.info("CARMA: EV adjust %dA → %dA", self._ev_current_amps, amps)
+        # EXP-04: Ramp UP = one step at a time per EV_RAMP_STEPS
+        if amps > self._ev_current_amps:
+            next_step = amps  # default: direct
+            for step in EV_RAMP_STEPS:
+                if step > self._ev_current_amps:
+                    next_step = min(step, amps)
+                    break
+            amps = next_step
+        # Ramp DOWN = direct to target (no surge risk)
+        _LOGGER.info("CARMA: EV adjust %dA -> %dA", self._ev_current_amps, amps)
         ok = await self.ev_adapter.set_current(amps)
         # FIX D: Enforce dynamic_charger_limit
         with contextlib.suppress(Exception):
