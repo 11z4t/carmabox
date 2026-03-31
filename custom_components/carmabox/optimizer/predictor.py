@@ -139,6 +139,17 @@ class ConsumptionPredictor:
                 return fallback_profile[start_hour:] + fallback_profile[:start_hour]
             return [2.0] * 24
 
+        # ML-00: Trained — predict each hour using weighted historical averages
+        fallback_kw = 2.0
+        if fallback_profile and len(fallback_profile) >= 24:
+            fallback_kw = sum(fallback_profile) / len(fallback_profile)
+        result: list[float] = []
+        for i in range(24):
+            h = (start_hour + i) % 24
+            d = (weekday + (1 if start_hour + i >= 24 else 0)) % 7
+            result.append(self.predict_hour(d, h, month, fallback_kw))
+        return result
+
     # ── Battery Economics (IT-2378) ──────────────────────────────
 
     def add_idle_penalty(
