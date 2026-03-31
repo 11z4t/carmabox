@@ -9,6 +9,12 @@ PLAT-1140: Step 1 of coordinator refactor.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
+
+from .coordinator import BatteryCommand  # noqa: F401 — re-exported for mixin methods
+
+if TYPE_CHECKING:
+    from .optimizer.models import CarmaboxState  # noqa: F401 — needed by mixin methods
 
 _LOGGER = logging.getLogger(__name__)
 
