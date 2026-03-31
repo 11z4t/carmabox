@@ -1389,108 +1389,108 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         elif cmd.ev_action == "stop" and self._ev_enabled:
             await self._cmd_ev_stop()
 
-        # ── PV Solar Allocation — EV from surplus if battery can still fill ──
-        if (
-            not is_night
-            and not self._night_ev_active
-            and ev_connected
-            and state.pv_power_w > 500
-            and state.total_battery_soc < 99
-        ):
+        # ── EXP-12: Real-time PV Surplus Allocation ──────────────────
+        # Priority: House > EV (if home) > Battery > Consumers > Export (NEVER)
+        if not is_night and not self._night_ev_active and state.pv_power_w > 200:
             try:
-                from .core.planner import plan_solar_allocation_simple as plan_solar_allocation
+                from .core.planner import allocate_pv_surplus
 
-                # Get Solcast hourly forecast
+                # Get Solcast remaining hourly forecast
                 solcast_today = self.hass.states.get("sensor.solcast_pv_forecast_forecast_today")
-                hourly_pv: list[float] = []
+                hourly_pv_remaining: list[float] = []
                 if solcast_today:
                     detail = solcast_today.attributes.get("detailedForecast", [])
-                    # Each entry is 30min → pair into hourly
                     for j in range(0, len(detail), 2):
                         kw = detail[j].get("pv_estimate", 0) if isinstance(detail[j], dict) else 0
-                        hourly_pv.append(float(kw))
+                        hourly_pv_remaining.append(float(kw))
+                if len(hourly_pv_remaining) > hour:
+                    hourly_pv_remaining = hourly_pv_remaining[hour:]
 
-                if len(hourly_pv) > hour:
-                    hourly_pv = hourly_pv[hour:]  # From current hour
+                # Tempest PV confidence: falling pressure = less trust
+                pv_conf = 1.0
+                if self.weather_adapter:
+                    try:
+                        pressure = self.weather_adapter.pressure_mbar
+                        if pressure > 0:
+                            # Rising pressure = high confidence, falling = low
+                            pv_conf = min(1.2, max(0.6, (pressure - 990) / 30))
+                    except Exception:
+                        pass
 
-                hourly_load = [2.5] * len(hourly_pv)  # Baseload estimate
-                ev_phase = int(opts.get("ev_phase_count", 3))
+                # Weekend/workday detection
+                is_workday = now.weekday() < 5  # Mon-Fri
 
-                alloc = plan_solar_allocation(
+                # Sunset hour estimate (March-Sep: ~19-21, Oct-Feb: ~15-17)
+                sunset_h = 19 if now.month in (3, 4, 5, 6, 7, 8, 9) else 16
+                hours_to_sunset = max(0, sunset_h - hour)
+
+                # BMS max charge rate
+                bat_max_charge = 5000
+                if self.inverter_adapters:
+                    bat_max_charge = sum(a.max_charge_w or 5000 for a in self.inverter_adapters)
+
+                alloc = allocate_pv_surplus(
+                    pv_now_w=state.pv_power_w,
+                    grid_now_w=state.grid_power_w,
+                    house_consumption_w=max(500, state.grid_power_w + state.pv_power_w),
                     battery_soc_pct=state.total_battery_soc,
                     battery_cap_kwh=float(opts.get("battery_1_kwh", 15))
                     + float(opts.get("battery_2_kwh", 5)),
-                    ev_soc_pct=float(ev_soc) if ev_soc >= 0 else 100,
+                    ev_soc_pct=float(ev_soc) if ev_soc >= 0 else -1,
+                    ev_connected=ev_connected,
                     ev_target_pct=float(opts.get("ev_target_soc", 75)),
-                    ev_cap_kwh=float(opts.get("ev_capacity_kwh", 92)),
-                    hourly_pv_kw=hourly_pv,
-                    hourly_consumption_kw=hourly_load,
-                    current_hour=hour,
-                    ev_phase_count=ev_phase,
+                    is_workday=is_workday,
+                    hours_to_sunset=hours_to_sunset,
+                    hourly_pv_remaining_kw=hourly_pv_remaining,
+                    pv_confidence=pv_conf,
+                    battery_max_charge_w=bat_max_charge,
                 )
 
-                # Save allocation data for dashboard sensor
+                # Save for dashboard
                 self._pv_allocation = {
                     "timestamp": now.isoformat(),
-                    "ev_can_charge": alloc.ev_can_charge,
-                    "ev_amps": alloc.ev_recommended_amps,
-                    "battery_hours_to_full": round(alloc.battery_hours_to_full, 1),
-                    "export_risk_kwh": round(alloc.surplus_after_battery_kwh, 1),
+                    "ev_action": alloc.ev_action,
+                    "ev_amps": alloc.ev_amps,
+                    "battery_action": alloc.battery_action,
+                    "battery_target_w": alloc.battery_target_w,
+                    "consumers_action": alloc.consumers_action,
+                    "surplus_w": round(alloc.surplus_w),
+                    "will_export": alloc.will_export,
                     "reason": alloc.reason,
-                    "battery_soc": round(state.total_battery_soc, 0),
-                    "ev_connected": ev_connected,
-                    "hourly_plan": [],
+                    "is_workday": is_workday,
+                    "pv_confidence": round(pv_conf, 2),
                 }
-                # Build per-hour allocation table
-                ev_kw = (
-                    alloc.ev_recommended_amps * 230 * ev_phase / 1000 if alloc.ev_can_charge else 0
-                )
-                bat_full_h = (
-                    int(alloc.battery_hours_to_full) if alloc.battery_hours_to_full < 99 else 99
-                )
-                for h_idx in range(min(len(hourly_pv), 8)):
-                    abs_h = (hour + h_idx) % 24
-                    pv_h = hourly_pv[h_idx]
-                    load_h = hourly_load[h_idx] if h_idx < len(hourly_load) else 2.5
-                    surplus_h = max(0, pv_h - load_h)
-                    # After battery full → all surplus to EV
-                    bat_h = min(surplus_h, surplus_h if h_idx < bat_full_h else 0)
-                    ev_h = ev_kw if alloc.ev_can_charge and h_idx < bat_full_h + 3 else 0
-                    if h_idx >= bat_full_h:
-                        ev_h = min(surplus_h, ev_kw) if alloc.ev_can_charge else 0
-                        bat_h = 0
-                    export_h = max(0, surplus_h - bat_h - ev_h)
-                    grid_h = max(0, load_h + ev_h - pv_h)
-                    self._pv_allocation["hourly_plan"].append(
-                        {
-                            "hour": abs_h,
-                            "pv": round(pv_h, 1),
-                            "hus": round(load_h, 1),
-                            "bat": round(bat_h, 1),
-                            "ev": round(ev_h, 1),
-                            "export": round(export_h, 1),
-                            "grid": round(grid_h, 1),
-                        }
-                    )
 
-                if alloc.ev_can_charge and alloc.ev_recommended_amps > 0:
+                # Execute EV decision
+                if alloc.ev_action == "charge" and alloc.ev_amps >= DEFAULT_EV_MIN_AMPS:
                     if not self._ev_enabled:
                         _LOGGER.info(
-                            "SOLAR-EV: PV surplus → start EV %dA " "(margin %.1f kWh, bat %.0f%%)",
-                            alloc.ev_recommended_amps,
-                            alloc.surplus_after_battery_kwh,
+                            "SOLAR-EV: start %dA (surplus %.0fW, bat %.0f%%)",
+                            alloc.ev_amps,
+                            alloc.surplus_w,
                             state.total_battery_soc,
                         )
-                        await self._cmd_ev_start(alloc.ev_recommended_amps)
-                    elif alloc.ev_recommended_amps != self._ev_current_amps:
-                        await self._cmd_ev_adjust(alloc.ev_recommended_amps)
-                elif self._ev_enabled and not self._night_ev_active:
-                    # No margin → stop solar EV
-                    _LOGGER.info(
-                        "SOLAR-EV: Margin gone → stop EV " "(%.1f kWh surplus)",
-                        alloc.surplus_after_battery_kwh,
-                    )
+                        await self._cmd_ev_start(alloc.ev_amps)
+                    elif alloc.ev_amps != self._ev_current_amps:
+                        await self._cmd_ev_adjust(alloc.ev_amps)
+                elif alloc.ev_action != "charge" and self._ev_enabled and not self._night_ev_active:
+                    _LOGGER.info("SOLAR-EV: stop (reason: %s)", alloc.reason)
                     await self._cmd_ev_stop()
+
+                # EXP-10: Check for unexpected disconnect
+                if self.ev_adapter:
+                    disc_alert = self.ev_adapter.check_unexpected_disconnect(
+                        was_charging=self._ev_enabled and self._ev_current_amps > 0
+                    )
+                    if disc_alert:
+                        _LOGGER.warning("EV-ALERT: %s", disc_alert)
+
+                # EXP-05: Auto-recover from blocked states
+                if self.ev_adapter and ev_connected and self.ev_adapter.needs_recovery:
+                    recovery = await self.ev_adapter.try_recover()
+                    if recovery:
+                        _LOGGER.warning("EV-RECOVERY: %s", recovery)
+
             except Exception:
                 _LOGGER.debug("SOLAR-EV: allocation failed", exc_info=True)
 
