@@ -4413,7 +4413,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_target = self._calculate_ev_target()
             if self._ev_tonight_soc < ev_target:
                 need_kwh = (ev_target - self._ev_tonight_soc) / 100 * ev_capacity
-                hours_6a = need_kwh / (6 * 230 * 3 / 1000)
+                hours_6a = need_kwh / (DEFAULT_EV_MIN_AMPS * 3 * 230 / 1000)
                 hours_8a = need_kwh / (8 * 230 * 3 / 1000)
                 _LOGGER.info(
                     "CARMA EV plan: SoC %.0f%% → tonight ~%.0f%% → target %.0f%% "
@@ -4461,7 +4461,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 if hours_left < 0:
                     hours_left += 24
-                ev_kw_rate = 4.14  # 6A 3-fas
+                ev_kw_rate = DEFAULT_EV_MIN_AMPS * 3 * 230 / 1000  # MIN_AMPS 3-fas
                 ev_capacity = float(self._cfg.get("ev_capacity_kwh", 87.5))
                 ev_need_kwh = max(0, (ev_target - ev_soc) / 100 * ev_capacity)
                 ev_hours_needed = ev_need_kwh / ev_kw_rate if ev_kw_rate > 0 else 999
@@ -5690,10 +5690,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     source_breach_hour=breach_hour,
                     action="reduce_ev",
                     target_hour=target_h,
-                    param="ev_amps=6",
+                    param=f"ev_amps={DEFAULT_EV_MIN_AMPS}",
                     reason=(
                         f"EV {state.ev_power_w:.0f}W orsakade breach"
-                        f" kl {breach_hour:02d} — sänk till 6A imorgon"
+                        f" kl {breach_hour:02d} — sänk till {DEFAULT_EV_MIN_AMPS}A imorgon"
                     ),
                 )
             )
