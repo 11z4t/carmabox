@@ -22,6 +22,7 @@ from ..const import (
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PEAK_TOP_N,
+    GRID_LIMIT_DEFAULT_KW,
     P10_DISCHARGE_CONSERVATIVE_KW,
     P10_DISCHARGE_MODERATE_KW,
     P10_DISCHARGE_NORMAL_KW,
@@ -200,7 +201,7 @@ def plan_solar_allocation(
     # Current PV available for EV (after house consumption)
     max(0, sum(surplus_per_hour) / max(1, n))
     # Max grid import allowed (Ellevio tak)
-    tak_kw = 2.0  # TODO: from config
+    tak_kw = GRID_LIMIT_DEFAULT_KW
 
     # How much EV power can we add without breaking tak?
     # grid_with_ev = consumption - pv + ev_kw

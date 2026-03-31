@@ -58,14 +58,15 @@ class TestCoordinatorInit:
     """Lines 161-391: __init__ branch coverage."""
 
     def test_basic_init_no_ev_no_inverter(self) -> None:
-        """Default config → coordinator initializes without EV or inverter adapters."""
+        """Default config → coordinator initializes with EV adapter (default True)."""
         hass = _make_hass()
         entry = _make_entry()
         coord = CarmaboxCoordinator(hass, entry)
 
         assert coord._cfg == {}
         assert coord.plan == []
-        assert coord.ev_adapter is None
+        # ev_enabled defaults True → adapter created with default prefix
+        assert coord.ev_adapter is not None
         assert coord.inverter_adapters == []
 
     def test_ev_soc_seeded_from_helper(self) -> None:

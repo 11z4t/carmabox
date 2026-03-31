@@ -296,7 +296,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── EV adapter ────────────────────────────────────────
         self.ev_adapter: EVAdapter | None = None
-        if self._cfg.get("ev_enabled", False):
+        if self._cfg.get("ev_enabled", True):
             ev_prefix = self._cfg.get("ev_prefix", "easee_home_12840")
             ev_device_id = self._cfg.get("ev_device_id", "")
             ev_charger_id = self._cfg.get("ev_charger_id", "")
@@ -440,7 +440,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ]
 
         # Features only active if licensed
-        config_executor = bool(self._cfg.get("executor_enabled", False))
+        config_executor = bool(self._cfg.get("executor_enabled", True))
         # EXP-DEPLOY: Also check HA input_boolean for runtime toggle
         ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
         if ha_toggle and ha_toggle.state == "on":
@@ -547,7 +547,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._license_valid_until = data.get("valid_until", "")
 
                     # Update executor based on new license + HA toggle
-                    config_exec = bool(self._cfg.get("executor_enabled", False))
+                    config_exec = bool(self._cfg.get("executor_enabled", True))
                     ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
                     if ha_toggle and ha_toggle.state == "on":
                         config_exec = True

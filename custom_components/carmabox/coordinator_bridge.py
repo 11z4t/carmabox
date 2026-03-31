@@ -387,7 +387,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
     # ── Command execution ──────────────────────────────────────
 
-    async def _execute_battery_commands(self, commands: list[dict]) -> None:
+    async def _execute_battery_commands(self, commands: list[dict[str, Any]]) -> None:
         """Execute battery commands from CycleResult via GoodWeAdapters."""
         for cmd in commands:
             bat_id: int = cmd.get("id", 0)
@@ -447,7 +447,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         bat_id,
                     )
 
-    async def _execute_ev_command(self, ev_cmd: dict | None) -> None:
+    async def _execute_ev_command(self, ev_cmd: dict[str, Any] | None) -> None:
         """Execute EV command from CycleResult via EaseeAdapter."""
         if ev_cmd is None or self.ev_adapter is None:
             return
@@ -544,7 +544,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                 if not ok:
                     _LOGGER.error("CROSSCHARGE FIX: failed set ems_power_limit=0 on adapter %d", i)
 
-    async def _execute_surplus_actions(self, actions: list[dict]) -> None:
+    async def _execute_surplus_actions(self, actions: list[dict[str, Any]]) -> None:
         """Execute surplus chain actions via HA service calls."""
         for action in actions:
             action_id: str = action.get("id", "")

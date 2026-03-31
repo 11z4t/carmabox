@@ -295,3 +295,6 @@ DEFAULT_SOLAR_OK_KWH = 20.0  # 20-30 = OK, below 20 = bad
 DEFAULT_EV_SOC_MIN_TARGET = 75.0  # Bad sun = conservative
 DEFAULT_EV_SOC_MAX_TARGET = 100.0  # Good sun or bad forecast ahead = charge full
 DEFAULT_EV_SOC_DERATING = 10.0  # Subtract from last known SoC (conservative)
+
+# Ellevio grid import cap — default used when not configured via opts
+GRID_LIMIT_DEFAULT_KW = 2.0  # kW; typical Ellevio daytime tak (LAG 1)

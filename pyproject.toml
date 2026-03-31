@@ -26,9 +26,6 @@ ignore = ["ANN401"]
 python_version = "3.12"
 strict = true
 
-[[tool.mypy.overrides]]
-module = "custom_components.carmabox.*"
-ignore_errors = true
 
 [tool.coverage.run]
 source = ["custom_components/carmabox"]
