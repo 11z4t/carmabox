@@ -16,7 +16,7 @@ def _make_trained_predictor(consumption_kw: float = 2.0) -> ConsumptionPredictor
     p = ConsumptionPredictor()
     for wd in range(7):
         for h in range(24):
-            for _ in range(2):  # 2x = 336 samples > 168 minimum
+            for _ in range(2):  # 2x = 336 samples > 24 minimum
                 p.add_sample(HourSample(weekday=wd, hour=h, month=9, consumption_kw=consumption_kw))
     return p
 
@@ -43,7 +43,7 @@ class TestConsumptionPredictorInit:
         assert p.is_trained is False
 
     def test_min_training_samples_constant(self) -> None:
-        assert MIN_TRAINING_SAMPLES == 168  # 7 days x 24 hours
+        assert MIN_TRAINING_SAMPLES == 24  # 1 day x 24 hours
 
 
 class TestAddSample:

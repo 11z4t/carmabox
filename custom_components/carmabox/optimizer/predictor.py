@@ -22,7 +22,7 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 # Minimum samples before prediction is trusted
-MIN_TRAINING_SAMPLES = 168  # 7 days x 24 hours
+MIN_TRAINING_SAMPLES = 24  # 1 day x 24 hours
 
 
 @dataclass
