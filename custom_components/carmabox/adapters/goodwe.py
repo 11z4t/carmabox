@@ -109,7 +109,8 @@ class GoodWeAdapter(InverterAdapter):
 
             for attempt in range(2):
                 try:
-                    await self.hass.services.async_call(domain, service, data)
+                    async with asyncio.timeout(30):  # 30s max per Modbus call
+                        await self.hass.services.async_call(domain, service, data)
                     self._last_call_time = time.monotonic()
                     # Min delay before next Modbus call
                     await asyncio.sleep(_MODBUS_MIN_INTERVAL_S)

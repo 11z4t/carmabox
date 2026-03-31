@@ -307,19 +307,19 @@ def _execute_idle(
     cfg: ExecutorConfig,
 ) -> ExecutorCommand:
     """Execute idle — but reactively discharge if grid over target."""
-    grid_kw = max(0, state.grid_import_w) / 1000
-    weight = state.ellevio_weight
-    weighted_kw = grid_kw * weight
+    grid_w = max(0, state.grid_import_w)
+    grid_kw = grid_w / 1000
+    target_w = state.target_kw * 1000
 
-    if weighted_kw > state.target_kw * cfg.reactive_discharge_margin:
-        # Grid over target — reactive discharge
-        need_w = int((weighted_kw - state.target_kw) / weight * 1000) if weight > 0 else 0
+    if grid_w > target_w * cfg.reactive_discharge_margin:
+        # Grid over target — discharge HELA överskottet (grid NER till target)
+        need_w = int(grid_w - target_w)
         return ExecutorCommand(
             battery_action="discharge",
             battery_discharge_w=need_w,
             ev_action="none",
             ev_amps=0,
-            reason=f"Idle men grid {grid_kw:.1f} kW > target → reaktiv urladdning {need_w}W",
+            reason=f"Idle men grid {grid_kw:.1f} kW > target → urladdning {need_w}W",
             plan_followed=False,
             deviation_pct=100,
         )
@@ -352,17 +352,17 @@ def _pv_or_standby(
             deviation_pct=0,
         )
     # Reactive discharge even without plan — LAG 1 trumps
-    grid_kw = max(0, state.grid_import_w) / 1000
-    weight = state.ellevio_weight
-    weighted_kw = grid_kw * weight
-    if weighted_kw > state.target_kw * cfg.reactive_discharge_margin:
-        need_w = int((weighted_kw - state.target_kw) / weight * 1000) if weight > 0 else 0
+    grid_w = max(0, state.grid_import_w)
+    grid_kw = grid_w / 1000
+    target_w = state.target_kw * 1000
+    if grid_w > target_w * cfg.reactive_discharge_margin:
+        need_w = int(grid_w - target_w)
         return ExecutorCommand(
             battery_action="discharge",
             battery_discharge_w=need_w,
             ev_action="none",
             ev_amps=0,
-            reason=f"Ingen plan men grid {grid_kw:.1f} kW > target → reaktiv urladdning {need_w}W",
+            reason=f"Ingen plan men grid {grid_kw:.1f} kW > target → urladdning {need_w}W",
             plan_followed=False,
             deviation_pct=100,
         )

@@ -36,7 +36,6 @@ from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
-    UpdateFailed,
 )
 
 from .adapters.easee import EaseeAdapter
@@ -1177,6 +1176,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             discharge_w=cmd.battery_discharge_w,
         )
 
+        # Discharge drift-guard: detect when battery doesn't deliver
+        self._check_discharge_drift(state, cmd)
+
         # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
         is_night = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
         # Ensure Easee initialized EVERY cycle when EV plugged
@@ -2026,6 +2028,34 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _async_update_data(self) -> CarmaboxState:
         """Fetch data, run optimizer, execute plan."""
         try:
+            async with asyncio.timeout(120):  # 120s watchdog — prevents hanging forever
+                return await self._async_update_data_inner()
+        except TimeoutError:
+            self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            _LOGGER.error(
+                "CARMA Box: update cycle TIMEOUT after 120s (%d consecutive) — Modbus/service hung",
+                self._consecutive_errors,
+            )
+            return getattr(self, "data", None) or CarmaboxState()
+        except Exception as err:
+            self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            _LOGGER.error(
+                "CARMA Box update failed (%d consecutive): %s",
+                self._consecutive_errors,
+                err,
+                exc_info=True,
+            )
+            # ALDRIG raise UpdateFailed — returnera degraded state, retry nästa cykel
+            if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
+                _LOGGER.error(
+                    "CARMA Box: %d consecutive failures — DEGRADED but CONTINUING",
+                    self._consecutive_errors,
+                )
+            return getattr(self, "data", None) or CarmaboxState()
+
+    async def _async_update_data_inner(self) -> CarmaboxState:
+        """Inner update — wrapped by timeout in _async_update_data."""
+        try:
             now = datetime.now()
 
             # EXP-DEPLOY: Runtime executor toggle check (every cycle)
@@ -2260,13 +2290,59 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 exc_info=True,
             )
             # Degraded mode: return last known state instead of crashing
-            # Only raise UpdateFailed after 10 consecutive errors (5 min)
-            if self._consecutive_errors >= 10:
-                _LOGGER.error("CARMA Box: 10 consecutive failures — marking unavailable")
-                raise UpdateFailed(f"Update failed: {err}") from err
-            # Return last state — sensors stay available, decisions continue
+            # ALDRIG raise UpdateFailed — det stoppar coordinatorn PERMANENT.
+            # Returnera alltid last known state och försök igen nästa cykel.
+            if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
+                _LOGGER.error(
+                    "CARMA Box: %d consecutive failures — DEGRADED but CONTINUING",
+                    self._consecutive_errors,
+                )
             _LOGGER.warning("CARMA Box: degraded mode — using last known state")
             return getattr(self, "data", None) or CarmaboxState()
+
+    def _check_discharge_drift(self, state: CarmaboxState, cmd: Any) -> None:
+        """Detect when battery doesn't deliver expected discharge.
+
+        If grid stays above target despite discharge command for 3+ cycles
+        (90s), log P1 alert. Grid ALDRIG over target without detection.
+        """
+        if not hasattr(cmd, "battery_action") or cmd.battery_action != "discharge":
+            self._drift_count = 0
+            return
+        if cmd.battery_discharge_w < 100:
+            self._drift_count = 0
+            return
+
+        bat_power_1 = max(0, state.battery_power_1)  # positive = discharge
+        bat_power_2 = max(0, state.battery_power_2)
+        actual_discharge = bat_power_1 + bat_power_2
+        expected = cmd.battery_discharge_w
+        grid_w = max(0, state.grid_power_w)
+        target_w = self.target_kw * 1000
+
+        # Grid fortfarande över target OCH discharge < 30% av förväntad
+        if grid_w > target_w * 1.1 and expected > 500 and actual_discharge < expected * 0.3:
+            self._drift_count = getattr(self, "_drift_count", 0) + 1
+            _LOGGER.error(
+                "DISCHARGE DRIFT (%d/3): expected %dW, actual %dW, grid %.0fW > target %.0fW",
+                self._drift_count,
+                expected,
+                int(actual_discharge),
+                grid_w,
+                target_w,
+            )
+            if self._drift_count >= 3:
+                _LOGGER.error("DISCHARGE DRIFT P1: 3 cykler utan förbättring — eskalerar")
+                # Force discharge on all adapters
+                if not hasattr(self, "_drift_tasks"):
+                    self._drift_tasks: list[asyncio.Task[bool]] = []
+                for adapter in self.inverter_adapters:
+                    with contextlib.suppress(Exception):
+                        self._drift_tasks.append(
+                            asyncio.create_task(adapter.set_ems_mode("discharge_pv"))
+                        )
+        else:
+            self._drift_count = 0
 
     def _safe_call(
         self, method_name: str, fn: Callable[..., Any], *args: Any, **kwargs: Any

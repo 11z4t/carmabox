@@ -544,15 +544,17 @@ class TestAsyncUpdateData:
         assert coord._plan_counter == 0
 
     @pytest.mark.asyncio
-    async def test_update_error_raises_update_failed(self) -> None:
+    async def test_update_error_returns_degraded_state(self) -> None:
+        """Errors return degraded state — NEVER raise UpdateFailed (stops coordinator)."""
         coord = _make_coordinator()
-        coord._consecutive_errors = 9  # One more will hit the 10-error threshold
+        coord._consecutive_errors = 9
 
-        with patch.object(coord, "_collect_state", side_effect=RuntimeError("boom")):
-            from homeassistant.helpers.update_coordinator import UpdateFailed
+        with patch.object(coord, "_async_update_data_inner", side_effect=RuntimeError("boom")):
+            result = await coord._async_update_data()
 
-            with pytest.raises(UpdateFailed, match="boom"):
-                await coord._async_update_data()
+        # Should return degraded state, NOT raise UpdateFailed
+        assert result is not None
+        assert coord._consecutive_errors == 10
 
 
 class TestGeneratePlan:
