@@ -3095,11 +3095,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     def _write_plan_display(self, plan: list, start_hour: int) -> None:
         """Write human-readable plan split by day (today/tomorrow/day3)."""
-        # Split plan hours into days
+        # Calculate SoC progressively from ACTUAL current SoC
+        opts = self._cfg
+        bat_kwh = float(opts.get("battery_1_kwh", 15.0)) + float(opts.get("battery_2_kwh", 5.0))
+        efficiency = float(opts.get("battery_efficiency", 0.92))
+        current_soc = getattr(self, "data", None)
+        soc_pct = current_soc.total_battery_soc if current_soc else 50.0
+        soc_kwh = soc_pct / 100 * bat_kwh
+
         days: dict[str, list[str]] = {"today": [], "tomorrow": [], "day3": []}
         for i, hp in enumerate(plan):
             hour = (start_hour + i) % 24
-            # Determine which day this hour belongs to
             hours_from_now = i
             if hours_from_now < (24 - start_hour):
                 day_key = "today"
@@ -3111,21 +3117,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             action_label = {"c": "⚡Ladda", "d": "🔋Urladda", "g": "🔌Nät", "i": "💤"}.get(
                 hp.action, hp.action
             )
-            # Battery power + SoC
-            bat_str = f"{abs(hp.battery_kw):.1f}kW" if abs(hp.battery_kw) > 0.1 else ""
-            soc_str = f"B{hp.battery_soc}%"
-            # EV
-            ev_str = f" EV{hp.ev_kw:.1f}kW→{hp.ev_soc}%" if hp.ev_kw > 0.1 else ""
-            # Price
-            price_str = f"{int(hp.price)}öre"
 
-            # Only show non-idle hours (active actions)
+            # Update SoC based on action
+            if hp.action == "c" and hp.battery_kw > 0:
+                soc_kwh = min(bat_kwh, soc_kwh + hp.battery_kw * efficiency)
+            elif hp.action == "d" and hp.battery_kw < 0:
+                soc_kwh = max(0, soc_kwh + hp.battery_kw / efficiency)
+            soc_pct = soc_kwh / bat_kwh * 100
+
+            bat_str = f"{abs(hp.battery_kw):.1f}kW" if abs(hp.battery_kw) > 0.1 else ""
+            soc_str = f"B{soc_pct:.0f}%"
+            ev_str = f" EV{hp.ev_kw:.1f}kW→{hp.ev_soc}%" if hp.ev_kw > 0.1 else ""
+            price_str = f"{int(hp.price)}öre" if hp.price > 1 else ""
+
             if hp.action == "i" and hp.ev_kw < 0.1:
                 continue
             entry = f"{hour:02d} {action_label}"
             if bat_str:
                 entry += f" {bat_str}"
-            entry += f" {soc_str}{ev_str} {price_str}"
+            entry += f" {soc_str}{ev_str}"
+            if price_str:
+                entry += f" {price_str}"
             days[day_key].append(entry)
 
         # Write each day to its own input_text
