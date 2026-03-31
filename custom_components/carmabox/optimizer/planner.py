@@ -52,6 +52,7 @@ def generate_plan(
     grid_charge_max_soc: float = DEFAULT_GRID_CHARGE_MAX_SOC,
     max_discharge_kw: float = DEFAULT_MAX_DISCHARGE_KW,
     max_grid_charge_kw: float = DEFAULT_MAX_GRID_CHARGE_KW,
+    night_ev_active: bool = False,
 ) -> list[HourPlan]:
     """Generate per-hour plan.
 
@@ -66,6 +67,9 @@ def generate_plan(
     2. If exporting (load < 0): charge battery from PV
     3. If weighted load > target: discharge battery
     4. Otherwise: idle
+
+    night_ev_active: when True, discharge is blocked during night hours (22-06)
+    to preserve battery capacity for EV charging. (PLAN-03)
     """
     # S1: Input validation — clamp num_hours to sane range
     # PLAT-969: plan_horizon controlled by input_number.v6_plan_horizon_h
@@ -127,6 +131,8 @@ def generate_plan(
         action = "i"
         available = soc_kwh - min_soc_kwh
         before_sunrise = i < sunrise_slot
+        # PLAN-03: Block discharge during night when EV is actively charging
+        ev_charging_night = night_ev_active and (abs_h >= 22 or abs_h < 6)
 
         if net < -0.5:
             # P1: Solar surplus — charge battery from PV
@@ -150,8 +156,8 @@ def generate_plan(
                 soc_kwh += charge_kw * battery_efficiency
                 action = "g"
 
-        elif w > 0 and net * w > target_weighted_kw:
-            # P3: Ellevio constraint — discharge
+        elif not ev_charging_night and w > 0 and net * w > target_weighted_kw:
+            # P3: Ellevio constraint — discharge (blocked during night EV)
             need = (net * w - target_weighted_kw) / w
             if available > 0.3:
                 discharge = min(need, available, max_discharge_kw)
@@ -159,8 +165,13 @@ def generate_plan(
                 soc_kwh -= discharge
                 action = "d"
 
-        elif net > 0.3 and available > 0.3 and price >= discharge_price_threshold:
-            # P4: Price arbitrage — discharge to replace grid import
+        elif (
+            not ev_charging_night
+            and net > 0.3
+            and available > 0.3
+            and price >= discharge_price_threshold
+        ):
+            # P4: Price arbitrage — discharge to replace grid import (blocked during night EV)
             discharge = min(net * 0.7, available, max_discharge_kw * 0.6)
             if discharge > 0.2:
                 battery_kw = -discharge
@@ -168,14 +179,14 @@ def generate_plan(
                 action = "d"
 
         elif (
-            before_sunrise
+            not ev_charging_night
+            and before_sunrise
             and available > 0.3
             and net > 0.1
             and soc_kwh > sunrise_target_kwh + 0.5
             and (abs_h >= 22 or abs_h < 8)
         ):
-            # P5: Pre-sunrise drain — ONLY at night (22-08)
-            # Never drain batteries during daytime even if PV is low
+            # P5: Pre-sunrise drain — ONLY at night (22-08), blocked during night EV
             remaining_slots = max(1, sunrise_slot - i)
             remaining_drain = max(0, soc_kwh - sunrise_target_kwh)
             target_drain = remaining_drain / remaining_slots
@@ -187,8 +198,10 @@ def generate_plan(
 
         # P7: Anti-idle — discharge slowly at night if battery still high
         # ONLY at night (22-08) — daytime batteries may be needed for evening/night
+        # Blocked during night EV charging (PLAN-03)
         if (
-            action == "i"
+            not ev_charging_night
+            and action == "i"
             and soc_kwh > battery_cap_kwh * 0.8
             and net > 0.3
             and (abs_h >= 22 or abs_h < 8)

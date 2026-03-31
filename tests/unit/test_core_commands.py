@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -146,7 +146,6 @@ async def test_adapter_path_rollback_on_partial_failure():
     adapter_fail.set_ems_mode = AsyncMock(side_effect=[False, AsyncMock(return_value=True)])
 
     # After the first pass: adapter_ok succeeds, adapter_fail fails → rollback
-    adapter_ok_rb = AsyncMock(return_value=True)
     adapter_ok.set_ems_mode = AsyncMock(side_effect=[True, True])   # charge_pv, then standby
     adapter_fail.set_ems_mode = AsyncMock(side_effect=[False, True])  # fails, then standby
 
