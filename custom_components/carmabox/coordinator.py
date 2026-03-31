@@ -3133,18 +3133,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             bat_str = f"{abs(hp.battery_kw):.1f}kW" if abs(hp.battery_kw) > 0.1 else ""
             soc_str = f"B{soc_pct:.0f}%"
-            ev_str = f" EV{hp.ev_kw:.1f}kW→{hp.ev_soc}%" if hp.ev_kw > 0.1 else ""
-            price_str = f"{int(hp.price)}öre" if hp.price > 1 else ""
+            # EV: show charging power + expected absolute SoC
+            ev_str = f" 🚗{hp.ev_kw:.0f}kW→{hp.ev_soc}%" if hp.ev_kw > 0.1 else ""
+            price_str = f"{int(hp.price)}ö" if hp.price > 1 else ""
 
-            if hp.action == "i" and hp.ev_kw < 0.1:
-                continue
-            entry = f"{hour:02d} {action_label}"
+            # Show ALL hours — compact format to fit 255 chars
+            parts = [f"{hour:02d}"]
+            if hp.action != "i":
+                parts.append(action_label)
             if bat_str:
-                entry += f" {bat_str}"
-            entry += f" {soc_str}{ev_str}"
+                parts.append(bat_str)
+            parts.append(soc_str)
+            if ev_str:
+                parts.append(ev_str.strip())
             if price_str:
-                entry += f" {price_str}"
-            days[day_key].append(entry)
+                parts.append(price_str)
+            days[day_key].append(" ".join(parts))
 
         # Write each day to its own input_text
         entities = {
