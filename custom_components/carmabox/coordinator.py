@@ -622,7 +622,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             try:
                 return float(state.state)
             except (ValueError, TypeError):
-                pass
+                _LOGGER.debug("Suppressed error", exc_info=True)
         return None
 
     def _detect_miner_entity(self) -> str:
@@ -1460,7 +1460,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             hour=hour,
                         )
                     except Exception:
-                        pass
+                        _LOGGER.debug("Suppressed error", exc_info=True)
 
                 # Weekend/workday detection
                 is_workday = now.weekday() < 5  # Mon-Fri
@@ -2711,7 +2711,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                                 tempest_reduction,
                             )
                 except (ValueError, TypeError):
-                    pass
+                    _LOGGER.debug("Suppressed error", exc_info=True)
 
             # IT-2080: Tempest pressure trend → weather prediction
             tempest_pressure = self.hass.states.get("sensor.tempest_pressure")
@@ -2743,7 +2743,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                                 pressure_correction,
                             )
                 except (ValueError, TypeError):
-                    pass
+                    _LOGGER.debug("Suppressed error", exc_info=True)
 
             self._current_reserve_kwh = reserve
 
@@ -2760,7 +2760,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     dynamic_base_kw = 1.5 + max(0, (15.0 - outdoor_c) * 0.1)
                     self._estimated_house_base_kw = round(min(4.0, dynamic_base_kw), 2)
                 except (ValueError, TypeError):
-                    pass
+                    _LOGGER.debug("Suppressed error", exc_info=True)
 
             ellevio_tak = float(opts.get("ellevio_tak_kw", 4.0))
             target = calculate_target(
@@ -6186,7 +6186,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     if float(st.state) > 500:
                         self.predictor.add_appliance_event(hour, weekday, name)
                 except (ValueError, TypeError):
-                    pass
+                    _LOGGER.debug("Suppressed error", exc_info=True)
 
         # Temperature correlation
         temp_state = self.hass.states.get("sensor.tempest_temperature")
@@ -6196,7 +6196,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 house_kw = getattr(self, "_estimated_house_base_kw", 2.0)
                 self.predictor.add_temperature_sample(temp_c, house_kw, hour)
             except (ValueError, TypeError):
-                pass
+                _LOGGER.debug("Suppressed error", exc_info=True)
 
         # Plan feedback (once per hour)
         if hasattr(self, "_last_feedback_hour") and self._last_feedback_hour == hour:
@@ -6265,7 +6265,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         results["ellevio_root_cause"],
                     )
             except (ValueError, TypeError):
-                pass
+                _LOGGER.debug("Suppressed error", exc_info=True)
 
         # Goal 2: EV SoC >= 75% at 06:00
         if now.hour == 6 and now.minute < 15:

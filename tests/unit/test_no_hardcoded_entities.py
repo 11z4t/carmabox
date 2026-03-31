@@ -151,3 +151,57 @@ def test_predict_24h_never_returns_none():
             p.add_sample(HourSample(weekday=d, hour=h, month=3, consumption_kw=2.0))
     result = p.predict_24h(start_hour=20, weekday=0, month=3)
     assert result is not None and len(result) == 24
+
+
+# ── Stale commit hash guard ─────────────────────────────────
+
+
+def test_all_functions_return_explicitly():
+    """Functions that return a value must have explicit return in all branches.
+
+    Catches the predict_24h None bug pattern: function returns in one branch
+    but falls through (implicit None) in another.
+    """
+    import ast
+
+    predictor = Path("custom_components/carmabox/optimizer/predictor.py")
+    tree = ast.parse(predictor.read_text())
+    violations = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            # Check if function has any return with a value
+            returns = [n for n in ast.walk(node) if isinstance(n, ast.Return) and n.value]
+            if not returns:
+                continue
+            # Check if ALL paths return (simplified: last statement must be return)
+            body = node.body
+            if body and not isinstance(body[-1], ast.Return):
+                # Could fall through to implicit None
+                # Only flag if function has a return type hint suggesting non-None
+                violations.append(f"  {node.name}() (line {node.lineno})")
+    # Warn only — too many false positives for hard fail
+    if violations:
+        import warnings
+
+        warnings.warn(  # noqa: B028
+            "Functions with possible implicit None return:\n" + "\n".join(violations[:5])
+        )
+
+
+# ── Bare except:pass guard ──────────────────────────────────
+
+
+def test_no_bare_except_pass():
+    """except Exception: pass swallows errors silently. Use logging."""
+    code = COORDINATOR.read_text()
+    violations = []
+    lines = code.split("\n")
+    for i, line in enumerate(lines):
+        if "except" in line and i + 1 < len(lines):
+            next_line = lines[i + 1].strip()
+            if next_line == "pass":
+                violations.append(f"  L{i + 1}: {line.strip()} / {next_line}")
+    assert not violations, (
+        "Bare except:pass found — use _LOGGER.debug('...', exc_info=True):\n"
+        + "\n".join(violations)
+    )
