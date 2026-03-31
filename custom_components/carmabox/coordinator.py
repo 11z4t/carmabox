@@ -1635,6 +1635,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         }
         desired_ems = ems_mode_map.get(battery_action, "charge_pv")
 
+        # INV-3: fast_charging MUST be OFF when discharging
+        if desired_ems == "discharge_pv":
+            for _adp in self.inverter_adapters:
+                fc_entity = f"switch.goodwe_fast_charging_switch_{_adp.prefix}"
+                fc_state = self.hass.states.get(fc_entity)
+                if fc_state and fc_state.state == "on":
+                    _LOGGER.warning(
+                        "INV-3 ENFORCE: %s fast_charging ON during discharge → OFF",
+                        _adp.prefix,
+                    )
+                    await _adp.set_fast_charging(on=False)
+
         # Track what each adapter SHOULD be after enforcement (for INV-2 check).
         # Using stale adapter.ems_mode after drift correction would cause
         # false INV-2 triggers during legitimate discharge.
