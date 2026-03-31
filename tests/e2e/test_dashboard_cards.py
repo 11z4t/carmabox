@@ -12,10 +12,12 @@ We use page.evaluate() with JavaScript to traverse them.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import requests
 
-from .conftest import HA_URL
+HA_URL: str = os.environ.get("HA_URL", "http://192.168.9.10:8123")
 
 DASHBOARD_BASE = f"{HA_URL}/dashboard-carmabox"
 
@@ -93,6 +95,7 @@ def _check_entity_via_api(entity_id: str) -> tuple[str, str]:
         return "error", str(e)
 
 
+@pytest.mark.e2e
 class TestAPIPreCheck:
     """Verify critical entities have values BEFORE testing dashboard."""
 
@@ -228,9 +231,9 @@ class TestTab2Varfor:
         """Decision reasoning markdown must have content."""
         await _navigate_to_tab(ha_page, 1)
         texts = await _get_card_texts(ha_page, "hui-markdown-card")
-        assert any(
-            len(t) > 10 for t in texts
-        ), f"No markdown card with meaningful content. Got: {texts[:3]}"
+        assert any(len(t) > 10 for t in texts), (
+            f"No markdown card with meaningful content. Got: {texts[:3]}"
+        )
 
     @pytest.mark.asyncio
     async def test_charts_render(self, ha_page) -> None:
