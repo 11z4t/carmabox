@@ -6,6 +6,18 @@ Pure Python. No HA imports. Fully testable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
+
+
+class BatteryCommand(Enum):
+    """Battery command state — replaces fragile string comparison."""
+
+    IDLE = "idle"
+    CHARGE_PV = "charge_pv"
+    CHARGE_PV_TAPER = "charge_pv_taper"  # IT-1939: BMS taper detection
+    BMS_COLD_LOCK = "bms_cold_lock"  # IT-1948: BMS cold lock (cell temp < 10°C)
+    STANDBY = "standby"
+    DISCHARGE = "discharge"
 
 
 @dataclass

@@ -16,7 +16,6 @@ import logging
 import time
 from collections import deque
 from datetime import datetime, timedelta
-from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -27,13 +26,13 @@ if TYPE_CHECKING:
 
     from .adapters import EVAdapter, InverterAdapter, WeatherAdapter
     from .core.grid_guard import GridGuardResult
+    from .core.state_manager import StateManager
     from .optimizer.models import SchedulerHourSlot
     from .optimizer.multiday_planner import MultiDayPlan
 
 import contextlib
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
-from .core.commands import _cmd_grid_charge
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -90,12 +89,15 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .core.commands import cmd_charge_pv
+from .core.execution_engine import ExecutionEngine
 from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
 from .optimizer.grid_logic import calculate_reserve, calculate_target, ellevio_weight
 from .optimizer.hourly_ledger import EnergyLedger
 from .optimizer.models import (
+    BatteryCommand,
     BreachCorrection,
     CarmaboxState,
     Decision,
@@ -157,17 +159,6 @@ LEDGER_STORE_KEY = "carmabox_ledger"
 # Self-healing constants (PLAT-972)
 SELF_HEALING_MAX_FAILURES = 3
 SELF_HEALING_PAUSE_SECONDS = 300  # 5 minutes
-
-
-class BatteryCommand(Enum):
-    """Battery command state — replaces fragile string comparison."""
-
-    IDLE = "idle"
-    CHARGE_PV = "charge_pv"
-    CHARGE_PV_TAPER = "charge_pv_taper"  # IT-1939: BMS taper detection
-    BMS_COLD_LOCK = "bms_cold_lock"  # IT-1948: BMS cold lock (cell temp < 10°C)
-    STANDBY = "standby"
-    DISCHARGE = "discharge"
 
 
 class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
@@ -312,6 +303,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.weather_adapter: WeatherAdapter | None = None
         if self._cfg.get("weather_enabled", True):  # Default enabled if Tempest exists
             self.weather_adapter = TempestAdapter(hass)
+
+        # PLAT-1141 COORD-02: ExecutionEngine — hårdvarukontroll via composition
+        self._execution_engine = ExecutionEngine(self)
 
         self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
@@ -504,6 +498,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not self.executor_enabled:
             _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
 
+        # StateManager: eagerly initialized so tests that call __init__ get it free.
+        # Tests that bypass __init__ get lazy init via the _state_mgr property.
+        from .core.state_manager import StateManager
+
+        self._state_mgr_cache: StateManager = StateManager(hass, self._cfg)
+
+    @property
+    def _state_mgr(self) -> StateManager:
+        """Return StateManager — lazy init for tests that bypass __init__."""
+        try:
+            return self._state_mgr_cache  # fast path (set in __init__)
+        except AttributeError:
+            from .core.state_manager import StateManager
+
+            self._state_mgr_cache = StateManager(self.hass, self._cfg)
+            return self._state_mgr_cache
+
     def _has_feature(self, feature: str) -> bool:
         """Check if a feature is enabled by current license."""
         return feature in self._license_features
@@ -650,49 +661,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         return str(self._cfg.get(key, default))
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
-        """Read float state from HA entity with validation."""
-        if not entity_id:
-            return default
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable", ""):
-            return default
-        try:
-            val = float(state.state)
-            # Validate reasonable ranges
-            if abs(val) > 100000:  # >100kW = nonsense
-                _LOGGER.warning("Unreasonable value %s from %s", val, entity_id)
-                return default
-            return val
-        except (ValueError, TypeError):
-            return default
+        """Read float state from HA entity — delegates to StateManager."""
+        return self._state_mgr.read_float(entity_id, default)
 
     def _read_float_or_none(self, entity_id: str) -> float | None:
-        """Read float state, returning None if entity is missing/unknown/unavailable.
-
-        Used for battery power readings where None signals unreliable data
-        (e.g. at HA start before first sensor reading). PLAT-946.
-        """
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable", ""):
-            return None
-        try:
-            val = float(state.state)
-            if abs(val) > 100000:
-                return None
-            return val
-        except (ValueError, TypeError):
-            return None
+        """Read float or None — delegates to StateManager. PLAT-946."""
+        return self._state_mgr.read_float_or_none(entity_id)
 
     def _read_str(self, entity_id: str, default: str = "") -> str:
-        """Read string state from HA entity."""
-        if not entity_id:
-            return default
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in ("unknown", "unavailable"):
-            return default
-        return state.state
+        """Read string state from HA entity — delegates to StateManager."""
+        return self._state_mgr.read_str(entity_id, default)
 
     async def _async_restore_savings(self) -> None:
         """Restore savings state from persistent storage."""
@@ -2246,85 +2224,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
     def _collect_state(self) -> CarmaboxState:
-        """Collect current state from all HA entities.
-
-        Uses inverter/EV adapters when configured, falls back to raw entity reads.
-        """
-        opts = self._cfg
-        adapters = self.inverter_adapters
-        a1 = adapters[0] if len(adapters) >= 1 else None
-        a2 = adapters[1] if len(adapters) >= 2 else None
-
-        # Battery 1 — adapter or legacy config
-        battery_soc_1 = a1.soc if a1 else self._read_float(opts.get("battery_soc_1", ""))
-        battery_power_1 = a1.power_w if a1 else self._read_float(opts.get("battery_power_1", ""))
-        battery_ems_1 = a1.ems_mode if a1 else self._read_str(opts.get("battery_ems_1", ""))
-
-        # Battery 2 — adapter or legacy config
-        battery_soc_2 = a2.soc if a2 else self._read_float(opts.get("battery_soc_2", ""), -1)
-        battery_power_2 = a2.power_w if a2 else self._read_float(opts.get("battery_power_2", ""))
-        battery_ems_2 = a2.ems_mode if a2 else self._read_str(opts.get("battery_ems_2", ""))
-
-        # PLAT-946: Check if battery power sensors are actually available
-        # At HA start, sensors report unknown/unavailable → _read_float returns 0.0
-        # which masks potential crosscharge. Track validity separately.
-        bp1_entity = (
-            f"sensor.goodwe_battery_power_{a1.prefix}" if a1 else opts.get("battery_power_1", "")
-        )
-        bp2_entity = (
-            f"sensor.goodwe_battery_power_{a2.prefix}" if a2 else opts.get("battery_power_2", "")
-        )
-        bp1_valid = self._read_float_or_none(bp1_entity) is not None
-        bp2_valid = self._read_float_or_none(bp2_entity) is not None if bp2_entity else True
-
-        # EV — adapter or legacy config
-        ev = self.ev_adapter
-        ev_power_w = ev.power_w if ev else self._read_float(opts.get("ev_power_entity", ""))
-        ev_current_a = ev.current_a if ev else self._read_float(opts.get("ev_current_entity", ""))
-        ev_status = ev.status if ev else self._read_str(opts.get("ev_status_entity", ""))
-
-        return CarmaboxState(
-            grid_power_w=self._read_float(opts.get("grid_entity", "sensor.house_grid_power")),
-            battery_soc_1=battery_soc_1,
-            battery_power_1=battery_power_1,
-            battery_power_1_valid=bp1_valid,
-            battery_ems_1=battery_ems_1,
-            battery_cap_1_kwh=float(opts.get("battery_1_kwh", 15.0)),
-            battery_soc_2=battery_soc_2,
-            battery_power_2=battery_power_2,
-            battery_power_2_valid=bp2_valid,
-            battery_ems_2=battery_ems_2,
-            battery_cap_2_kwh=float(opts.get("battery_2_kwh", 5.0)),
-            pv_power_w=self._read_float(opts.get("pv_entity", "sensor.pv_solar_total")),
-            ev_soc=self._read_float(opts.get("ev_soc_entity", ""), -1),
-            ev_power_w=ev_power_w,
-            ev_current_a=ev_current_a,
-            ev_status=ev_status,
-            battery_temp_c=self._read_battery_temp(),
-            battery_min_cell_temp_1=a1.temperature_c if a1 else None,
-            battery_min_cell_temp_2=a2.temperature_c if a2 else None,
-            # Weather (Tempest — prefer local MQTT, fallback to cloud)
-            outdoor_temp_c=self._read_float(
-                opts.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
-            ),
-            solar_radiation_wm2=self._read_float(
-                opts.get("solar_radiation_entity", "sensor.tempest_solar_radiation")
-            ),
-            illuminance_lx=self._read_float(
-                opts.get("illuminance_entity", "sensor.tempest_illuminance")
-            ),
-            barometric_pressure_hpa=self._read_float(
-                opts.get("pressure_entity", "sensor.sanduddsvagen_60_pressure_barometric")
-            ),
-            rain_mm=self._read_float(
-                opts.get("rain_entity", "sensor.sanduddsvagen_60_rain_last_hour")
-            ),
-            wind_speed_kmh=self._read_float(
-                opts.get("wind_speed_entity", "sensor.sanduddsvagen_60_wind_speed")
-            ),
-            current_price=self._read_float(opts.get("price_entity", "")),
-            target_weighted_kw=self.target_kw,
-            plan=self.plan,
+        """Collect current state from all HA entities — delegates to StateManager."""
+        return self._state_mgr.collect_state(
+            self.inverter_adapters,
+            self.ev_adapter,
+            self.target_kw,
+            self.plan,
         )
 
     def _generate_plan(self, state: CarmaboxState) -> None:
@@ -3368,9 +3273,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
             if charge_result.ok:
-                await _cmd_grid_charge(
-                    self, state
-                )  # CARMA-P0-FIXES Task 2: Use dedicated grid charge
+                await self._execution_engine.cmd_grid_charge(state)  # CARMA-P0-FIXES Task 2
                 self._track_rule("RULE_1_5", "grid_charge")
                 await self._record_decision(
                     state,
@@ -4803,15 +4706,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
 
     def _read_battery_temp(self) -> float | None:
-        """Read battery temperature — uses adapters when available, else legacy entity."""
-        if self.inverter_adapters:
-            temps = [a.temperature_c for a in self.inverter_adapters if a.temperature_c is not None]
-            return min(temps) if temps else None
-        temp_entity = self._get_entity("battery_temp_entity", "")
-        if not temp_entity:
-            return None
-        val = self._read_float(temp_entity, -999)
-        return val if val > -999 else None
+        """Read battery temperature — delegates to StateManager."""
+        return self._state_mgr.read_battery_temp(self.inverter_adapters)
 
     @property
     def system_health(self) -> dict[str, str]:

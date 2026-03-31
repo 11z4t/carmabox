@@ -43,7 +43,6 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
-from .coordinator import BatteryCommand
 from .core.coordinator_v2 import (
     CoordinatorConfig,
     CoordinatorV2,
@@ -58,6 +57,7 @@ from .core.planner import (
 )
 from .optimizer.hourly_ledger import EnergyLedger
 from .optimizer.models import (
+    BatteryCommand,
     BreachCorrection,
     CarmaboxState,
     Decision,
