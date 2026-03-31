@@ -2478,7 +2478,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             # Collect prices — try primary, fallback to secondary
             _step = "prices"
-            price_entity = self._get_entity("price_entity", "")
+            price_entity = self._get_entity("price_entity", "sensor.nordpool_kwh_se3_sek_3_10_025")
             price_entity_fallback = self._get_entity("price_entity_fallback", "")
             fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
             price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
