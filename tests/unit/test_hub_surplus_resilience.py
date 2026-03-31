@@ -15,6 +15,8 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 
+pytest.importorskip("paho", reason="paho-mqtt not installed")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # hub.py — actual connect_mqtt closures
 # ══════════════════════════════════════════════════════════════════════════════
@@ -203,7 +205,7 @@ class TestResilienceRemainingGaps:
         mgr = _make_mgr()
         mgr.register_sensor("sensor.test")  # type: ignore[union-attr]
         # Pass a string: math.isnan("x") raises TypeError
-        value, is_fb = mgr.get_value("sensor.test", current="unavailable")  # type: ignore[union-attr]
+        _value, is_fb = mgr.get_value("sensor.test", current="unavailable")  # type: ignore[union-attr]
         # Falls back to default (0.0) since no last_update
         assert is_fb is True
 

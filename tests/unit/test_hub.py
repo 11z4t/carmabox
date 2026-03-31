@@ -443,12 +443,12 @@ class TestVerifyEnvelopeEdgeCases:
 
     def test_missing_nonce_returns_false(self) -> None:
         """Envelope without nonce → returns False."""
-        valid, result = _verify_mqtt_envelope({"payload": {}, "ts": "123", "sig": "def"}, "key")
+        valid, _result = _verify_mqtt_envelope({"payload": {}, "ts": "123", "sig": "def"}, "key")
         assert valid is False
 
     def test_missing_ts_returns_false(self) -> None:
         """Envelope without ts → returns False."""
-        valid, result = _verify_mqtt_envelope({"payload": {}, "nonce": "abc", "sig": "def"}, "key")
+        valid, _result = _verify_mqtt_envelope({"payload": {}, "nonce": "abc", "sig": "def"}, "key")
         assert valid is False
 
 
@@ -629,6 +629,9 @@ class TestRegisterWithCertsAndMQTTS:
         assert result is not None
         assert client.mqtts_host == "mqtts.example.com"
         assert client.mqtts_port == 8883
+
+
+paho = pytest.importorskip("paho", reason="paho-mqtt not installed")
 
 
 class TestMQTTConnectWithPaho:

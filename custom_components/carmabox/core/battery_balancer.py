@@ -42,7 +42,8 @@ class BatteryInfo:
     min_soc: float = 15.0  # Normal min SoC (%)
     min_soc_cold: float = 20.0  # Min SoC when cold (%)
     cold_temp_c: float = 4.0  # Below → use min_soc_cold
-    max_discharge_w: float = 5000.0  # Per-battery max
+    max_discharge_w: float = 5000.0  # Per-battery max discharge (BMS limit)
+    max_charge_w: float = 5000.0  # Per-battery max charge (BMS limit, cold-reduced)
     soh_pct: float = 100.0  # State of Health (%)
 
 
@@ -341,6 +342,7 @@ def calculate_proportional_charge(
 
         share = room / total_room
         watts = int(total_watts * share)
+        watts = min(watts, int(bat.max_charge_w))
         actual_total += watts
 
         allocations.append(

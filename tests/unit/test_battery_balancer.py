@@ -21,6 +21,7 @@ def _bat(
     min_soc_cold: float = 20.0,
     cold_temp_c: float = 4.0,
     max_discharge_w: float = 5000.0,
+    max_charge_w: float = 5000.0,
     soh_pct: float = 100.0,
 ) -> BatteryInfo:
     return BatteryInfo(
@@ -32,6 +33,7 @@ def _bat(
         min_soc_cold=min_soc_cold,
         cold_temp_c=cold_temp_c,
         max_discharge_w=max_discharge_w,
+        max_charge_w=max_charge_w,
         soh_pct=soh_pct,
     )
 
@@ -349,6 +351,36 @@ class TestBMSCurrentLimits:
         # kontor share = 9.0/12.25 = 73.5% of 4000 = 2938 → BMS cap 2800 → EXP-07 50% = 1400
         assert k.watts == 1400
         assert f.watts > 0
+
+
+class TestBMSChargeLimits:
+    """PLAT-1165: BMS charge current limit caps allocation in calculate_proportional_charge."""
+
+    def test_bms_charge_limit_caps_allocation(self) -> None:
+        """If BMS allows only 400W charge, battery gets max 400W even if share is higher."""
+        bats = [
+            _bat("kontor", soc=20, cap_kwh=15.0, max_charge_w=400),  # cold BMS limit
+            _bat("forrad", soc=20, cap_kwh=5.0, max_charge_w=5000),
+        ]
+        result = calculate_proportional_charge(bats, 3000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        # kontor share = 75% of 3000 = 2250, but BMS caps at 400
+        assert k.watts == 400
+        # forrad gets its proportional share (25% = 750)
+        assert f.watts == 750
+
+    def test_bms_charge_zero_disables_battery(self) -> None:
+        """BMS charge limit 0 = battery cannot charge."""
+        bats = [
+            _bat("kontor", soc=20, cap_kwh=15.0, max_charge_w=0),
+            _bat("forrad", soc=20, cap_kwh=5.0, max_charge_w=5000),
+        ]
+        result = calculate_proportional_charge(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 0
+        assert f.watts == 500  # 25% of 2000
 
 
 class TestSoHDerating:
