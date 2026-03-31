@@ -146,6 +146,11 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._predictor_store = MagicMock()
     coord._predictor_store.async_save = AsyncMock()
 
+    # PLAT-1141: ExecutionEngine
+    from custom_components.carmabox.core.execution_engine import ExecutionEngine
+
+    coord._execution_engine = ExecutionEngine(coord)
+
     return coord
 
 

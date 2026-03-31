@@ -232,9 +232,9 @@ class TestExecuteSurplusAllocations:
 
     @pytest.mark.asyncio
     async def test_ev_start_calls_cmd_ev_start(self) -> None:
-        """Allocation ev/start with sufficient power → _cmd_ev_start."""
+        """Allocation ev/start with sufficient power → engine.cmd_ev_start."""
         coord = _make_coord()
-        coord._cmd_ev_start = AsyncMock()
+        coord._execution_engine.cmd_ev_start = AsyncMock()
 
         alloc = MagicMock()
         alloc.action = "start"
@@ -242,13 +242,13 @@ class TestExecuteSurplusAllocations:
         alloc.target_w = 5000  # > 4140 threshold
 
         await coord._execute_surplus_allocations([alloc])
-        coord._cmd_ev_start.assert_called_once()
+        coord._execution_engine.cmd_ev_start.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_ev_stop_calls_cmd_ev_stop(self) -> None:
-        """Allocation ev/stop → _cmd_ev_stop."""
+        """Allocation ev/stop → engine.cmd_ev_stop."""
         coord = _make_coord()
-        coord._cmd_ev_stop = AsyncMock()
+        coord._execution_engine.cmd_ev_stop = AsyncMock()
 
         alloc = MagicMock()
         alloc.action = "stop"
@@ -256,7 +256,7 @@ class TestExecuteSurplusAllocations:
         alloc.target_w = 0
 
         await coord._execute_surplus_allocations([alloc])
-        coord._cmd_ev_stop.assert_called_once()
+        coord._execution_engine.cmd_ev_stop.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_battery_start_calls_set_ems_mode(self) -> None:

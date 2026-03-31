@@ -1335,7 +1335,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             bat_support_needed = max(0, ev_kw + house_kw - grid_max)
 
             _LOGGER.info(
-                "NATT-EV: SoC %.0f%% < target %.0f%%, starting EV 6A + " "urladdning %.0fW",
+                "NATT-EV: SoC %.0f%% < target %.0f%%, starting EV 6A + urladdning %.0fW",
                 ev_soc,
                 ev_target,
                 bat_support_needed * 1000,
@@ -1636,52 +1636,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _execute_surplus_allocations(self, allocations: list) -> None:
         """Execute surplus chain allocations."""
-        for alloc in allocations:
-            if alloc.action == "none":
-                continue
-            try:
-                if alloc.id == "miner":
-                    if alloc.action == "start":
-                        await self.hass.services.async_call(
-                            "switch",
-                            "turn_on",
-                            {"entity_id": "switch.shelly1pmg4_a085e3bd1e60"},
-                        )
-                    elif alloc.action == "stop":
-                        await self.hass.services.async_call(
-                            "switch",
-                            "turn_off",
-                            {"entity_id": "switch.shelly1pmg4_a085e3bd1e60"},
-                        )
-                elif alloc.id == "ev":
-                    if alloc.action == "start" and alloc.target_w >= 4140:
-                        amps = int(alloc.target_w / (230 * 3))
-                        clamped = max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps))
-                        await self._cmd_ev_start(clamped)
-                    elif alloc.action == "increase":
-                        amps = int(alloc.target_w / (230 * 3))
-                        clamped = max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps))
-                        await self._cmd_ev_adjust(clamped)
-                    elif alloc.action == "stop":
-                        await self._cmd_ev_stop()
-                elif alloc.id == "battery" and alloc.action in ("start", "increase"):
-                    # PLAT-1134: fast_charging ON to FORCE PV absorption
-                    charge_w = int(alloc.target_w) if alloc.target_w else 3000
-                    charge_pct = min(100, max(10, int(charge_w / 60)))
-                    for adapter in self.inverter_adapters:
-                        await adapter.set_ems_mode("charge_pv")
-                        await adapter.set_fast_charging(
-                            on=True,
-                            power_pct=charge_pct,
-                            soc_target=100,
-                            authorized=True,
-                        )
-                elif alloc.id == "battery" and alloc.action in ("stop", "decrease"):
-                    # PLAT-1134: Turn OFF fast_charging when surplus gone
-                    for adapter in self.inverter_adapters:
-                        await adapter.set_fast_charging(on=False)
-            except Exception as err:
-                _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err, exc_info=True)
+        await self._execution_engine.execute_surplus_allocations(allocations)
 
     # ── PLAT-1099: EMS Mode Enforcement — runs EVERY 30s cycle ──────
     # Extracted from _execute_v2() so it runs even when Grid Guard acts.
@@ -1689,121 +1644,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     # leaving stale EMS modes (e.g., manual discharge_pv) uncorrected.
 
     async def _enforce_ems_modes(self) -> None:
-        """Enforce EMS mode on ALL inverters every cycle (PLAT-1099).
-
-        1. Map _last_battery_action → desired EMS mode
-        2. For each inverter: check actual mode, re-apply if drifted
-        3. Zero ems_power_limit when charge_pv (PLAT-1040)
-        4. Detect INV-2 crosscharge at EMS level (using enforced modes,
-           not stale adapter reads)
-        """
-        if not self.inverter_adapters:
-            return
-
-        battery_action = getattr(self, "_last_battery_action", "charge_pv")
-
-        ems_mode_map = {
-            "charge_pv": "charge_pv",
-            "grid_charge": "charge_pv",
-            "discharge": "discharge_pv",
-            "standby": "battery_standby",
-        }
-        desired_ems = ems_mode_map.get(battery_action, "charge_pv")
-
-        # INV-3: fast_charging MUST be OFF when discharging
-        if desired_ems == "discharge_pv":
-            for _adp in self.inverter_adapters:
-                fc_entity = f"switch.goodwe_fast_charging_switch_{_adp.prefix}"
-                fc_state = self.hass.states.get(fc_entity)
-                if fc_state and fc_state.state == "on":
-                    _LOGGER.warning(
-                        "INV-3 ENFORCE: %s fast_charging ON during discharge → OFF",
-                        _adp.prefix,
-                    )
-                    await _adp.set_fast_charging(on=False)
-
-        # Track what each adapter SHOULD be after enforcement (for INV-2 check).
-        # Using stale adapter.ems_mode after drift correction would cause
-        # false INV-2 triggers during legitimate discharge.
-        enforced_modes: list[str] = []
-
-        for _idx, _adp in enumerate(self.inverter_adapters):
-            # --- PLAT-1040: ems_power_limit MUST be 0 when charge_pv ---
-            if desired_ems == "charge_pv":
-                try:
-                    _lim_entity = f"number.goodwe_{_adp.prefix}_ems_power_limit"
-                    _lim_state = self.hass.states.get(_lim_entity)
-                    _lim_val = (
-                        float(_lim_state.state)
-                        if _lim_state and _lim_state.state not in ("unknown", "unavailable")
-                        else 0.0
-                    )
-                    if _lim_val != 0.0:
-                        _LOGGER.info(
-                            "EMS PLAT-1040: %s limit %.0f→0",
-                            _adp.prefix,
-                            _lim_val,
-                        )
-                        await self.hass.services.async_call(
-                            "number",
-                            "set_value",
-                            {"entity_id": _lim_entity, "value": 0},
-                        )
-                except Exception:
-                    _LOGGER.warning(
-                        "EMS ENFORCE: %s failed to reset ems_power_limit",
-                        _adp.prefix,
-                        exc_info=True,
-                    )
-
-            # --- Drift correction: re-apply mode if actual != desired ---
-            _current_ems = _adp.ems_mode
-            if _current_ems and _current_ems != desired_ems:
-                # During discharge, individual batteries may legitimately
-                # be in standby (allocation=0W).  Only correct if the
-                # battery was supposed to be active.
-                if battery_action == "discharge" and _current_ems == "battery_standby":
-                    enforced_modes.append("battery_standby")
-                    continue
-                _LOGGER.info(
-                    "EMS ENFORCE: %s drift detected %s → %s (action=%s)",
-                    _adp.prefix,
-                    _current_ems,
-                    desired_ems,
-                    battery_action,
-                )
-                await _adp.set_ems_mode(desired_ems)
-                enforced_modes.append(desired_ems)
-            else:
-                enforced_modes.append(_current_ems or desired_ems)
-
-        # ── INV-2 Crosscharge Prevention — EMS-level ────────────
-        # Use enforced_modes (what we just told inverters to be), NOT
-        # stale adapter.ems_mode reads.  This prevents false triggers
-        # when drift correction was just applied.
-        has_crosscharge = (
-            len(enforced_modes) >= 2
-            and "discharge_pv" in enforced_modes
-            and "charge_pv" in enforced_modes
-        )
-        if has_crosscharge:
-            _LOGGER.error(
-                "INV-2 CROSSCHARGE EMS: %s — forcing all to charge_pv",
-                enforced_modes,
-            )
-            for _adp in self.inverter_adapters:
-                await _adp.set_ems_mode("charge_pv")
-                await _adp.set_fast_charging(on=False)
-                # PLAT-1040: zero the limit when forcing charge_pv
-                with contextlib.suppress(Exception):
-                    await self.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {
-                            "entity_id": f"number.goodwe_{_adp.prefix}_ems_power_limit",
-                            "value": 0,
-                        },
-                    )
+        """Enforce EMS modes every cycle (PLAT-1099)."""
+        await self._execution_engine.enforce_ems_modes()
 
     async def _execute_grid_guard_commands(
         self,
@@ -1921,7 +1763,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             bat_id = adapter.prefix if adapter else f"bat_{i}"
             soc = state.battery_soc_1 if i == 0 else state.battery_soc_2
             power = state.battery_power_1 if i == 0 else state.battery_power_2
-            cap = float(opts.get(f"battery_{i+1}_kwh", 15.0 if i == 0 else 5.0))
+            cap = float(opts.get(f"battery_{i + 1}_kwh", 15.0 if i == 0 else 5.0))
             min_soc = float(opts.get("battery_min_soc", 15))
             temp = (
                 state.battery_min_cell_temp_1
@@ -2397,7 +2239,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 time.monotonic() + 300  # 5 min cooldown
             )
             _LOGGER.error(
-                "IT-2465: %s crashed — disabled for 5 min. " "Coordinator continues.",
+                "IT-2465: %s crashed — disabled for 5 min. Coordinator continues.",
                 method_name,
                 exc_info=True,
             )
@@ -2580,7 +2422,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if self._last_known_ev_soc > 0 and age_s < 43200:  # < 12h
                     ev_soc_for_plan = max(0, self._last_known_ev_soc - derating)
                     _LOGGER.info(
-                        "CARMA EV: last known SoC %.0f%% (%.0fh ago)" " - %.0f%% derating = %.0f%%",
+                        "CARMA EV: last known SoC %.0f%% (%.0fh ago) - %.0f%% derating = %.0f%%",
                         self._last_known_ev_soc,
                         age_s / 3600,
                         derating,
@@ -2588,7 +2430,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                 elif self._last_known_ev_soc > 0:
                     _LOGGER.warning(
-                        "CARMA EV: last known SoC %.0f%% expired" " (%.0fh old, max 12h)",
+                        "CARMA EV: last known SoC %.0f%% expired (%.0fh old, max 12h)",
                         self._last_known_ev_soc,
                         age_s / 3600,
                     )
@@ -5593,7 +5435,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 final_avg = sum(self._meter_state.samples) / len(self._meter_state.samples)
                 if final_avg > self.target_kw:
                     _LOGGER.warning(
-                        "Breach Monitor: kl %02d slutade på %.2f kW" " (target %.1f)",
+                        "Breach Monitor: kl %02d slutade på %.2f kW (target %.1f)",
                         self._meter_state.hour,
                         final_avg,
                         self.target_kw,
@@ -5627,7 +5469,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if projected > target * 0.80 and not self._meter_state.warning_issued:
             self._meter_state.warning_issued = True
             _LOGGER.warning(
-                "Breach Monitor VARNING: kl %02d projiceras %.2f kW" " (target %.1f)",
+                "Breach Monitor VARNING: kl %02d projiceras %.2f kW (target %.1f)",
                 hour,
                 projected,
                 target,
@@ -5636,7 +5478,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._breach_load_shed_active = True
             self._meter_state.load_shed_active = True
             _LOGGER.error(
-                "Breach Monitor NÖDSTOPP: kl %02d projiceras %.2f kW" " (target %.1f)",
+                "Breach Monitor NÖDSTOPP: kl %02d projiceras %.2f kW (target %.1f)",
                 hour,
                 projected,
                 target,
@@ -5699,7 +5541,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     action="reduce_load",
                     target_hour=target_h,
                     param="pause_miner",
-                    reason=(f"Miner körde under breach kl {breach_hour:02d}" " — pausa imorgon"),
+                    reason=(f"Miner körde under breach kl {breach_hour:02d} — pausa imorgon"),
                 )
             )
         # K2: Guard battery_power_2
@@ -5739,7 +5581,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._breach_corrections = self._breach_corrections[-self._MAX_CORRECTIONS :]
         if corrections:
             _LOGGER.warning(
-                "Breach Monitor: %d korrigeringar för kl %02d" " (totalt %d aktiva)",
+                "Breach Monitor: %d korrigeringar för kl %02d (totalt %d aktiva)",
                 len(corrections),
                 breach_hour,
                 len(self._breach_corrections),
@@ -6660,444 +6502,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:
-        """Set batteries to charge from solar.
-
-        SafetyGuard: heartbeat + rate limit + charge check.
-        """
-        # IT-1939 BUG FIX: also skip re-send when already in taper mode
-        if self._last_command in (
-            BatteryCommand.CHARGE_PV,
-            BatteryCommand.CHARGE_PV_TAPER,
-        ):
-            return
-
-        # ── SafetyGuard gates (defense-in-depth) ─────────────
-        heartbeat = self.safety.check_heartbeat()
-        if not heartbeat.ok:
-            _LOGGER.warning("SafetyGuard blocked charge_pv: %s", heartbeat.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        rate = self.safety.check_rate_limit()
-        if not rate.ok:
-            _LOGGER.info("SafetyGuard blocked charge_pv: %s", rate.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        temp_c = self._read_battery_temp()
-        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
-        if not charge_check.ok:
-            _LOGGER.info("SafetyGuard blocked charge_pv: %s", charge_check.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        _LOGGER.info("CARMA: charge_pv (solar surplus)")
-        success = False
-        failed = False
-
-        if self.inverter_adapters:
-            for adapter in self.inverter_adapters:
-                if adapter.soc >= 100:
-                    ok = await adapter.set_ems_mode("battery_standby")
-                else:
-                    ok = await adapter.set_ems_mode("charge_pv")
-                    # INV-3: ALDRIG fast_charging i charge_pv — PV laddar utan det
-                    # fast_charging drar grid-import och bryter LAG 1
-                    if ok and isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=False)
-                if ok:
-                    success = True
-                else:
-                    failed = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby")
-                for adapter in self.inverter_adapters:
-                    await adapter.set_ems_mode("battery_standby")
-                self._daily_safety_blocks += 1
-                success = False
-        else:
-            # Legacy: raw entity-based control
-            for ems_key in ("battery_ems_1", "battery_ems_2"):
-                entity = self._get_entity(ems_key)
-                if not entity:
-                    continue
-                soc_key = ems_key.replace("ems", "soc")
-                soc = self._read_float(self._get_entity(soc_key))
-                mode = "battery_standby" if soc >= 100 else "charge_pv"
-                if await self._safe_service_call(
-                    "select", "select_option", {"entity_id": entity, "option": mode}
-                ):
-                    if self.executor_enabled:
-                        self._check_write_verify(entity, mode)
-                    success = True
-                else:
-                    failed = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning("Partial charge_pv failure — rolling back all to standby (legacy)")
-                for ems_key in ("battery_ems_1", "battery_ems_2"):
-                    entity = self._get_entity(ems_key)
-                    if entity:
-                        await self._safe_service_call(
-                            "select",
-                            "select_option",
-                            {"entity_id": entity, "option": "battery_standby"},
-                        )
-                self._daily_safety_blocks += 1
-                success = False
-
-        if success:
-            self._last_command = BatteryCommand.CHARGE_PV
-            self.safety.record_mode_change()
-            # CARMA-P0-FIXES Task 4: Save runtime after command change
-            await self._async_save_runtime()
+        """Command battery to charge from PV."""
+        await self._execution_engine.cmd_charge_pv(state)
 
     async def _cmd_grid_charge(self, state: CarmaboxState) -> None:
-        """Set batteries to charge from grid (CARMA-P0-FIXES Task 2).
-
-        GoodWe: charge_pv + fast_charging = charges from grid when no PV.
-        SafetyGuard: heartbeat + rate limit + charge check.
-        """
-        if self._last_command == BatteryCommand.CHARGE_PV:
-            # Already in charge mode — just ensure fast charging is on
-            if self.inverter_adapters:
-                for adapter in self.inverter_adapters:
-                    if isinstance(adapter, GoodWeAdapter) and adapter.soc < 100:
-                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
-            return
-
-        # ── SafetyGuard gates (defense-in-depth) ─────────────
-        heartbeat = self.safety.check_heartbeat()
-        if not heartbeat.ok:
-            _LOGGER.warning("SafetyGuard blocked grid_charge: %s", heartbeat.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        rate = self.safety.check_rate_limit()
-        if not rate.ok:
-            _LOGGER.info("SafetyGuard blocked grid_charge: %s", rate.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        temp_c = self._read_battery_temp()
-        charge_check = self.safety.check_charge(state.battery_soc_1, state.battery_soc_2, temp_c)
-        if not charge_check.ok:
-            _LOGGER.info("SafetyGuard blocked grid_charge: %s", charge_check.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        _LOGGER.info("CARMA: grid_charge (cheap price)")
-        success = False
-        failed = False
-
-        if self.inverter_adapters:
-            for adapter in self.inverter_adapters:
-                if adapter.soc >= 100:
-                    ok = await adapter.set_ems_mode("battery_standby")
-                else:
-                    ok = await adapter.set_ems_mode("charge_pv")
-                    # Enable fast charging with grid import — GoodWe charges from grid when no PV
-                    if ok and isinstance(adapter, GoodWeAdapter):
-                        ok = await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
-                if ok:
-                    success = True
-                else:
-                    failed = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning("Partial grid_charge failure — rolling back all to standby")
-                for adapter in self.inverter_adapters:
-                    await adapter.set_ems_mode("battery_standby")
-                    if isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=False, power_pct=0, soc_target=100)
-                self._daily_safety_blocks += 1
-                success = False
-        else:
-            # Legacy: raw entity-based control
-            # Note: legacy mode doesn't have fast_charging — grid charge won't work properly
-            _LOGGER.warning(
-                "Grid charge requested but no GoodWe adapter — using charge_pv (may not work)"
-            )
-            for ems_key in ("battery_ems_1", "battery_ems_2"):
-                entity = self._get_entity(ems_key)
-                if not entity:
-                    continue
-                soc_key = ems_key.replace("ems", "soc")
-                soc = self._read_float(self._get_entity(soc_key))
-                mode = "battery_standby" if soc >= 100 else "charge_pv"
-                if await self._safe_service_call(
-                    "select", "select_option", {"entity_id": entity, "option": mode}
-                ):
-                    if self.executor_enabled:
-                        self._check_write_verify(entity, mode)
-                    success = True
-                else:
-                    failed = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning(
-                    "Partial grid_charge failure — rolling back all to standby (legacy)"
-                )
-                for ems_key in ("battery_ems_1", "battery_ems_2"):
-                    entity = self._get_entity(ems_key)
-                    if entity:
-                        await self._safe_service_call(
-                            "select",
-                            "select_option",
-                            {"entity_id": entity, "option": "battery_standby"},
-                        )
-                self._daily_safety_blocks += 1
-                success = False
-
-        if success:
-            self._last_command = BatteryCommand.CHARGE_PV  # Same command enum
-            self.safety.record_mode_change()
-            # CARMA-P0-FIXES Task 4: Save runtime after command change
-            await self._async_save_runtime()
+        """Command battery to charge from grid."""
+        await self._execution_engine.cmd_grid_charge(state)
 
     async def _cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:
-        """Set all batteries to standby.
-
-        SafetyGuard: heartbeat + rate limit (skipped when force=True
-        since forced standby is itself a safety action).
-        """
-        if not force and self._last_command == BatteryCommand.STANDBY:
-            return
-
-        if not force:
-            # ── SafetyGuard gates (defense-in-depth) ─────────────
-            heartbeat = self.safety.check_heartbeat()
-            if not heartbeat.ok:
-                _LOGGER.warning("SafetyGuard blocked standby: %s", heartbeat.reason)
-                self._daily_safety_blocks += 1
-                return
-
-            rate = self.safety.check_rate_limit()
-            if not rate.ok:
-                _LOGGER.info("SafetyGuard blocked standby: %s", rate.reason)
-                self._daily_safety_blocks += 1
-                return
-
-        _LOGGER.info("CARMA: standby%s", " (forced)" if force else "")
-        success = False
-
-        if self.inverter_adapters:
-            for adapter in self.inverter_adapters:
-                ok = await adapter.set_ems_mode("battery_standby")
-                if ok:
-                    success = True
-                    # PLAT-1040: Zero ems_power_limit — non-zero value causes
-                    # GoodWe firmware to autonomously charge from grid.
-                    await adapter.set_discharge_limit(0)
-                    # Turn off fast charging — don't charge from grid
-                    if isinstance(adapter, GoodWeAdapter):
-                        await adapter.set_fast_charging(on=False)
-        else:
-            # Legacy: raw entity-based control
-            for ems_key in ("battery_ems_1", "battery_ems_2"):
-                entity = self._get_entity(ems_key)
-                if entity and await self._safe_service_call(
-                    "select",
-                    "select_option",
-                    {"entity_id": entity, "option": "battery_standby"},
-                ):
-                    if self.executor_enabled:
-                        self._check_write_verify(entity, "battery_standby")
-                    success = True
-
-        if success:
-            self._last_command = BatteryCommand.STANDBY
-            self.safety.record_mode_change()
-            # CARMA-P0-FIXES Task 4: Save runtime after command change
-            await self._async_save_runtime()
+        """Command battery to standby mode."""
+        await self._execution_engine.cmd_standby(state, force)
 
     async def _cmd_discharge(self, state: CarmaboxState, watts: int) -> None:
-        """Set batteries to discharge at specified wattage.
-
-        SafetyGuard: heartbeat + rate limit + discharge check.
-        """
-        # K1: Skip if already discharging at similar wattage (±100W tolerance)
-        if (
-            self._last_command == BatteryCommand.DISCHARGE
-            and abs(watts - self._last_discharge_w) < 100
-        ):
-            _LOGGER.debug(
-                "K1: skip redundant discharge (%dW ≈ %dW)",
-                watts,
-                self._last_discharge_w,
-            )
-            return
-
-        # ── SafetyGuard gates (defense-in-depth) ─────────────
-        heartbeat = self.safety.check_heartbeat()
-        if not heartbeat.ok:
-            _LOGGER.warning("SafetyGuard blocked discharge: %s", heartbeat.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        rate = self.safety.check_rate_limit()
-        if not rate.ok:
-            _LOGGER.info("SafetyGuard blocked discharge: %s", rate.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        temp_c = self._read_battery_temp()
-        discharge_check = self.safety.check_discharge(
-            state.battery_soc_1,
-            state.battery_soc_2,
-            self.min_soc,
-            state.grid_power_w,
-            temp_c,
-        )
-        if not discharge_check.ok:
-            _LOGGER.info("SafetyGuard blocked discharge: %s", discharge_check.reason)
-            self._daily_safety_blocks += 1
-            return
-
-        # Opt #7: Per-battery temp awareness
-        # Log which batteries can participate
-        cell_temp_k = self._read_cell_temp("kontor")
-        cell_temp_f = self._read_cell_temp("forrad")
-        cold_lock_temp = float(self._cfg.get("cold_lock_temp_c", 10.0))
-        if cell_temp_k is not None and cell_temp_k < cold_lock_temp:
-            _LOGGER.debug(
-                "CARMA: Kontor %.1f°C < %.0f → discharge OK but charge blocked",
-                cell_temp_k,
-                cold_lock_temp,
-            )
-        if cell_temp_f is not None and cell_temp_f < cold_lock_temp:
-            _LOGGER.debug(
-                "CARMA: Forrad %.1f°C < %.0f → discharge OK but charge blocked",
-                cell_temp_f,
-                cold_lock_temp,
-            )
-
-        _LOGGER.info("CARMA: discharge %dW (target %.1f kW)", watts, self.target_kw)
-
-        if self.inverter_adapters:
-            # GoodWe peak_shaving_power_limit = max grid import threshold.
-            # To force discharge: set limit to 0 (zero grid import allowed).
-            # GoodWe will discharge whatever is needed to keep grid <= limit.
-            # The 'watts' parameter is informational (how much we EXPECT to discharge).
-            #
-            # Each inverter gets limit=0 (target zero import).
-            # GoodWe internally splits discharge proportional to its capacity.
-            opts = self._cfg
-            defaults = [DEFAULT_BATTERY_1_KWH, DEFAULT_BATTERY_2_KWH]
-            caps = [
-                float(opts.get(f"battery_{i}_kwh", defaults[i - 1]))
-                for i in range(1, len(self.inverter_adapters) + 1)
-            ]
-            stored = [max(0, a.soc) * caps[idx] for idx, a in enumerate(self.inverter_adapters)]
-            total_soc = sum(stored)
-            if total_soc <= 0:
-                return
-
-            success = False
-            failed = False
-            for idx, adapter in enumerate(self.inverter_adapters):
-                if stored[idx] <= 0:
-                    continue
-                # IT-998: Use auto mode + low ems_power_limit to force discharge.
-                # peak_shaving was removed from GoodWe integration.
-                # auto mode respects ems_power_limit for grid target.
-                ems_ok = await adapter.set_ems_mode("auto")
-                if not ems_ok:
-                    failed = True
-                    continue
-                # Set peak_shaving_power_limit to 0 = target zero grid import
-                # GoodWe will discharge enough to compensate house load
-                limit_ok = await adapter.set_discharge_limit(0)
-                if not limit_ok:
-                    # K2: Rollback EMS if limit failed — avoid stale discharge
-                    _LOGGER.error("Discharge limit failed — rolling back to standby")
-                    await adapter.set_ems_mode("battery_standby")
-                    failed = True
-                    continue
-                success = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning("Partial discharge failure — rolling back all to standby")
-                for adapter in self.inverter_adapters:
-                    await adapter.set_ems_mode("battery_standby")
-                self._daily_safety_blocks += 1
-                success = False
-
-            if success:
-                self._last_command = BatteryCommand.DISCHARGE
-                self._last_discharge_w = watts
-                self.safety.record_mode_change()
-                # CARMA-P0-FIXES Task 4: Save runtime after command change
-                await self._async_save_runtime()
-                # CARMA-P0-FIXES Task 4: Save runtime after command change
-                await self._async_save_runtime()
-        else:
-            # Legacy: raw entity-based control
-            # Energy-proportional split (SoC x capacity)
-            opts = self._cfg
-            cap1 = float(opts.get("battery_1_kwh", DEFAULT_BATTERY_1_KWH))
-            cap2 = float(opts.get("battery_2_kwh", DEFAULT_BATTERY_2_KWH))
-            energy_1 = state.battery_soc_1 * cap1
-            energy_2 = max(0, state.battery_soc_2) * cap2
-            total_energy = energy_1 + energy_2
-            if total_energy <= 0:
-                return
-
-            ratio_1 = energy_1 / total_energy
-            w1 = int(watts * ratio_1)
-            w2 = watts - w1
-
-            success = False
-            failed = False
-            for ems_key, limit_key, w in [
-                ("battery_ems_1", "battery_limit_1", w1),
-                ("battery_ems_2", "battery_limit_2", w2),
-            ]:
-                ems_entity = self._get_entity(ems_key)
-                limit_entity = self._get_entity(limit_key)
-                if ems_entity and w > 0:
-                    ems_ok = await self._safe_service_call(
-                        "select",
-                        "select_option",
-                        {"entity_id": ems_entity, "option": "discharge_battery"},
-                    )
-                    if not ems_ok:
-                        # Fail-safe: do NOT set discharge limit if EMS mode failed
-                        failed = True
-                        continue
-                    if self.executor_enabled:
-                        self._check_write_verify(ems_entity, "discharge_battery")
-                    if limit_entity:
-                        await self._safe_service_call(
-                            "number",
-                            "set_value",
-                            {"entity_id": limit_entity, "value": w},
-                        )
-                        success = True
-
-            # R3: Rollback on partial failure — force ALL to standby
-            if failed and success:
-                _LOGGER.warning("Partial discharge failure — rolling back all to standby (legacy)")
-                for ems_key in ("battery_ems_1", "battery_ems_2"):
-                    entity = self._get_entity(ems_key)
-                    if entity:
-                        await self._safe_service_call(
-                            "select",
-                            "select_option",
-                            {"entity_id": entity, "option": "battery_standby"},
-                        )
-                self._daily_safety_blocks += 1
-                success = False
-
-            if success:
-                self._last_command = BatteryCommand.DISCHARGE
-                self._last_discharge_w = watts
-                self.safety.record_mode_change()
-                # CARMA-P0-FIXES Task 4: Save runtime after command change
-                await self._async_save_runtime()
+        """Command battery discharge at given watts."""
+        await self._execution_engine.cmd_discharge(state, watts)

@@ -204,6 +204,11 @@ def _make_coordinator(
     coord._grid_guard = GridGuard(GridGuardConfig())
     coord._grid_guard_result = None
 
+    # PLAT-1141: ExecutionEngine
+    from custom_components.carmabox.core.execution_engine import ExecutionEngine
+
+    coord._execution_engine = ExecutionEngine(coord)
+
     return coord
 
 
@@ -2262,9 +2267,9 @@ class TestSurplusEvAmpClamping:
         from custom_components.carmabox.core.surplus_chain import SurplusAllocation
 
         coord = _make_coordinator()
-        coord._cmd_ev_start = AsyncMock()
-        coord._cmd_ev_adjust = AsyncMock()
-        coord._cmd_ev_stop = AsyncMock()
+        coord._execution_engine.cmd_ev_start = AsyncMock()
+        coord._execution_engine.cmd_ev_adjust = AsyncMock()
+        coord._execution_engine.cmd_ev_stop = AsyncMock()
 
         alloc = SurplusAllocation(
             id="ev",
@@ -2277,14 +2282,14 @@ class TestSurplusEvAmpClamping:
         await coord._execute_surplus_allocations([alloc])
 
         if action == "start" and target_w >= 4140:
-            coord._cmd_ev_start.assert_called_once()
-            actual = coord._cmd_ev_start.call_args[0][0]
+            coord._execution_engine.cmd_ev_start.assert_called_once()
+            actual = coord._execution_engine.cmd_ev_start.call_args[0][0]
             assert actual == expected_amps
             assert actual >= DEFAULT_EV_MIN_AMPS
             assert actual <= DEFAULT_EV_MAX_AMPS
         elif action == "increase":
-            coord._cmd_ev_adjust.assert_called_once()
-            actual = coord._cmd_ev_adjust.call_args[0][0]
+            coord._execution_engine.cmd_ev_adjust.assert_called_once()
+            actual = coord._execution_engine.cmd_ev_adjust.call_args[0][0]
             assert actual == expected_amps
             assert actual >= DEFAULT_EV_MIN_AMPS
             assert actual <= DEFAULT_EV_MAX_AMPS

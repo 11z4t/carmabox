@@ -246,6 +246,11 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     coord._breach_history: dict = {}
     coord._benchmark_last_fetch = 0.0
 
+    # PLAT-1141: ExecutionEngine
+    from custom_components.carmabox.core.execution_engine import ExecutionEngine
+
+    coord._execution_engine = ExecutionEngine(coord)
+
     return coord
 
 
