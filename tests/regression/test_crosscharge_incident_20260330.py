@@ -21,6 +21,7 @@ import pytest
 
 from custom_components.carmabox.adapters.goodwe import GoodWeAdapter
 from custom_components.carmabox.coordinator import CarmaboxCoordinator
+from custom_components.carmabox.core.execution_engine import ExecutionEngine
 
 
 def _make_hass(*entities: tuple[str, str]) -> MagicMock:
@@ -62,6 +63,7 @@ def _make_coordinator_for_enforce(
     coord.hass = hass or _make_hass()
     coord.inverter_adapters = adapters
     coord._last_battery_action = last_battery_action
+    coord._execution_engine = ExecutionEngine(coord)
     return coord
 
 

@@ -231,7 +231,13 @@ async def test_enforce_ems_modes_drift_correction() -> None:
 
 @pytest.mark.asyncio
 async def test_enforce_ems_modes_crosscharge_prevention() -> None:
-    """INV-2: crosscharge (one discharge + one charge) → force all to charge_pv."""
+    """Drift correction prevents crosscharge: drifted adapter corrected to desired mode.
+
+    desired=discharge_pv (last_battery_action=discharge):
+    - kontor=discharge_pv (correct) → no change
+    - forrad=charge_pv (drifted) → corrected to discharge_pv
+    INV-2 does not fire because enforced modes are consistent (both discharge_pv).
+    """
     from custom_components.carmabox.core.execution_engine import ExecutionEngine
 
     adp1 = _make_adapter(prefix="kontor", ems_mode="discharge_pv")
@@ -244,9 +250,10 @@ async def test_enforce_ems_modes_crosscharge_prevention() -> None:
     engine = ExecutionEngine(coord)
     await engine.enforce_ems_modes()
 
-    # Both should be forced to charge_pv
-    adp1.set_ems_mode.assert_called_with("charge_pv")
-    adp2.set_ems_mode.assert_called_with("charge_pv")
+    # Kontor already correct — no change
+    adp1.set_ems_mode.assert_not_called()
+    # Forrad drifted to charge_pv → corrected to discharge_pv
+    adp2.set_ems_mode.assert_called_with("discharge_pv")
 
 
 @pytest.mark.asyncio

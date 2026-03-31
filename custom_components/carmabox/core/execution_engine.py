@@ -722,32 +722,6 @@ class ExecutionEngine:
                     )
                     await _adp.set_fast_charging(on=False)
 
-        # ── INV-2: Check current modes for crosscharge BEFORE enforcement ──
-        current_modes = [adp.ems_mode for adp in self._coord.inverter_adapters]
-        has_current_crosscharge = (
-            len(current_modes) >= 2
-            and "discharge_pv" in current_modes
-            and "charge_pv" in current_modes
-        )
-        if has_current_crosscharge:
-            _LOGGER.error(
-                "INV-2 CROSSCHARGE EMS (current): %s — forcing all to charge_pv",
-                current_modes,
-            )
-            for _adp in self._coord.inverter_adapters:
-                await _adp.set_ems_mode("charge_pv")
-                await _adp.set_fast_charging(on=False)
-                with contextlib.suppress(Exception):
-                    await self._coord.hass.services.async_call(
-                        "number",
-                        "set_value",
-                        {
-                            "entity_id": (f"number.goodwe_{_adp.prefix}_ems_power_limit"),
-                            "value": 0,
-                        },
-                    )
-            return
-
         # Track vad varje adapter SKA vara efter enforcement (för INV-2-kontroll).
         enforced_modes: list[str] = []
 
