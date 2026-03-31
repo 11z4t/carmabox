@@ -17,7 +17,8 @@ from homeassistant.helpers.event import (
     async_track_state_change_event,
 )
 
-from .const import DOMAIN, PLATFORMS
+from .const import DOMAIN as DOMAIN
+from .const import PLATFORMS
 
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry

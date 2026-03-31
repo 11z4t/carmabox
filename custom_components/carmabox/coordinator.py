@@ -981,7 +981,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _async_fetch_benchmarking(self) -> None:
         """PLAT-962: Fetch benchmarking data from hub (rate-limited to every hour)."""
 
-
         now = time.monotonic()
         last_fetch = getattr(self, "_benchmark_last_fetch", 0.0)
         if now - last_fetch < 3600:  # Once per hour
