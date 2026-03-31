@@ -21,6 +21,8 @@ _TEMPERATURE = "sensor.tempest_temperature"
 _ILLUMINANCE = "sensor.tempest_illuminance"
 _WIND_SPEED = "sensor.tempest_wind_speed"
 _WIND_GUST = "sensor.tempest_wind_gust"
+_PRESSURE = "sensor.tempest_pressure"
+_SOLAR_RADIATION = "sensor.tempest_solar_radiation"
 
 
 class TempestAdapter(WeatherAdapter):
@@ -75,3 +77,20 @@ class TempestAdapter(WeatherAdapter):
         Fallback: 0.0 m/s if unavailable (calm conditions).
         """
         return self._float_state(_WIND_GUST, fallback=0.0)
+
+    @property
+    def pressure_mbar(self) -> float:
+        """Barometric pressure (mbar/hPa). BME280 MEMS, +/-1 mbar.
+
+        Fallback: 1013.25 mbar (sea level standard) if unavailable.
+        """
+        return self._float_state(_PRESSURE, fallback=1013.25)
+
+    @property
+    def solar_radiation_wm2(self) -> float:
+        """Solar radiation (W/m2). 0-1900 W/m2, +/-5%.
+
+        Direct measurement of irradiance — can validate Solcast in real-time.
+        Fallback: 0.0 if unavailable.
+        """
+        return self._float_state(_SOLAR_RADIATION, fallback=0.0)

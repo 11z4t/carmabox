@@ -241,6 +241,56 @@ def plan_solar_allocation(
     )
 
 
+def calculate_pv_confidence(
+    pressure_mbar: float,
+    solar_radiation_wm2: float,
+    solcast_estimate_kw: float,
+    hour: int,
+) -> float:
+    """Calculate PV forecast confidence from Tempest weather data.
+
+    EXP-13 / IT-GAP09: Uses barometric pressure and real-time solar radiation
+    to adjust confidence in Solcast forecast.
+
+    Returns: 0.5-1.2 confidence multiplier.
+    - >1.0: conditions better than forecast (bright, high pressure)
+    - 1.0: matches forecast
+    - <1.0: conditions worse (cloudy, falling pressure)
+
+    Args:
+        pressure_mbar: Tempest barometric pressure (mbar). Normal ~1013.
+        solar_radiation_wm2: Tempest irradiance (W/m2). 0-1900.
+        solcast_estimate_kw: Current hour Solcast p50 estimate (kW).
+        hour: Current hour (0-23). Night hours = always 1.0.
+    """
+    # Night: no PV, confidence irrelevant
+    if hour < 6 or hour > 20:
+        return 1.0
+
+    confidence = 1.0
+
+    # Pressure factor: high pressure = clear skies = good PV
+    # 1000 mbar = low (storms), 1020 = normal, 1040 = very clear
+    if pressure_mbar > 0:
+        pressure_factor = min(1.1, max(0.7, (pressure_mbar - 1000) / 30))
+        confidence *= pressure_factor
+
+    # Solar radiation validation: compare actual vs Solcast expected
+    # If Solcast says 5kW but radiation is low → reduce confidence
+    if solcast_estimate_kw > 0.5 and hour >= 8 and hour <= 18:
+        # Expected radiation for given PV estimate (rough: 1kW PV ~ 200 W/m2)
+        expected_radiation = solcast_estimate_kw * 200
+        if expected_radiation > 0:
+            radiation_ratio = solar_radiation_wm2 / expected_radiation
+            # Clamp between 0.5 and 1.3
+            radiation_factor = min(1.3, max(0.5, radiation_ratio))
+            # Blend: 60% radiation validation, 40% pressure
+            confidence = confidence * 0.4 + radiation_factor * 0.6
+
+    # Clamp final result
+    return round(min(1.2, max(0.5, confidence)), 2)
+
+
 @dataclass
 class PVSurplusAllocation:
     """Result of real-time PV surplus allocation.
