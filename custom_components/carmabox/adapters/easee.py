@@ -221,6 +221,34 @@ class EaseeAdapter(EVAdapter):
         return self._str_state(f"binary_sensor.{self.prefix}_plug") == "on"
 
     @property
+    def connection_state(self) -> str:
+        """EXP-10: EV connection state for tracking and alerting.
+
+        Returns: 'charging', 'connected', 'disconnected', 'error'
+        """
+        if self.is_charging:
+            return "charging"
+        if self.plug_connected or self.cable_locked:
+            return "connected"
+        reason = self.reason_for_no_current
+        if reason and reason not in ("", "0", "undefined"):
+            return "error"
+        return "disconnected"
+
+    def check_unexpected_disconnect(self, was_charging: bool) -> str | None:
+        """EXP-10: Detect unexpected cable disconnect during charging.
+
+        Call every cycle with previous charging state. Returns alert
+        message if disconnect detected during active charge, None otherwise.
+        """
+        if was_charging and not self.plug_connected and not self.cable_locked:
+            return (
+                f"Unexpected EV disconnect during charging! "
+                f"Status: {self.status}, reason: {self.reason_for_no_current}"
+            )
+        return None
+
+    @property
     def dynamic_limit_a(self) -> float:
         return self._state("dynamic_charger_limit")
 

@@ -234,6 +234,74 @@ class TestChargerIdFallback:
 SHELLY_PREFIX = "shellypro3em_8813bffea620"
 
 
+class TestConnectionState:
+    """EXP-10: EV connection state tracking."""
+
+    def test_state_charging(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_status", "charging"),
+            (f"binary_sensor.{PREFIX}_plug", "on"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.connection_state == "charging"
+
+    def test_state_connected(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_status", "awaiting_start"),
+            (f"binary_sensor.{PREFIX}_plug", "on"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.connection_state == "connected"
+
+    def test_state_disconnected(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_status", "disconnected"),
+            (f"binary_sensor.{PREFIX}_plug", "off"),
+            (f"binary_sensor.{PREFIX}_cable_locked", "off"),
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.connection_state == "disconnected"
+
+    def test_state_error(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_status", "error"),
+            (f"binary_sensor.{PREFIX}_plug", "off"),
+            (f"binary_sensor.{PREFIX}_cable_locked", "off"),
+            (f"sensor.{PREFIX}_reason_for_no_current", "51"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.connection_state == "error"
+
+    def test_unexpected_disconnect_detected(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_status", "disconnected"),
+            (f"binary_sensor.{PREFIX}_plug", "off"),
+            (f"binary_sensor.{PREFIX}_cable_locked", "off"),
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        alert = adapter.check_unexpected_disconnect(was_charging=True)
+        assert alert is not None
+        assert "Unexpected" in alert
+
+    def test_no_alert_when_not_charging(self) -> None:
+        hass = _make_hass(
+            (f"binary_sensor.{PREFIX}_plug", "off"),
+            (f"binary_sensor.{PREFIX}_cable_locked", "off"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.check_unexpected_disconnect(was_charging=False) is None
+
+    def test_no_alert_when_still_connected(self) -> None:
+        hass = _make_hass(
+            (f"binary_sensor.{PREFIX}_plug", "on"),
+            (f"sensor.{PREFIX}_status", "awaiting_start"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.check_unexpected_disconnect(was_charging=True) is None
+
+
 class TestReasonForNoCurrentRecovery:
     """EXP-05: Reason-for-no-current monitoring + auto-recovery."""
 
