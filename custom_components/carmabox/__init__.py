@@ -26,14 +26,8 @@ if TYPE_CHECKING:
 # IT-2466: Module reload REMOVED — caused silent failures that left
 # coordinator in broken state (P0 2026-03-31). HA native reload handles this.
 
-# NC-12: Feature flag — use bridge (V2) or legacy coordinator
-# Shadow mode: bridge runs V2 cycle + logs decisions, but does NOT execute commands
-_USE_BRIDGE = False  # Legacy until bridge has ALL features (price discharge, EV timing, EMS)
-
-if _USE_BRIDGE:
-    from .coordinator_bridge import CoordinatorBridge as CarmaboxCoordinator
-else:
-    from .coordinator import CarmaboxCoordinator
+# PLAT-1144: _USE_BRIDGE removed — always use legacy coordinator
+from .coordinator import CarmaboxCoordinator
 
 CARD_JS = Path(__file__).parent / "dashboard" / "carmabox-card.js"
 CARD_URL = "/carmabox/carmabox-card.js"
