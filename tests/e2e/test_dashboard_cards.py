@@ -469,15 +469,16 @@ async def test_tab2_effekt_live_has_values(tab_varfor):
     )
 
 
-async def test_tab2_health_section_renders(tab_varfor):
-    """Systemhälsa-sektionen ska visas på Tab 2.
+async def test_tab2_solcast_forecast_visible(tab_varfor):
+    """Solcast-prognos ska visas på Tab 2.
 
-    Hälso-kortet visar om inverters, Easee, Nordpool och Solcast är online.
-    Kritisk för att diagnostisera CARMA Box-problem.
+    sensor.solcast_pv_forecast_forecast_today är live och visar
+    dagens förväntade solproduktion (kWh). Kritisk för CARMA Box-planering.
+    OBS: system_health_*-sensorer finns ej som entities — testas ej.
     """
     body = await _shadow_text(tab_varfor)
-    has_health = any(x in body.lower() for x in ["hälsa", "inverter", "kontor", "healthy"])
-    assert has_health, "Tab 2 systemhälsa-sektion inte synlig"
+    has_solar = any(x in body.lower() for x in ["solcast", "prognos", "kwh", "sol"])
+    assert has_solar, "Tab 2 solcast-prognos-sektion inte synlig"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
