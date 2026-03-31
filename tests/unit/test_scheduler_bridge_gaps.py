@@ -70,29 +70,65 @@ class TestScheduleEvBackwards:
         assert len(result) == 8
 
     def test_pass2_break_appliance_window_covers_need(self) -> None:
-        """Pass 1 finds nothing (high load on non-appliance hours), pass 2 slot covers
-        remaining → break at line 244."""
+        """All hours avoided → pass1 skips all → pass2 first slot covers need → break (line 244)."""
+        from custom_components.carmabox.optimizer.models import BreachLearning
         from custom_components.carmabox.optimizer.scheduler import _schedule_ev_backwards
 
-        # Non-appliance hours (1-5) have high load, appliance hours (22,23,0) have low load.
-        # With start_hour=22 and 8 hrs: indices 0→22, 1→23, 2→0, 3→1, 4→2, 5→3, 6→4, 7→5
-        loads = [0.5, 0.5, 0.5, 4.0, 4.0, 4.0, 4.0, 4.0]
-
+        # Mark all night hours as avoided via learnings → pass1 skips → pass2 processes them
+        # Small EV need (0.65 kWh) → first pass2 slot (eff_kwh≈5kWh) covers it
+        # → second iteration checks remaining<=0.1 → break line 244
+        avoid_hours = [22, 23, 0, 1, 2, 3, 4, 5]
+        learnings = [
+            BreachLearning(
+                pattern=f"test_{h}",
+                hour=h,
+                description="test",
+                action="pause_ev",
+                confidence=0.9,
+                occurrences=3,
+            )
+            for h in avoid_hours
+        ]
         result = _schedule_ev_backwards(
             num_hours=8,
             start_hour=22,
-            ev_soc_pct=40.0,
-            ev_capacity_kwh=5.0,
-            morning_target_soc=60.0,
+            ev_soc_pct=30.0,
+            ev_capacity_kwh=5.0,  # energy_needed=(40-30*0.9)/100*5=0.65 kWh
+            morning_target_soc=40.0,
             hourly_prices=[30.0] * 8,
-            hourly_loads=loads,
+            hourly_loads=[1.0] * 8,  # Low load → charge_kw>0
             target_weighted_kw=4.0,
             battery_kwh_available=10.0,
-            pv_tomorrow_kwh=10.0,
+            pv_tomorrow_kwh=0.0,
             daily_consumption_kwh=10.0,
+            learnings=learnings,
+        )
+        assert len(result) == 8
+
+    def test_pass3_break_energy_covered_in_one_slot(self) -> None:
+        """All charge_kw=0 → pass3 forces min_kw → first slot covers small need → break (261)."""
+        from custom_components.carmabox.optimizer.scheduler import _schedule_ev_backwards
+
+        # All slots have zero headroom → charge_kw=0, pass1/pass2 skip all.
+        # energy_needed = (40-30*0.9)/100*5 = 0.65 kWh.
+        # Pass3 slot 0: forced min_kw=1.38, eff_kwh=1.24 → remaining=0.65-1.24=-0.59 ≤ 0.1
+        # Pass3 slot 1: remaining≤0.1 → break (line 261) ✓
+        result = _schedule_ev_backwards(
+            num_hours=8,
+            start_hour=22,
+            ev_soc_pct=30.0,
+            ev_capacity_kwh=5.0,
+            morning_target_soc=40.0,  # energy_needed = 0.65 kWh
+            hourly_prices=[50.0] * 8,
+            hourly_loads=[4.0] * 8,  # High load → headroom=max(0,1.5*0.85/0.5-4)=0
+            target_weighted_kw=1.5,  # Very tight → charge_kw=0 on all slots
+            battery_kwh_available=0.0,
+            pv_tomorrow_kwh=0.0,
+            daily_consumption_kwh=50.0,
             learnings=[],
         )
         assert len(result) == 8
+        assert any(kw > 0 for kw, _ in result)  # pass3 forced some charging
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -104,62 +140,65 @@ class TestScheduleBattery:
     """Lines 327, 431, 461-466, 471-475."""
 
     def test_pv_forecast_reserve_multi_day(self) -> None:
-        """pv_forecast_daily with >1 day → iterates reserve loop (line 327)."""
+        """pv_forecast_daily[1] - consumption > 10 → break in reserve loop (line 327)."""
         from custom_components.carmabox.optimizer.scheduler import _schedule_battery
 
-        # Multi-day PV forecast → triggers pv_forecast_daily[1:] loop (line 327)
+        # Small loads → daily_consumption=12.0 kWh. pv_day=25 → surplus=13>10 → break (327)
         result = _schedule_battery(
-            num_hours=24,
+            num_hours=8,
             start_hour=0,
-            hourly_prices=[50.0] * 24,
-            hourly_pv=[0.0] * 24,
-            hourly_loads=[2.0] * 24,
-            hourly_ev=[0.0] * 24,
+            hourly_prices=[50.0] * 8,
+            hourly_pv=[0.0] * 8,
+            hourly_loads=[0.5] * 8,  # sum=4.0 / 8 * 24 = 12.0 kWh/day
+            hourly_ev=[0.0] * 8,
             target_weighted_kw=3.0,
             battery_soc_pct=50.0,
             battery_cap_kwh=10.0,
-            pv_forecast_daily=[5.0, 20.0, 18.0],  # >1 element → line 327
+            pv_forecast_daily=[5.0, 25.0],  # pv_day=25, surplus=25-12=13>10 → break
         )
-        assert len(result) == 24
+        assert len(result) == 8
 
     def test_aggressive_discharge_high_price(self) -> None:
-        """Very high price → aggressive discharge (line 431)."""
+        """Low median + high-spike price → aggressive_threshold=60 exceeded → line 431.
+
+        prices=[30]*6+[250]*2: median=30, discharge_thr=40, aggressive_thr=60.
+        soc=50%: drain_budget=0 (no P5). price=30<40 → idle. price=250>=60 → aggressive.
+        """
         from custom_components.carmabox.optimizer.scheduler import _schedule_battery
 
-        # All prices very high → aggressive_discharge_threshold exceeded → line 431
         result = _schedule_battery(
             num_hours=8,
-            start_hour=8,
-            hourly_prices=[250.0] * 8,  # Well above aggressive threshold
+            start_hour=8,  # Day hours w=1.0
+            hourly_prices=[30.0] * 6 + [250.0] * 2,
             hourly_pv=[0.0] * 8,
-            hourly_loads=[2.5] * 8,
+            hourly_loads=[2.0] * 8,  # net=2.0 ≤ 4.0*0.85=3.4 → P3 no-fire
             hourly_ev=[0.0] * 8,
             target_weighted_kw=4.0,
-            battery_soc_pct=70.0,
+            battery_soc_pct=50.0,  # drain_budget=0 → P5 no-fire; available=3.2>0.3 ✓
             battery_cap_kwh=10.0,
         )
-        # Should discharge at high prices
         assert any(action == "d" for _, action in result)
 
     def test_ev_support_discharge_medium_price(self) -> None:
-        """EV charging + medium price + load just below Ellevio limit
-        → priority 6 EV support fires (lines 461-466)."""
+        """EV charging + medium price + load below Ellevio limit → P6 EV support (lines 461-466).
+
+        target=4.0: net*w=6.3*0.5=3.15 ≤ 4.0*0.85=3.4 → P3 not fire.
+        price=20 < threshold=40 → P4 not fire. drain_budget=0 → P5 not fire.
+        ev=3>0, w=0.5>0 → P6 fires. total_load=3.15>target*0.7=2.8 → lines 461-466."""
         from custom_components.carmabox.optimizer.scheduler import _schedule_battery
 
-        # Night hours, price below discharge threshold (40), EV charging,
-        # load pushes total near but below 0.85 constraint (w=0.5, net=3.3: 1.65 ≤ 1.7)
         result = _schedule_battery(
             num_hours=8,
-            start_hour=22,
+            start_hour=22,  # Night: w=0.5
             hourly_prices=[20.0] * 8,  # >15 (no grid charge), <40 (no arbitrage)
             hourly_pv=[0.0] * 8,
-            hourly_loads=[3.3] * 8,  # net=3.3, net*w=1.65 ≤ target*0.85=1.7 → not p3
-            hourly_ev=[3.0] * 8,  # EV charging → priority 6 eligible
-            target_weighted_kw=2.0,
-            battery_soc_pct=50.0,  # drain_budget=0 → not p5
+            hourly_loads=[3.3] * 8,  # net=3.3+3.0=6.3, net*w=3.15 ≤ 4.0*0.85=3.4
+            hourly_ev=[3.0] * 8,  # EV → P6 candidate
+            target_weighted_kw=4.0,  # High enough that P3 doesn't fire
+            battery_soc_pct=50.0,  # drain_budget=max(0,5-5)=0 → P5 not fire
             battery_cap_kwh=10.0,
         )
-        assert len(result) == 8
+        assert any(action == "d" for _, action in result)
 
     def test_anti_idle_discharge_high_soc(self) -> None:
         """High SoC + no charge triggers + no EV → anti-idle fires (lines 471-475)."""
@@ -286,12 +325,123 @@ class TestSchedulerMiscGaps:
         assert any(slot.action == "g" for slot in plan.slots)
 
     def test_pad_long_list_truncates(self) -> None:
-        """len(lst) >= n → return lst[:n] (line 1296)."""
+        """len(lst) >= n → return lst[:n] (line 1295)."""
         from custom_components.carmabox.optimizer.scheduler import _pad
 
         result = _pad([1.0, 2.0, 3.0, 4.0, 5.0], n=3, default=0.0)
         assert result == [1.0, 2.0, 3.0]
         assert len(result) == 3
+
+    def test_pad_short_list_pads(self) -> None:
+        """len(lst) < n → return lst + [default]*(n-len) (line 1296)."""
+        from custom_components.carmabox.optimizer.scheduler import _pad
+
+        result = _pad([1.0, 2.0], n=5, default=9.9)
+        assert result == [1.0, 2.0, 9.9, 9.9, 9.9]
+
+    def test_apply_corrections_shift_ev_param_type_error(self) -> None:
+        """shift_ev param.split raises TypeError → except params={} (lines 857-858)."""
+        from custom_components.carmabox.optimizer.models import BreachCorrection
+        from custom_components.carmabox.optimizer.scheduler import _apply_corrections
+
+        class _BadStr(str):
+            def split(self, *a: object, **kw: object) -> list:  # type: ignore[override]
+                raise TypeError("forced")
+
+        corr = BreachCorrection(
+            created="2026-01-01T00:00:00",
+            source_breach_hour=0,
+            action="shift_ev",
+            target_hour=0,
+            param="",
+            reason="test",
+        )
+        corr.param = _BadStr("")  # type: ignore[assignment]
+        ev_schedule = [(2.0, 8)] * 8
+        battery_schedule: list[tuple[float, str]] = [(0.0, "i")] * 8
+        result = _apply_corrections(
+            corrections=[corr],
+            ev_schedule=ev_schedule,
+            battery_schedule=battery_schedule,
+            start_hour=0,
+            num_hours=8,
+            battery_soc_pct=50.0,
+            battery_min_soc=15.0,
+            battery_cap_kwh=10.0,
+            max_discharge_kw=5.0,
+        )
+        assert result is not None  # except clause executed; no crash
+
+    def test_apply_corrections_add_discharge_param_type_error(self) -> None:
+        """add_discharge param.split raises TypeError → except params={} (lines 878-879)."""
+        from custom_components.carmabox.optimizer.models import BreachCorrection
+        from custom_components.carmabox.optimizer.scheduler import _apply_corrections
+
+        class _BadStr(str):
+            def split(self, *a: object, **kw: object) -> list:  # type: ignore[override]
+                raise TypeError("forced")
+
+        corr = BreachCorrection(
+            created="2026-01-01T00:00:00",
+            source_breach_hour=0,
+            action="add_discharge",
+            target_hour=2,  # idx=2 < 8 → enters elif add_discharge branch
+            param="",
+            reason="test",
+        )
+        corr.param = _BadStr("")  # type: ignore[assignment]
+        ev_schedule = [(0.0, 0)] * 8
+        battery_schedule: list[tuple[float, str]] = [(0.0, "i")] * 8
+        result = _apply_corrections(
+            corrections=[corr],
+            ev_schedule=ev_schedule,
+            battery_schedule=battery_schedule,
+            start_hour=0,
+            num_hours=8,
+            battery_soc_pct=80.0,  # avail_kwh = (80-15)/100*10 = 6.5 > 1.0 → discharge set
+            battery_min_soc=15.0,
+            battery_cap_kwh=10.0,
+            max_discharge_kw=5.0,
+        )
+        assert result is not None
+
+    def test_analyze_idle_time_high_idle_pct(self) -> None:
+        """idle_pct > 70 → 'idle >70%' opportunity appended (line 1273)."""
+        from custom_components.carmabox.optimizer.models import SchedulerHourSlot
+        from custom_components.carmabox.optimizer.scheduler import analyze_idle_time
+
+        # All slots idle (action='i') so active_slots=0
+        slots = [
+            SchedulerHourSlot(
+                hour=h,
+                action="i",
+                battery_kw=0.0,
+                ev_kw=0.0,
+                ev_amps=0,
+                miner_on=False,
+                grid_kw=1.5,
+                weighted_kw=1.5,
+                pv_kw=0.0,
+                consumption_kw=1.5,
+                price=50.0,
+                battery_soc=50,
+                ev_soc=60,
+                constraint_ok=True,
+                reasoning="idle",
+            )
+            for h in range(24)
+        ]
+        # idle_minutes_today=1440 → 1440/(hour*60)*100 always clamps to 100 > 70
+        result = analyze_idle_time(
+            slots=slots,
+            idle_minutes_today=1440,  # max minutes/day → idle_pct clamps to 100 always > 70
+            battery_soc_pct=50.0,
+            battery_min_soc=15.0,
+            battery_cap_kwh=10.0,
+            prices=[50.0] * 24,
+            pv_forecast=[0.0] * 24,
+        )
+        assert any(">70%" in opp for opp in result.opportunities)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
