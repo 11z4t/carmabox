@@ -36,6 +36,7 @@ class GridGuardConfig:
     recovery_hold_s: float = 60.0
     fallback_grid_w: float = 2000.0
     ev_min_amps: int = 6
+    ladder_cooldown_s: float = 60.0  # PLAT-1164: min seconds between ladder escalations
 
 
 @dataclass
@@ -95,6 +96,7 @@ class GridGuard:
         self._actions_taken: list[str] = []
         self._last_known_grid_w: float = 0.0
         self._last_projected_kw: float = 0.0  # PLAT-1162: init to avoid AttributeError
+        self._last_ladder_ts: float = 0.0  # PLAT-1164: cooldown between escalations
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -172,20 +174,22 @@ class GridGuard:
             inv_result.replan_needed = True
             # ALSO run action ladder if over limit
             if level != "OK":
-                overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
-                extra_cmds, reason = self._action_ladder(
-                    overshoot_w,
-                    consumers,
-                    ev_power_w,
-                    ev_amps,
-                    ev_phase_count,
-                    batteries,
-                    kontor_temp_c,
-                    level=level,
-                )
-                inv_result.commands.extend(extra_cmds)
-                inv_result.reason += f"; {reason}" if reason else ""
                 inv_result.status = "CRITICAL"
+                if ts - self._last_ladder_ts >= self.config.ladder_cooldown_s:
+                    overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
+                    extra_cmds, reason = self._action_ladder(
+                        overshoot_w,
+                        consumers,
+                        ev_power_w,
+                        ev_amps,
+                        ev_phase_count,
+                        batteries,
+                        kontor_temp_c,
+                        level=level,
+                    )
+                    inv_result.commands.extend(extra_cmds)
+                    inv_result.reason += f"; {reason}" if reason else ""
+                    self._last_ladder_ts = ts  # PLAT-1164
             return inv_result
 
         # Headroom OK — no projection breach
@@ -194,6 +198,7 @@ class GridGuard:
                 if ts - self._recovery_start >= self.config.recovery_hold_s:
                     self._status = "OK"
                     self._actions_taken.clear()
+                    self._last_ladder_ts = 0.0  # PLAT-1164: reset cooldown on full recovery
             elif self._status in ("WARNING", "CRITICAL"):
                 self._status = "RECOVERY"
                 self._recovery_start = ts
@@ -207,19 +212,23 @@ class GridGuard:
             )
 
         # OVER LIMIT — action ladder with escalation level
-        overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)  # Convert to actual W
-        commands, reason = self._action_ladder(
-            overshoot_w,
-            consumers,
-            ev_power_w,
-            ev_amps,
-            ev_phase_count,
-            batteries,
-            kontor_temp_c,
-            level=level,
-        )
-
         self._status = "CRITICAL" if level in ("STOP", "EMERGENCY") else "WARNING"
+
+        overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)  # Convert to actual W
+        if ts - self._last_ladder_ts >= self.config.ladder_cooldown_s:
+            commands, reason = self._action_ladder(
+                overshoot_w,
+                consumers,
+                ev_power_w,
+                ev_amps,
+                ev_phase_count,
+                batteries,
+                kontor_temp_c,
+                level=level,
+            )
+            self._last_ladder_ts = ts  # PLAT-1164
+        else:
+            commands, reason = [], "Hysteres — väntar cooldown"
 
         return GridGuardResult(
             status=self._status,

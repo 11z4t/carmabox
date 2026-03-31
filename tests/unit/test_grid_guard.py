@@ -776,3 +776,93 @@ class TestHeadroomProperty:
         # projected = (1.0*30 + 2.0*30)/60 = 1.5
         assert abs(g.headroom_kw - (2.0 * 0.85 - 1.5)) < 0.01
         assert abs(g.headroom_kw - r.headroom_kw) < 0.01
+
+
+# ═══════════════════════════════════════════════════════════════
+# PLAT-1164: action_ladder hysteres
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestLadderHysteresis:
+    def test_ladder_fires_on_first_breach(self):
+        """First over-limit cycle → ladder fires immediately."""
+        g = _guard()
+        r = g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=100.0,
+        )
+        assert r.status in ("WARNING", "CRITICAL")
+        assert len(r.commands) > 0
+
+    def test_ladder_suppressed_within_cooldown(self):
+        """Second over-limit cycle within 60s → no new commands."""
+        g = _guard()
+        # First breach
+        g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=100.0,
+        )
+        # Second breach 30s later (< cooldown)
+        r2 = g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=130.0,
+        )
+        assert r2.status in ("WARNING", "CRITICAL")
+        assert len(r2.commands) == 0  # Cooldown suppresses re-escalation
+
+    def test_ladder_fires_again_after_cooldown(self):
+        """After cooldown expires, ladder fires again."""
+        g = _guard()
+        # First breach
+        g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=100.0,
+        )
+        # After cooldown (>60s)
+        r2 = g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=31,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=165.0,
+        )
+        assert len(r2.commands) > 0  # Cooldown expired → ladder fires
+
+    def test_ladder_cooldown_configurable(self):
+        """Custom ladder_cooldown_s is respected."""
+        g = GridGuard(GridGuardConfig(ladder_cooldown_s=10.0))
+        g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=100.0,
+        )
+        # 15s later — exceeds 10s cooldown
+        r2 = g.evaluate(
+            viktat_timmedel_kw=2.0,
+            grid_import_w=3000,
+            hour=14,
+            minute=30,
+            consumers=[_consumer("miner", 500, 2, switch="switch.miner")],
+            timestamp=115.0,
+        )
+        assert len(r2.commands) > 0  # 15s > 10s cooldown → fires
