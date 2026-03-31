@@ -1406,14 +1406,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if len(hourly_pv_remaining) > hour:
                     hourly_pv_remaining = hourly_pv_remaining[hour:]
 
-                # Tempest PV confidence: falling pressure = less trust
+                # EXP-13: Tempest PV confidence via core function
+                from .core.planner import calculate_pv_confidence
+
                 pv_conf = 1.0
                 if self.weather_adapter:
                     try:
-                        pressure = self.weather_adapter.pressure_mbar
-                        if pressure > 0:
-                            # Rising pressure = high confidence, falling = low
-                            pv_conf = min(1.2, max(0.6, (pressure - 990) / 30))
+                        solcast_current = hourly_pv_remaining[0] if hourly_pv_remaining else 0
+                        pv_conf = calculate_pv_confidence(
+                            pressure_mbar=self.weather_adapter.pressure_mbar,
+                            solar_radiation_wm2=self.weather_adapter.solar_radiation_wm2,
+                            solcast_estimate_kw=solcast_current,
+                            hour=hour,
+                        )
                     except Exception:
                         pass
 
