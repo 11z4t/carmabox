@@ -307,10 +307,11 @@ class TestAsyncRestoreSavings:
         from custom_components.carmabox.optimizer.savings import state_to_dict
 
         coord = _make_coord()
-        sample = SavingsState(month=3, year=2026)
+        now = datetime.now()
+        sample = SavingsState(month=now.month, year=now.year)
         sample.discharge_savings_kr = 12.5
         data = state_to_dict(sample)
-        data["_last_save_ts"] = datetime.now().isoformat()
+        data["_last_save_ts"] = now.isoformat()
 
         coord._savings_store.async_load = AsyncMock(return_value=data)
         await coord._async_restore_savings()
@@ -356,10 +357,13 @@ class TestAsyncRestoreSavings:
     @pytest.mark.asyncio
     async def test_invalid_timestamp_proceeds_normally(self) -> None:
         """Unparseable timestamp → fallback continues without reset."""
+        import datetime
+
         from custom_components.carmabox.optimizer.savings import state_to_dict
 
         coord = _make_coord()
-        sample = SavingsState(month=3, year=2026)
+        now = datetime.datetime.now()
+        sample = SavingsState(month=now.month, year=now.year)
         sample.discharge_savings_kr = 7.0
         data = state_to_dict(sample)
         data["_last_save_ts"] = "NOT_A_DATE"

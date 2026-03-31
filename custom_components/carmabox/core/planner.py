@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 from ..const import (
     DEFAULT_EV_MAX_AMPS,
@@ -317,7 +318,7 @@ class PVSurplusAllocation:
     ev_action: str  # "charge", "hold", "stop"
     ev_amps: int  # Recommended amps (0 = don't charge)
     battery_action: str  # "charge", "hold", "discharge"
-    battery_target_w: int  # Charge/discharge watts
+    battery_target_w: float  # Charge/discharge watts
     consumers_action: str  # "activate", "hold", "deactivate"
     consumers_available_w: float  # Surplus available for consumers after EV+battery
     will_export: bool  # True if surplus remains after all allocation
@@ -431,18 +432,18 @@ def allocate_pv_surplus(
 
     # ── Battery allocation ───────────────────────────────────
     battery_action = "hold"
-    battery_target_w = 0
+    battery_target_w: float = 0.0
 
     if battery_soc_pct < 100 and remaining_w > MIN_BATTERY_CHARGE_SURPLUS_W:
         # Charge battery from remaining surplus
         charge_w = min(int(remaining_w), battery_max_charge_w)
         battery_action = "charge"
-        battery_target_w = charge_w
+        battery_target_w = float(charge_w)
         remaining_w -= charge_w
 
     # ── Controllable consumers ───────────────────────────────
     consumers_action = "hold"
-    consumers_available_w = 0
+    consumers_available_w: float = 0.0
 
     if remaining_w > MIN_CONSUMER_SURPLUS_W:
         consumers_action = "activate"
@@ -500,7 +501,6 @@ class PlannerConfig:
     solar_strong_threshold_kwh: float = 25.0
     solar_partial_threshold_kwh: float = 15.0
     ev_phase_count: int = 3
-    ellevio_night_weight: float = 0.5
 
 
 @dataclass
@@ -648,7 +648,7 @@ def apply_p10_safety(
     pv_forecast_estimate_kwh: float,
     daily_consumption_kwh: float = 15.0,
     p10_threshold_kwh: float = 5.0,
-) -> dict:
+) -> dict[str, Any]:
     """PLAT-1004: p10-golv säkerhetsregel.
 
     Om p10 < threshold → risk för mycket lite sol.
@@ -686,7 +686,7 @@ def calculate_ellevio_peak_cost(
     new_peak_kw: float,
     cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = DEFAULT_PEAK_TOP_N,
-) -> dict:
+) -> dict[str, Any]:
     """Calculate cost impact of a new peak on Ellevio bill.
 
     Ellevio charges: average of top N peaks x cost_per_kw x 12 months.
@@ -800,7 +800,7 @@ def pressure_pv_adjustment(
     pressure_hpa: float,
     pressure_trend_hpa_3h: float = 0.0,
     normal_pressure_hpa: float = 1013.25,
-) -> dict:
+) -> dict[str, Any]:
     """Adjust PV forecast confidence based on barometric pressure.
 
     High pressure (>1020) = clear skies → boost confidence
@@ -854,7 +854,7 @@ def should_discharge_now(
     battery_soc_pct: float,
     min_soc: float = 15.0,
     discharge_threshold_factor: float = 0.7,
-) -> dict:
+) -> dict[str, Any]:
     """Decide if battery should discharge NOW based on price comparison.
 
     Logic:
@@ -933,7 +933,7 @@ def optimal_discharge_hours(
     max_discharge_kw: float = 5.0,
     house_load_kw: float = 2.5,
     min_profitable_spread_ore: float = 20.0,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Find the best hours to discharge battery for maximum savings.
 
     Returns list of {hour, price, discharge_kw, savings_ore} sorted by
@@ -988,7 +988,7 @@ def should_grid_charge_winter(
     price_threshold_ore: float = 30.0,
     battery_soc: float = 50.0,
     max_charge_soc: float = 80.0,
-) -> dict:
+) -> dict[str, Any]:
     """Determine if winter grid charging is recommended.
 
     In winter, PV production is low. If solar forecast is below daily
@@ -1043,7 +1043,7 @@ def should_charge_ev_tonight(
     pv_tomorrow_kwh: float,  # PV forecast tomorrow
     ev_charge_kw: float = 4.14,  # 6A 3-phase
     is_workday_tomorrow: bool = True,  # Mon-Fri: car leaves for work
-) -> dict:
+) -> dict[str, Any]:
     """Decide: charge EV tonight or wait for cheaper/free opportunity.
 
     Compares three options:

@@ -19,6 +19,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any
 
 from ..const import (
     CONSUMER_NEAR_MAX_RATIO,
@@ -239,12 +240,13 @@ def allocate_surplus(
         headroom = c.max_w - c.current_w
 
         # For EV: check if increase is meaningful (full amp steps)
+        increase: float
         if c.phase_count > 1:
             w_per_step = 230 * c.phase_count
             steps = int(remaining / w_per_step)
             if steps <= 0:
                 continue
-            increase = steps * w_per_step
+            increase = float(steps * w_per_step)
         else:
             increase = min(remaining, headroom)
 
@@ -360,7 +362,7 @@ def allocate_surplus(
                     continue
 
                 # Stop low-prio consumers until we have enough
-                freed = 0
+                freed: float = 0.0
                 for low in sorted(running_low, key=lambda c: -c.priority):
                     if low.priority <= high.priority:
                         continue
@@ -558,7 +560,7 @@ def calculate_climate_boost(
     mode: str = "cool",
     boost_degrees: float = 2.0,
     min_surplus_w: float = 500.0,
-) -> dict:
+) -> dict[str, Any]:
     """Calculate climate setpoint boost to absorb PV surplus.
 
     When surplus is available:

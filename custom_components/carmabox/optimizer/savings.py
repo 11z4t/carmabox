@@ -183,7 +183,7 @@ def ellevio_peak_penalty(
     target_kw: float = 2.0,
     cost_per_kw: float = 80.0,
     top_n: int = 3,
-) -> dict:
+) -> dict[str, Any]:
     """Calculate the extra Ellevio cost from exceeding target.
 
     Ellevio charges based on the average of the top-N hourly peaks each month.

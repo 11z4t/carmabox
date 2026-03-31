@@ -175,9 +175,14 @@ class TestCheckDailyGoals:
         assert coord._breach_escalation.get("ellevio") == 2
 
     def test_breach_escalation_warning_2_breaches(self) -> None:
-        """2 breaches in 7 days → escalation level 1 (lines 6090-6096)."""
+        """2 breaches total (1 seeded + today) → escalation level 1."""
+        from datetime import datetime, timedelta
+
+        today = datetime.now().date()
+        # Seed 1 prior breach; _check_daily_goals will add today → 2 total → level 1
+        d1 = (today - timedelta(days=3)).isoformat()
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
-        coord._breach_history = {"ellevio": ["2026-03-30", "2026-03-31"]}
+        coord._breach_history = {"ellevio": [d1]}
         ell_max = _make_state(state="5.5")
         coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()

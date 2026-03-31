@@ -15,6 +15,7 @@ Stores rolling averages — no heavy ML frameworks needed.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 
 @dataclass
@@ -97,7 +98,7 @@ def learn_appliance_cycle(
 def predict_appliance_remaining(
     profile: AppliancePowerProfile,
     elapsed_min: float,
-) -> dict:
+) -> dict[str, Any]:
     """Predict remaining time and energy for running appliance.
 
     Returns:
@@ -135,7 +136,7 @@ class MLPredictor:
         # Battery temp → effective capacity
         self._temp_capacity: list[tuple[float, float]] = []
         # Decision outcomes
-        self._decision_outcomes: list[dict] = []
+        self._decision_outcomes: list[dict[str, Any]] = []
         self._max_samples = 30  # Per bucket
 
     # ── Add samples ─────────────────────────────────────────────
@@ -172,7 +173,7 @@ class MLPredictor:
     def add_decision_outcome(
         self,
         decision: str,
-        context: dict,
+        context: dict[str, Any],
         outcome: str,
         laws_ok: bool,
     ) -> None:
@@ -245,7 +246,7 @@ class MLPredictor:
 
     # ── Serialization ───────────────────────────────────────────
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize for persistent storage."""
         return {
             "consumption": {f"{k[0]}_{k[1]}": v for k, v in self._consumption.items()},
@@ -254,7 +255,7 @@ class MLPredictor:
             "decision_outcomes": self._decision_outcomes[-50:],
         }
 
-    def from_dict(self, data: dict) -> None:
+    def from_dict(self, data: dict[str, Any]) -> None:
         """Restore from persistent storage."""
         for key_str, values in data.get("consumption", {}).items():
             parts = key_str.split("_")

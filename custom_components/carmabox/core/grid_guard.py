@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 ACTION_LADDER_HYSTERESIS_S: float = 60.0  # PLAT-1164: min seconds between escalations
 
@@ -77,7 +78,7 @@ class GridGuardResult:
     headroom_kw: float = 0.0  # PLAT-1162: default prevents AttributeError on partial construction
     projected_kw: float = 0.0
     viktat_timmedel_kw: float = 0.0
-    commands: list[dict] = field(default_factory=list)
+    commands: list[dict[str, Any]] = field(default_factory=list)
     reason: str = ""
     invariant_violations: list[str] = field(default_factory=list)
     replan_needed: bool = False
@@ -264,7 +265,7 @@ class GridGuard:
     ) -> GridGuardResult:
         """Check all INV-* invariants. Returns violations + fix commands."""
         violations: list[str] = []
-        commands: list[dict] = []
+        commands: list[dict[str, Any]] = []
 
         for bat in batteries:
             # INV-1: Never EMS auto
@@ -391,7 +392,7 @@ class GridGuard:
         batteries: list[BatteryState],
         kontor_temp_c: float,
         level: str = "EMERGENCY",
-    ) -> tuple[list[dict], str]:
+    ) -> tuple[list[dict[str, Any]], str]:
         """Determine actions to reduce grid import.
 
         Level controls max escalation:
@@ -399,7 +400,7 @@ class GridGuard:
           STOP     — shed consumers + pause EV (no discharge)
           EMERGENCY — full ladder including battery discharge
         """
-        commands: list[dict] = []
+        commands: list[dict[str, Any]] = []
         reasons: list[str] = []
         remaining = overshoot_w
 
@@ -503,7 +504,7 @@ class GridGuard:
 
     # ── PLAT-1095: Persistence helpers ──────────────────────────
 
-    def get_persistent_state(self) -> dict:
+    def get_persistent_state(self) -> dict[str, Any]:
         """Return state dict for persistence. Called by coordinator before saving."""
         return {
             "hour": self._hour,
@@ -512,7 +513,7 @@ class GridGuard:
             "last_grid_w": self._last_grid_w,
         }
 
-    def restore_state(self, data: dict, current_hour: int) -> None:
+    def restore_state(self, data: dict[str, Any], current_hour: int) -> None:
         """Restore state from persistence. Discards if hour has changed.
 
         _last_update is intentionally NOT restored — monotonic timestamps

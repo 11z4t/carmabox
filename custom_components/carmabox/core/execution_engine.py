@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..optimizer.models import CarmaboxState
+    from .surplus_chain import SurplusAllocation
 
 from ..adapters.goodwe import GoodWeAdapter
 from ..const import (
@@ -515,7 +516,7 @@ class ExecutionEngine:
                         a.max_charge_w or 5000 for a in self._coord.inverter_adapters
                     )
 
-                alloc = allocate_pv_surplus(
+                pv_alloc = allocate_pv_surplus(
                     pv_now_w=state.pv_power_w,
                     grid_now_w=state.grid_power_w,
                     house_consumption_w=max(500, state.grid_power_w + state.pv_power_w),
@@ -535,35 +536,35 @@ class ExecutionEngine:
 
                 self._coord._pv_allocation = {
                     "timestamp": now.isoformat(),
-                    "ev_action": alloc.ev_action,
-                    "ev_amps": alloc.ev_amps,
-                    "battery_action": alloc.battery_action,
-                    "battery_target_w": alloc.battery_target_w,
-                    "consumers_action": alloc.consumers_action,
-                    "surplus_w": round(alloc.surplus_w),
-                    "will_export": alloc.will_export,
-                    "reason": alloc.reason,
+                    "ev_action": pv_alloc.ev_action,
+                    "ev_amps": pv_alloc.ev_amps,
+                    "battery_action": pv_alloc.battery_action,
+                    "battery_target_w": pv_alloc.battery_target_w,
+                    "consumers_action": pv_alloc.consumers_action,
+                    "surplus_w": round(pv_alloc.surplus_w),
+                    "will_export": pv_alloc.will_export,
+                    "reason": pv_alloc.reason,
                     "is_workday": is_workday,
                     "pv_confidence": round(pv_conf, 2),
                 }
 
-                if alloc.ev_action == "charge" and alloc.ev_amps >= DEFAULT_EV_MIN_AMPS:
+                if pv_alloc.ev_action == "charge" and pv_alloc.ev_amps >= DEFAULT_EV_MIN_AMPS:
                     if not self._coord._ev_enabled:
                         _LOGGER.info(
                             "SOLAR-EV: start %dA (surplus %.0fW, bat %.0f%%)",
-                            alloc.ev_amps,
-                            alloc.surplus_w,
+                            pv_alloc.ev_amps,
+                            pv_alloc.surplus_w,
                             state.total_battery_soc,
                         )
-                        await self.cmd_ev_start(alloc.ev_amps)
-                    elif alloc.ev_amps != self._coord._ev_current_amps:
-                        await self.cmd_ev_adjust(alloc.ev_amps)
+                        await self.cmd_ev_start(pv_alloc.ev_amps)
+                    elif pv_alloc.ev_amps != self._coord._ev_current_amps:
+                        await self.cmd_ev_adjust(pv_alloc.ev_amps)
                 elif (
-                    alloc.ev_action != "charge"
+                    pv_alloc.ev_action != "charge"
                     and self._coord._ev_enabled
                     and not self._coord._night_ev_active
                 ):
-                    _LOGGER.info("SOLAR-EV: stop (reason: %s)", alloc.reason)
+                    _LOGGER.info("SOLAR-EV: stop (reason: %s)", pv_alloc.reason)
                     await self.cmd_ev_stop()
 
                 if self._coord.ev_adapter:
@@ -634,7 +635,7 @@ class ExecutionEngine:
     # execute_surplus_allocations
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def execute_surplus_allocations(self, allocations: list) -> None:
+    async def execute_surplus_allocations(self, allocations: list[SurplusAllocation]) -> None:
         """Utför surplus chain-allokeringar mot hårdvara.
 
         Args:
@@ -934,7 +935,7 @@ class ExecutionEngine:
         Args:
             state: Aktuellt systemtillstånd.
         """
-        from ..coordinator import BatteryCommand
+        from ..optimizer.models import BatteryCommand
 
         if self._coord._last_command in (
             BatteryCommand.CHARGE_PV,
@@ -1034,7 +1035,7 @@ class ExecutionEngine:
         Args:
             state: Aktuellt systemtillstånd.
         """
-        from ..coordinator import BatteryCommand
+        from ..optimizer.models import BatteryCommand
 
         if self._coord._last_command == BatteryCommand.CHARGE_PV:
             if self._coord.inverter_adapters:
@@ -1143,7 +1144,7 @@ class ExecutionEngine:
             state: Aktuellt systemtillstånd.
             force: Om True, hoppa över idempotens- och säkerhetsgate.
         """
-        from ..coordinator import BatteryCommand
+        from ..optimizer.models import BatteryCommand
 
         if not force and self._coord._last_command == BatteryCommand.STANDBY:
             return
@@ -1202,7 +1203,7 @@ class ExecutionEngine:
             state: Aktuellt systemtillstånd.
             watts: Önskad urladdningseffekt i watt.
         """
-        from ..coordinator import BatteryCommand
+        from ..optimizer.models import BatteryCommand
 
         # K1: Hoppa om redan urladdas med liknande effekt (±100W)
         if (

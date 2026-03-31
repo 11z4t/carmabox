@@ -100,7 +100,9 @@ def build_day_inputs(
     default_consumption = [2.0] * 24
     # AC3: Use historical mean prices as fallback when available
     has_prices = historical_mean_prices and len(historical_mean_prices) >= 24
-    default_prices = list(historical_mean_prices) if has_prices else [50.0] * 24
+    default_prices = (
+        list(historical_mean_prices) if has_prices and historical_mean_prices else [50.0] * 24
+    )
 
     result = []
     for d in range(days):
