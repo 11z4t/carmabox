@@ -276,7 +276,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         self._last_known_ev_soc,
                     )
         except Exception:
-            pass
+            _LOGGER.debug("EV SoC seed failed", exc_info=True)
         self._ev_current_amps: int = 0
         self._ev_last_ramp_time: float = 0.0
         self._ev_initialized: bool = False
@@ -2223,7 +2223,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
             except Exception:
-                pass  # non-critical
+                _LOGGER.debug("Non-critical operation failed", exc_info=True)
 
             # IT-2467: MQTT heartbeat for external watchdog
             try:
@@ -2231,7 +2231,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if _hub:
                     _hub.publish_status(version="4.6.0")
             except Exception:
-                pass  # non-critical
+                _LOGGER.debug("Non-critical operation failed", exc_info=True)
 
             # License check (every 6h — Hub handshake)
             await self._check_license()
