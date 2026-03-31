@@ -18,6 +18,8 @@ import math
 import time
 from dataclasses import dataclass, field
 
+ACTION_LADDER_HYSTERESIS_S: float = 60.0  # PLAT-1164: min seconds between escalations
+
 
 @dataclass
 class GridGuardConfig:
@@ -36,7 +38,7 @@ class GridGuardConfig:
     recovery_hold_s: float = 60.0
     fallback_grid_w: float = 2000.0
     ev_min_amps: int = 6
-    ladder_cooldown_s: float = 60.0  # PLAT-1164: min seconds between ladder escalations
+    ladder_cooldown_s: float = ACTION_LADDER_HYSTERESIS_S  # PLAT-1164
 
 
 @dataclass
@@ -72,9 +74,9 @@ class GridGuardResult:
     """What Grid Guard wants to do."""
 
     status: str  # OK | WARNING | CRITICAL | RECOVERY
-    headroom_kw: float
-    projected_kw: float
-    viktat_timmedel_kw: float
+    headroom_kw: float = 0.0  # PLAT-1162: default prevents AttributeError on partial construction
+    projected_kw: float = 0.0
+    viktat_timmedel_kw: float = 0.0
     commands: list[dict] = field(default_factory=list)
     reason: str = ""
     invariant_violations: list[str] = field(default_factory=list)
