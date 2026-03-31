@@ -364,8 +364,14 @@ class GridGuard:
         vikt: float,
         minute: int,
     ) -> float:
-        """Project where weighted hourly average will land."""
-        elapsed = max(1, minute)
+        """Project where weighted hourly average will land.
+
+        PLAT-1159: elapsed must be `minute` (0-59), NOT max(1, minute).
+        At minute=0 no past data exists — projection = current rate only.
+        Using max(1, ...) caused ~1.7% underestimation at hour start,
+        masking spikes that start at XX:00.
+        """
+        elapsed = max(0, min(minute, 59))  # PLAT-1159: was max(1, minute)
         remaining = 60 - elapsed
         grid_viktat_kw = max(0, grid_import_w) / 1000 * vikt
 

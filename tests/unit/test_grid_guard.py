@@ -237,6 +237,30 @@ class TestProjection:
         expected = (1.0 * 30 + 2.0 * 30) / 60  # = 1.5
         assert abs(r.projected_kw - expected) < 0.01
 
+    def test_projection_minute_zero(self):
+        """PLAT-1159: At minute=0, elapsed=0 — projection = current rate only.
+
+        Old code used max(1, minute) which gave (0*1 + grid*59)/60 ≈ grid*0.983.
+        Correct formula: elapsed=0, remaining=60 → projected = grid_viktat.
+        """
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=0.0, grid_import_w=3000, hour=14, minute=0)
+        # elapsed=0, remaining=60 → projected = 3.0 * 60 / 60 = 3.0
+        expected = 3.0 * 60 / 60  # = 3.0 kW
+        assert abs(r.projected_kw - expected) < 0.01
+
+    def test_projection_minute_zero_spike_triggers_critical(self):
+        """PLAT-1159: Spike at XX:00 must be caught immediately.
+
+        With old max(1,0) the projection was 2.95 instead of 3.0 —
+        same level but important to confirm the formula is exact.
+        """
+        g = _guard()
+        # 3.0 kW at minute 0 → projected = 3.0 → > tak (2.0) → CRITICAL
+        r = g.evaluate(viktat_timmedel_kw=0.0, grid_import_w=3000, hour=14, minute=0)
+        assert r.status == "CRITICAL"
+        assert abs(r.projected_kw - 3.0) < 0.01
+
 
 # ═══════════════════════════════════════════════════════════════
 # Återställning
