@@ -2003,6 +2003,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         try:
             now = datetime.now()
 
+            # EXP-DEPLOY: Runtime executor toggle check (every cycle)
+            ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
+            if ha_toggle:
+                want_exec = ha_toggle.state == "on"
+                if want_exec and not self.executor_enabled and self._has_feature("executor"):
+                    self.executor_enabled = True
+                    for adapter in self.inverter_adapters:
+                        adapter._analyze_only = False  # type: ignore[attr-defined]
+                    if self.ev_adapter:
+                        self.ev_adapter._analyze_only = False  # type: ignore[attr-defined]
+                    _LOGGER.warning("CARMA Box: Executor ACTIVATED via HA toggle")
+                elif not want_exec and self.executor_enabled:
+                    self.executor_enabled = False
+                    for adapter in self.inverter_adapters:
+                        adapter._analyze_only = True  # type: ignore[attr-defined]
+                    if self.ev_adapter:
+                        self.ev_adapter._analyze_only = True  # type: ignore[attr-defined]
+                    _LOGGER.warning("CARMA Box: Executor DEACTIVATED via HA toggle")
+
             # ── RC-2: STARTUP SAFETY — fast_charging OFF + standby ──
             # Körs varje cykel tills BEKRÄFTAT att fast_charging=OFF
             if not getattr(self, "_startup_safety_confirmed", False):
