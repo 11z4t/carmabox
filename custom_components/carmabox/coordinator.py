@@ -1005,6 +1005,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         hour = now.hour
         opts = self._cfg
 
+        _LOGGER.debug("_execute_v2: entered hour=%d", hour)
+
         # ── Find plan action for current hour ───────────────────
         planned = next((p for p in self.plan if p.hour == hour), None)
         plan_action = None
