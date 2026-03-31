@@ -598,7 +598,6 @@ class TestRegisterWithCertsAndMQTTS:
     async def test_register_stores_certs_and_mqtts(self, tmp_path: object) -> None:
         """register response with certs + mqtts_host/port → store all (lines 470-477)."""
 
-
         client = _make_client()
         client.hass.config.config_dir = str(tmp_path)
 

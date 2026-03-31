@@ -159,17 +159,23 @@ class TestCheckLicense:
     async def test_license_valid_updates_features(self) -> None:
         """Hub returns 200 → updates tier, features, executor_enabled."""
         coord = _make_coord()
-        coord._cfg = {"hub_url": "https://hub.test", "hub_api_key": "key", "hub_box_id": "box1",
-                      "executor_enabled": True}
+        coord._cfg = {
+            "hub_url": "https://hub.test",
+            "hub_api_key": "key",
+            "hub_box_id": "box1",
+            "executor_enabled": True,
+        }
         coord._license_check_interval = 0
 
         mock_resp = AsyncMock()
         mock_resp.status = 200
-        mock_resp.json = AsyncMock(return_value={
-            "tier": "enterprise",
-            "features": ["analyzer", "executor", "ev_control"],
-            "valid_until": "2026-12-31",
-        })
+        mock_resp.json = AsyncMock(
+            return_value={
+                "tier": "enterprise",
+                "features": ["analyzer", "executor", "ev_control"],
+                "valid_until": "2026-12-31",
+            }
+        )
 
         mock_session_ctx = AsyncMock()
         mock_session_ctx.__aenter__ = AsyncMock(return_value=mock_resp)
@@ -254,6 +260,7 @@ class TestOnEvCableConnected:
 
         # Mock _collect_state to return PV=2kW
         from custom_components.carmabox.optimizer.models import CarmaboxState
+
         state = CarmaboxState(pv_power_w=2000.0)
         coord._collect_state = MagicMock(return_value=state)
         coord._cmd_ev_start = AsyncMock()
@@ -269,6 +276,7 @@ class TestOnEvCableConnected:
         coord.ev_adapter = MagicMock()
 
         from custom_components.carmabox.optimizer.models import CarmaboxState
+
         state = CarmaboxState(pv_power_w=500.0)
         coord._collect_state = MagicMock(return_value=state)
         coord._cmd_ev_start = AsyncMock()
@@ -499,9 +507,19 @@ class TestAsyncRestoreRuntime:
         coord = _make_coord()
         data = {
             "plan": [
-                {"hour": 10, "action": "c", "battery_kw": 3.0, "grid_kw": 2.0,
-                 "weighted_kw": 2.0, "pv_kw": 1.0, "consumption_kw": 2.0,
-                 "ev_kw": 0.0, "ev_soc": 0, "battery_soc": 60, "price": 80.0},
+                {
+                    "hour": 10,
+                    "action": "c",
+                    "battery_kw": 3.0,
+                    "grid_kw": 2.0,
+                    "weighted_kw": 2.0,
+                    "pv_kw": 1.0,
+                    "consumption_kw": 2.0,
+                    "ev_kw": 0.0,
+                    "ev_soc": 0,
+                    "battery_soc": 60,
+                    "price": 80.0,
+                },
             ],
             "last_command": "CHARGE_PV",
             "ev_enabled": True,
@@ -540,7 +558,7 @@ class TestAsyncRestoreRuntime:
             "surplus_hysteresis": {
                 "above": {"miner": 1711929600.0},
                 "below": {},
-            }
+            },
         }
         coord._runtime_store.async_load = AsyncMock(return_value=data)
 
@@ -554,9 +572,14 @@ class TestAsyncRestoreRuntime:
         """Unknown command string → BatteryCommand.STANDBY fallback."""
         coord = _make_coord()
         data = {
-            "plan": [], "last_command": "INVALID_CMD", "ev_enabled": False,
-            "ev_current_amps": 6, "miner_on": False, "night_ev_active": False,
-            "ellevio_hour_samples": [], "ellevio_monthly_hourly_peaks": [],
+            "plan": [],
+            "last_command": "INVALID_CMD",
+            "ev_enabled": False,
+            "ev_current_amps": 6,
+            "miner_on": False,
+            "night_ev_active": False,
+            "ellevio_hour_samples": [],
+            "ellevio_monthly_hourly_peaks": [],
         }
         coord._runtime_store.async_load = AsyncMock(return_value=data)
 
@@ -580,9 +603,21 @@ class TestAsyncSaveRuntime:
     async def test_saves_plan_and_state(self) -> None:
         """Save writes plan + EV + miner state to store."""
         coord = _make_coord()
-        coord.plan = [HourPlan(hour=10, action="c", battery_kw=3.0, grid_kw=2.0,
-                               weighted_kw=2.0, pv_kw=1.0, consumption_kw=2.0,
-                               ev_kw=0.0, ev_soc=0, battery_soc=60, price=80.0)]
+        coord.plan = [
+            HourPlan(
+                hour=10,
+                action="c",
+                battery_kw=3.0,
+                grid_kw=2.0,
+                weighted_kw=2.0,
+                pv_kw=1.0,
+                consumption_kw=2.0,
+                ev_kw=0.0,
+                ev_soc=0,
+                battery_soc=60,
+                price=80.0,
+            )
+        ]
         coord._ev_enabled = True
         coord._miner_on = False
 

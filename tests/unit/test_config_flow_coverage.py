@@ -539,9 +539,18 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_user_no_inverters_shows_no_inverter_form(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "_auto_detect", new=AsyncMock(return_value={
-            "inverters": [], "ev_chargers": [], "price_sources": [], "pv_forecasts": [],
-        })):
+        with patch.object(
+            flow,
+            "_auto_detect",
+            new=AsyncMock(
+                return_value={
+                    "inverters": [],
+                    "ev_chargers": [],
+                    "price_sources": [],
+                    "pv_forecasts": [],
+                }
+            ),
+        ):
             await flow.async_step_user()
         flow.async_show_form.assert_called_once()
         call_kwargs = flow.async_show_form.call_args[1]
@@ -550,12 +559,23 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_user_with_inverters_calls_confirm(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "_auto_detect", new=AsyncMock(return_value={
-            "inverters": [{"name": "GoodWe", "prefix": "kontor"}],
-            "ev_chargers": [], "price_sources": [], "pv_forecasts": [],
-        })), patch.object(flow, "async_step_confirm", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_confirm:
+        with (
+            patch.object(
+                flow,
+                "_auto_detect",
+                new=AsyncMock(
+                    return_value={
+                        "inverters": [{"name": "GoodWe", "prefix": "kontor"}],
+                        "ev_chargers": [],
+                        "price_sources": [],
+                        "pv_forecasts": [],
+                    }
+                ),
+            ),
+            patch.object(
+                flow, "async_step_confirm", new=AsyncMock(return_value={"type": "form"})
+            ) as mock_confirm,
+        ):
             await flow.async_step_user()
         mock_confirm.assert_awaited_once()
 
@@ -567,19 +587,23 @@ class TestStepMethods:
 
     @pytest.mark.asyncio
     async def test_step_confirm_no_input_shows_form(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [{"name": "GoodWe", "prefix": "kontor"}],
-            "ev_chargers": [], "price_sources": [], "pv_forecasts": [],
-        })
+        flow = _make_config_flow(
+            detected={
+                "inverters": [{"name": "GoodWe", "prefix": "kontor"}],
+                "ev_chargers": [],
+                "price_sources": [],
+                "pv_forecasts": [],
+            }
+        )
         await flow.async_step_confirm(user_input=None)
         flow.async_show_form.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_step_confirm_with_input_calls_ev(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_ev", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_ev:
+        with patch.object(
+            flow, "async_step_ev", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_ev:
             await flow.async_step_confirm(user_input={})
         mock_ev.assert_awaited_once()
 
@@ -592,9 +616,9 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_ev_with_input_calls_grid(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_grid", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_grid:
+        with patch.object(
+            flow, "async_step_grid", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_grid:
             await flow.async_step_ev(user_input={"ev_enabled": True})
         mock_grid.assert_awaited_once()
 
@@ -636,9 +660,9 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_grid_with_input_calls_household(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_household", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_hh:
+        with patch.object(
+            flow, "async_step_household", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_hh:
             await flow.async_step_grid(user_input={"price_area": "SE3"})
         mock_hh.assert_awaited_once()
 
@@ -651,26 +675,24 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_household_with_input_calls_profile(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_household_profile", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_profile:
+        with patch.object(
+            flow, "async_step_household_profile", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_profile:
             await flow.async_step_household(user_input={"household_size": 3})
         mock_profile.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_step_household_profile_no_input_shows_form(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [{"domain": "goodwe", "prefix": "kontor"}]
-        })
+        flow = _make_config_flow(detected={"inverters": [{"domain": "goodwe", "prefix": "kontor"}]})
         await flow.async_step_household_profile(user_input=None)
         flow.async_show_form.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_step_household_profile_with_input_calls_consumers(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_consumers", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_cons:
+        with patch.object(
+            flow, "async_step_consumers", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_cons:
             await flow.async_step_household_profile(user_input={"house_size_m2": 150})
         mock_cons.assert_awaited_once()
 
@@ -683,9 +705,9 @@ class TestStepMethods:
     @pytest.mark.asyncio
     async def test_step_consumers_with_input_calls_appliances(self) -> None:
         flow = _make_config_flow()
-        with patch.object(flow, "async_step_appliances", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_app:
+        with patch.object(
+            flow, "async_step_appliances", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_app:
             await flow.async_step_consumers(user_input={"miner_entity": "switch.miner"})
         mock_app.assert_awaited_once()
 
@@ -693,34 +715,32 @@ class TestStepMethods:
     async def test_step_appliances_no_appliances_skips_to_summary(self) -> None:
         flow = _make_config_flow()
         flow._detected_appliances = {}
-        with patch.object(flow, "async_step_summary", new=AsyncMock(
-            return_value={"type": "form"}
-        )) as mock_sum:
+        with patch.object(
+            flow, "async_step_summary", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_sum:
             await flow.async_step_appliances(user_input=None)
         mock_sum.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_step_appliances_with_detected_shows_form(self) -> None:
         flow = _make_config_flow()
-        flow._detected_appliances = {
-            "sensor.oven_power": {"name": "Oven", "category": "other"}
-        }
+        flow._detected_appliances = {"sensor.oven_power": {"name": "Oven", "category": "other"}}
         await flow.async_step_appliances(user_input=None)
         flow.async_show_form.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_step_appliances_with_input_calls_summary(self) -> None:
         flow = _make_config_flow()
-        flow._detected_appliances = {
-            "sensor.oven_power": {"name": "Oven", "category": "other"}
-        }
-        with patch.object(flow, "async_step_summary", new=AsyncMock(
-            return_value={"type": "create_entry"}
-        )) as mock_sum:
-            await flow.async_step_appliances(user_input={
-                "enable_sensor.oven_power": True,
-                "category_sensor.oven_power": "other",
-            })
+        flow._detected_appliances = {"sensor.oven_power": {"name": "Oven", "category": "other"}}
+        with patch.object(
+            flow, "async_step_summary", new=AsyncMock(return_value={"type": "create_entry"})
+        ) as mock_sum:
+            await flow.async_step_appliances(
+                user_input={
+                    "enable_sensor.oven_power": True,
+                    "category_sensor.oven_power": "other",
+                }
+            )
         mock_sum.assert_awaited_once()
         assert flow._user_input.get("appliances") is not None
 
@@ -759,12 +779,14 @@ class TestStepMethods:
 
 class TestBuildEntityMappings:
     def test_build_with_soc_entities(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [{"prefix": "kontor", "device_ids": ["dev_123"]}],
-            "ev_chargers": [],
-            "price_sources": [],
-            "pv_forecasts": [],
-        })
+        flow = _make_config_flow(
+            detected={
+                "inverters": [{"prefix": "kontor", "device_ids": ["dev_123"]}],
+                "ev_chargers": [],
+                "price_sources": [],
+                "pv_forecasts": [],
+            }
+        )
         soc_states = [_make_state("sensor.pv_battery_soc_kontor", "70")]
         power_states = [_make_state("sensor.goodwe_battery_power_kontor", "1000")]
         grid_state = _make_state("sensor.house_grid_power", "500")
@@ -783,12 +805,14 @@ class TestBuildEntityMappings:
         assert mappings["battery_soc_1"] == "sensor.pv_battery_soc_kontor"
 
     def test_build_fallback_from_detected_prefixes(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [{"prefix": "kontor", "device_ids": ["dev_123"]}],
-            "ev_chargers": [],
-            "price_sources": [],
-            "pv_forecasts": [],
-        })
+        flow = _make_config_flow(
+            detected={
+                "inverters": [{"prefix": "kontor", "device_ids": ["dev_123"]}],
+                "ev_chargers": [],
+                "price_sources": [],
+                "pv_forecasts": [],
+            }
+        )
         # No SOC entities → use fallback
         flow.hass.states.async_all.return_value = []
 
@@ -797,12 +821,14 @@ class TestBuildEntityMappings:
         assert "kontor" in mappings["battery_soc_1"]
 
     def test_build_with_ev_charger(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [],
-            "ev_chargers": [{"prefix": "easee_home", "device_ids": ["ev_dev_123"]}],
-            "price_sources": [],
-            "pv_forecasts": [],
-        })
+        flow = _make_config_flow(
+            detected={
+                "inverters": [],
+                "ev_chargers": [{"prefix": "easee_home", "device_ids": ["ev_dev_123"]}],
+                "price_sources": [],
+                "pv_forecasts": [],
+            }
+        )
         flow.hass.states.async_all.return_value = []
         with (
             patch.object(flow, "_detect_easee_charger_id", return_value="EH12840"),
@@ -815,15 +841,17 @@ class TestBuildEntityMappings:
         assert mappings.get("ev_soc_entity") == "sensor.xpeng_soc"
 
     def test_build_with_price_sources(self) -> None:
-        flow = _make_config_flow(detected={
-            "inverters": [],
-            "ev_chargers": [],
-            "price_sources": [
-                {"domain": "nordpool", "entity_id": "sensor.nordpool_kwh"},
-                {"domain": "tibber", "entity_id": "sensor.tibber_price"},
-            ],
-            "pv_forecasts": [],
-        })
+        flow = _make_config_flow(
+            detected={
+                "inverters": [],
+                "ev_chargers": [],
+                "price_sources": [
+                    {"domain": "nordpool", "entity_id": "sensor.nordpool_kwh"},
+                    {"domain": "tibber", "entity_id": "sensor.tibber_price"},
+                ],
+                "pv_forecasts": [],
+            }
+        )
         flow.hass.states.async_all.return_value = []
         mappings = flow._build_entity_mappings()
 
@@ -879,9 +907,9 @@ class TestCreateEntry:
 class TestCarmaboxOptionsFlow:
     @pytest.mark.asyncio
     async def test_step_init_no_input_shows_form(self) -> None:
-        flow = _make_options_flow(options={
-            "battery_1_kwh": 10.0, "consumers": {"ev_enabled": True}
-        })
+        flow = _make_options_flow(
+            options={"battery_1_kwh": 10.0, "consumers": {"ev_enabled": True}}
+        )
         await flow.async_step_init(user_input=None)
         flow.async_show_form.assert_called_once()
 
@@ -895,11 +923,13 @@ class TestCarmaboxOptionsFlow:
     async def test_step_init_consumers_keys_nested(self) -> None:
         """consumers_* keys in user_input → nested into consumers dict."""
         flow = _make_options_flow(options={})
-        await flow.async_step_init(user_input={
-            "battery_1_kwh": 10.0,
-            "consumers_ev_enabled": True,
-            "consumers_miner_power_w": 500,
-        })
+        await flow.async_step_init(
+            user_input={
+                "battery_1_kwh": 10.0,
+                "consumers_ev_enabled": True,
+                "consumers_miner_power_w": 500,
+            }
+        )
         flow.async_create_entry.assert_called_once()
         _, kwargs = flow.async_create_entry.call_args
         assert kwargs["data"]["consumers"]["ev_enabled"] is True

@@ -260,9 +260,7 @@ class TestEnforceEmsModes:
         """EMS mode matches target → no correction call."""
         bridge = _make_bridge(n_adapters=1)
         sys_state = _make_sys_state(ems_mode_1="charge_pv")
-        result = _make_cycle_result(
-            battery_commands=[{"id": 0, "mode": "charge_pv"}]
-        )
+        result = _make_cycle_result(battery_commands=[{"id": 0, "mode": "charge_pv"}])
 
         await bridge._enforce_ems_modes(sys_state, result)
         bridge.inverter_adapters[0].set_ems_mode.assert_not_awaited()
@@ -272,9 +270,7 @@ class TestEnforceEmsModes:
         """Actual mode != target → set_ems_mode called to correct."""
         bridge = _make_bridge(n_adapters=1)
         sys_state = _make_sys_state(ems_mode_1="battery_standby")
-        result = _make_cycle_result(
-            battery_commands=[{"id": 0, "mode": "charge_pv"}]
-        )
+        result = _make_cycle_result(battery_commands=[{"id": 0, "mode": "charge_pv"}])
 
         await bridge._enforce_ems_modes(sys_state, result)
         bridge.inverter_adapters[0].set_ems_mode.assert_awaited_once_with("charge_pv")
@@ -285,9 +281,7 @@ class TestEnforceEmsModes:
         bridge = _make_bridge(n_adapters=1)
         bridge.inverter_adapters[0].set_ems_mode = AsyncMock(return_value=False)
         sys_state = _make_sys_state(ems_mode_1="battery_standby")
-        result = _make_cycle_result(
-            battery_commands=[{"id": 0, "mode": "charge_pv"}]
-        )
+        result = _make_cycle_result(battery_commands=[{"id": 0, "mode": "charge_pv"}])
 
         await bridge._enforce_ems_modes(sys_state, result)
         bridge.inverter_adapters[0].set_ems_mode.assert_awaited_once()
@@ -297,9 +291,7 @@ class TestEnforceEmsModes:
         """Command references non-existent adapter → skipped gracefully."""
         bridge = _make_bridge(n_adapters=1)
         sys_state = _make_sys_state()
-        result = _make_cycle_result(
-            battery_commands=[{"id": 1, "mode": "charge_pv"}]
-        )
+        result = _make_cycle_result(battery_commands=[{"id": 1, "mode": "charge_pv"}])
 
         await bridge._enforce_ems_modes(sys_state, result)
         bridge.inverter_adapters[0].set_ems_mode.assert_not_awaited()

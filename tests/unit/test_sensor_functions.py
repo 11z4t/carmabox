@@ -442,7 +442,6 @@ class TestEllevioRealtimeAttrs:
 
 # Imported locally since they weren't in the original import block
 from custom_components.carmabox.sensor import (  # noqa: E402
-    _daily_insight_attrs,
     _daily_insight_value,
     _energy_ledger_attrs,
     _energy_ledger_value,
@@ -453,9 +452,9 @@ from custom_components.carmabox.sensor import (  # noqa: E402
     _scheduler_24h_plan_attrs,
     _scheduler_24h_plan_value,
     _scheduler_breach_count_value,
+    _scheduler_ev_full_charge_value,
     _scheduler_last_breach_attrs,
     _scheduler_last_breach_value,
-    _scheduler_ev_full_charge_value,
     _shadow_attrs,
     _shadow_value,
 )
@@ -475,9 +474,7 @@ def _shadow(*, timestamp: str = "", agreement: bool = True, reason: str = "") ->
     return s
 
 
-def _sched_slot(
-    hour: int = 10, action: str = "c", constraint_ok: bool = True
-) -> MagicMock:
+def _sched_slot(hour: int = 10, action: str = "c", constraint_ok: bool = True) -> MagicMock:
     s = MagicMock()
     s.hour = hour
     s.action = action
@@ -858,5 +855,3 @@ class TestSchedulerEvFullChargeValue:
         coord.scheduler_plan = _sched_plan()
         coord.scheduler_plan.ev_next_full_charge_date = None
         assert _scheduler_ev_full_charge_value(coord) == "Ej planerad"
-
-

@@ -332,8 +332,12 @@ class TestSendMorningReport:
     async def test_morning_report_calls_notifier(self) -> None:
         """_send_morning_report collects data and calls notifier.morning_report."""
         coord = _make_coord()
-        coord._cfg = {"battery_soc_1": "sensor.soc1", "battery_soc_2": "sensor.soc2",
-                      "ev_soc_entity": "sensor.ev_soc", "price_entity": "sensor.price"}
+        coord._cfg = {
+            "battery_soc_1": "sensor.soc1",
+            "battery_soc_2": "sensor.soc2",
+            "ev_soc_entity": "sensor.ev_soc",
+            "price_entity": "sensor.price",
+        }
 
         # Mock state reads
         soc1_state = MagicMock(state="85")

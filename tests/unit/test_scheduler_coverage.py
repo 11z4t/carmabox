@@ -78,21 +78,21 @@ class TestHelperEdgeCases:
 
     def test_is_night_hour_start_le_end(self) -> None:
         """start<=end path (line 75): _is_night_hour with custom range."""
-        assert _is_night_hour(3, 0, 6) is True    # 0 <= 3 < 6
-        assert _is_night_hour(7, 0, 6) is False   # 7 not in 0-6
+        assert _is_night_hour(3, 0, 6) is True  # 0 <= 3 < 6
+        assert _is_night_hour(7, 0, 6) is False  # 7 not in 0-6
 
     def test_is_appliance_window_start_le_end(self) -> None:
         """start<=end path (line 86): custom window."""
-        assert _is_appliance_window(3, 0, 5) is True   # 0 <= 3 < 5
+        assert _is_appliance_window(3, 0, 5) is True  # 0 <= 3 < 5
         assert _is_appliance_window(6, 0, 5) is False  # 6 not in 0-5
 
     def test_hours_until_departure_before_departure(self) -> None:
         """Lines 91-92: current_hour <= departure."""
-        assert _hours_until_departure(14, 20) == 6   # 20 - 14
+        assert _hours_until_departure(14, 20) == 6  # 20 - 14
 
     def test_hours_until_departure_after_departure(self) -> None:
         """Line 93: current_hour > departure — wraps overnight."""
-        assert _hours_until_departure(22, 7) == 9   # 24 - 22 + 7
+        assert _hours_until_departure(22, 7) == 9  # 24 - 22 + 7
 
 
 # ── Lines 176, 181, 185: _schedule_ev_backwards edge cases ────────────────────
@@ -101,7 +101,8 @@ class TestHelperEdgeCases:
 class TestScheduleEvBackwards:
     """EV schedule edge cases and branch coverage."""
 
-    def _make_learnings(self, hour: int, action: str, confidence: float = 0.8
+    def _make_learnings(
+        self, hour: int, action: str, confidence: float = 0.8
     ) -> list[BreachLearning]:
         return [
             BreachLearning(
@@ -335,8 +336,8 @@ class TestBatteryEVSupportAntiIdle:
             start_hour=2,
             hourly_prices=[50.0],
             hourly_pv=[0.0],
-            hourly_loads=[2.5],   # high house load
-            hourly_ev=[1.7],      # EV on → total weighted high
+            hourly_loads=[2.5],  # high house load
+            hourly_ev=[1.7],  # EV on → total weighted high
             target_weighted_kw=2.0,
             battery_soc_pct=60.0,
             battery_cap_kwh=20.0,
@@ -355,8 +356,8 @@ class TestBatteryEVSupportAntiIdle:
             hourly_pv=[0.0],
             hourly_loads=[1.5],
             hourly_ev=[0.0],
-            target_weighted_kw=3.0,   # high target → no constraint discharge
-            battery_soc_pct=90.0,     # > 80% → anti-idle
+            target_weighted_kw=3.0,  # high target → no constraint discharge
+            battery_soc_pct=90.0,  # > 80% → anti-idle
             battery_cap_kwh=20.0,
             battery_min_soc=15.0,
             grid_charge_price_threshold=10.0,  # very low → no grid charge at 50 öre
@@ -388,14 +389,16 @@ class TestCheckConstraints:
 
         ev_amps = 16
         ev_kw = ev_amps * DEFAULT_VOLTAGE / 1000
-        slots = [_slot(
-            14,
-            weighted_kw=3.5,
-            ev_kw=ev_kw,
-            ev_amps=ev_amps,
-            constraint_ok=False,
-            consumption_kw=1.5,
-        )]
+        slots = [
+            _slot(
+                14,
+                weighted_kw=3.5,
+                ev_kw=ev_kw,
+                ev_amps=ev_amps,
+                constraint_ok=False,
+                consumption_kw=1.5,
+            )
+        ]
         result = _check_constraints(slots, target_weighted_kw=2.0)
         # EV amps should be reduced
         assert result[0].ev_amps < ev_amps or result[0].ev_kw < ev_kw
@@ -407,27 +410,31 @@ class TestCheckConstraints:
         ev_amps = DEFAULT_EV_MIN_AMPS  # already at min, can't reduce → pause
         ev_kw = ev_amps * DEFAULT_VOLTAGE / 1000
         # Weighted is very high — even after min amps still over
-        slots = [_slot(
-            14,
-            weighted_kw=4.0,
-            ev_kw=ev_kw,
-            ev_amps=ev_amps,
-            constraint_ok=False,
-            consumption_kw=3.0,
-        )]
+        slots = [
+            _slot(
+                14,
+                weighted_kw=4.0,
+                ev_kw=ev_kw,
+                ev_amps=ev_amps,
+                constraint_ok=False,
+                consumption_kw=3.0,
+            )
+        ]
         result = _check_constraints(slots, target_weighted_kw=2.0)
         # EV should be paused (ev_kw=0)
         assert result[0].ev_kw == 0.0 or result[0].ev_amps == 0
 
     def test_battery_discharge_as_last_resort(self) -> None:
         """No EV, no miner → battery discharge forced (lines ~562-565)."""
-        slots = [_slot(
-            14,
-            weighted_kw=3.5,
-            battery_kw=0.0,  # no battery action yet
-            constraint_ok=False,
-            consumption_kw=3.5,
-        )]
+        slots = [
+            _slot(
+                14,
+                weighted_kw=3.5,
+                battery_kw=0.0,  # no battery action yet
+                constraint_ok=False,
+                consumption_kw=3.5,
+            )
+        ]
         result = _check_constraints(slots, target_weighted_kw=2.0)
         # Battery should now be discharging
         assert result[0].battery_kw < 0 or result[0].action == "d"
@@ -529,7 +536,7 @@ class TestAnalyzeBreachRootCause:
     def test_fallback_root_cause_when_no_specific_trigger(self) -> None:
         """No EV, no high load, battery>0 → fallback root cause (lines 694-698)."""
         record = analyze_breach(
-            hour=3,    # not appliance window
+            hour=3,  # not appliance window
             actual_weighted_kw=2.5,
             target_kw=2.0,
             house_load_kw=1.5,  # not > 3.0
@@ -565,7 +572,7 @@ class TestAnalyzeBreachRootCause:
             house_load_kw=2.5,  # > target=2.0
             ev_kw=0.0,
             ev_amps=0,
-            battery_kw=0.0,   # battery inactive
+            battery_kw=0.0,  # battery inactive
             pv_kw=0.0,
             miner_on=False,
         )
@@ -578,7 +585,7 @@ class TestAnalyzeBreachRootCause:
     def test_ev_appliance_overlap_root_cause(self) -> None:
         """EV + appliance window + appliances > 1.0 → overlap root cause."""
         record = analyze_breach(
-            hour=23,   # in appliance window (22-01)
+            hour=23,  # in appliance window (22-01)
             actual_weighted_kw=4.0,
             target_kw=2.0,
             house_load_kw=2.0,
@@ -785,10 +792,15 @@ class TestApplyCorrections:
         ev = self._make_ev_schedule(8, charge_hour=1)
         batt = self._make_batt_schedule(8)
         new_ev, new_batt = _apply_corrections(
-            [corr], ev, batt,
-            start_hour=0, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=0,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         min_kw = DEFAULT_EV_MIN_AMPS * DEFAULT_VOLTAGE / 1000
         assert new_ev[1][1] == DEFAULT_EV_MIN_AMPS or new_ev[1][0] <= min_kw
@@ -798,7 +810,7 @@ class TestApplyCorrections:
         corr = BreachCorrection(
             created="2026-01-01T00:00:00",
             source_breach_hour=23,  # absolute hour
-            target_hour=2,          # absolute target
+            target_hour=2,  # absolute target
             action="shift_ev",
             param="shift_from=23",
             reason="test",
@@ -807,10 +819,15 @@ class TestApplyCorrections:
         ev = [(2.3, 10)] + [(0.0, 0)] * 7  # charging at slot 0
         batt = self._make_batt_schedule(8)
         new_ev, _ = _apply_corrections(
-            [corr], ev, batt,
-            start_hour=23, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=23,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         # EV should be shifted: slot 0 → slot 3 (hour 2 = 24+2-23=3)
         assert new_ev[0] == (0.0, 0) or new_ev[3][0] > 0 or corr.applied
@@ -828,10 +845,15 @@ class TestApplyCorrections:
         ev = [(0.0, 0)] * 8
         batt = self._make_batt_schedule(8)
         _, new_batt = _apply_corrections(
-            [corr], ev, batt,
-            start_hour=14, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=14,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         assert new_batt[0][0] < 0  # negative = discharge
 
@@ -848,10 +870,15 @@ class TestApplyCorrections:
         ev = [(0.0, 0)] * 8
         batt = self._make_batt_schedule(8)
         _apply_corrections(
-            [corr], ev, batt,
-            start_hour=14, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=14,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         assert corr.applied is True
 
@@ -868,10 +895,15 @@ class TestApplyCorrections:
         ev = [(0.0, 0)] * 8
         batt = self._make_batt_schedule(8)
         _apply_corrections(
-            [corr], ev, batt,
-            start_hour=22, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=22,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         assert corr.applied is True
 
@@ -889,10 +921,15 @@ class TestApplyCorrections:
         ev = [(2.3, 10)] + [(0.0, 0)] * 7
         batt = self._make_batt_schedule(8)
         new_ev, _ = _apply_corrections(
-            [corr], ev, batt,
-            start_hour=14, num_hours=8,
-            battery_soc_pct=70.0, battery_cap_kwh=20.0,
-            battery_min_soc=15.0, max_discharge_kw=5.0,
+            [corr],
+            ev,
+            batt,
+            start_hour=14,
+            num_hours=8,
+            battery_soc_pct=70.0,
+            battery_cap_kwh=20.0,
+            battery_min_soc=15.0,
+            max_discharge_kw=5.0,
         )
         # Should not be changed
         assert not corr.applied
@@ -945,9 +982,7 @@ class TestAnalyzeIdleTime:
 
     def test_missed_pv_charge_when_pv_surplus_and_not_full(self) -> None:
         """pv_surplus > 0.5 and soc < 95 → missed_charge (line ~1245)."""
-        slots = [
-            _slot(10, action="i", pv_kw=3.0, consumption_kw=1.5, battery_soc=50.0)
-        ]
+        slots = [_slot(10, action="i", pv_kw=3.0, consumption_kw=1.5, battery_soc=50.0)]
         result = analyze_idle_time(
             slots=slots,
             idle_minutes_today=0,

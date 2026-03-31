@@ -20,6 +20,7 @@ from tests.unit.test_expert_control import _make_coord
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _ev_state(
     ev_soc: float = 50.0,
     grid_w: float = 300.0,
@@ -90,13 +91,22 @@ def _make_ev_coord(
 def _plan_ev(hour: int, ev_kw: float, price: float = 50.0) -> HourPlan:
     """HourPlan with EV charging."""
     return HourPlan(
-        hour=hour, action="i", battery_kw=0.0, grid_kw=0.0,
-        weighted_kw=0.0, pv_kw=0.0, consumption_kw=2.0,
-        ev_kw=ev_kw, ev_soc=60, battery_soc=80, price=price,
+        hour=hour,
+        action="i",
+        battery_kw=0.0,
+        grid_kw=0.0,
+        weighted_kw=0.0,
+        pv_kw=0.0,
+        consumption_kw=2.0,
+        ev_kw=ev_kw,
+        ev_soc=60,
+        battery_soc=80,
+        price=price,
     )
 
 
 # ── EV SoC fallback (lines 2651-2664) ─────────────────────────────────────────
+
 
 class TestEvSocFallback:
     """When state.ev_soc < 0, use last_known_soc with derating or default 50%."""
@@ -152,6 +162,7 @@ class TestEvSocFallback:
 
 # ── EV-2: Target SoC reached → stop (lines 2795-2796) ─────────────────────────
 
+
 class TestEvTargetReached:
     """SoC at or above target → stop EV charging."""
 
@@ -186,6 +197,7 @@ class TestEvTargetReached:
 
 
 # ── Appliance-aware EV reduction (lines 2712-2729) ────────────────────────────
+
 
 class TestEvApplianceAwareControl:
     """Reduce EV amps when appliances running at night with sufficient margin."""
@@ -262,6 +274,7 @@ class TestEvApplianceAwareControl:
 
 # ── Night plan fallback — headroom too low stops EV (lines 2858-2860) ─────────
 
+
 class TestEvNightHeadroomTooLow:
     """When night plan fallback fires but headroom < ev_kw → stop (lines 2858-2860)."""
 
@@ -293,6 +306,7 @@ class TestEvNightHeadroomTooLow:
 
 # ── Weekday night battery support headroom (lines 2900-2909) ──────────────────
 
+
 class TestEvWeekdayNightBatterySupport:
     """Weekday night + battery available → bonus headroom added (lines 2900-2909)."""
 
@@ -316,8 +330,9 @@ class TestEvWeekdayNightBatterySupport:
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(
-                hour=23, month=3,
-                weekday=MagicMock(return_value=1)  # weekday
+                hour=23,
+                month=3,
+                weekday=MagicMock(return_value=1),  # weekday
             )
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             coord.plan = [_plan_ev(hour=23, ev_kw=2.0)]
@@ -342,8 +357,9 @@ class TestEvWeekdayNightBatterySupport:
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(
-                hour=23, month=3,
-                weekday=MagicMock(return_value=6)  # Sunday = NOT weekday
+                hour=23,
+                month=3,
+                weekday=MagicMock(return_value=6),  # Sunday = NOT weekday
             )
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             coord.plan = [_plan_ev(hour=23, ev_kw=2.0)]
@@ -355,6 +371,7 @@ class TestEvWeekdayNightBatterySupport:
 
 
 # ── Goal-tracking headroom boost (lines 2876-2887) ────────────────────────────
+
 
 class TestEvGoalHeadroomBoost:
     """_ev_tonight_soc < ev_target → headroom += boost (lines 2876-2887)."""
@@ -372,10 +389,7 @@ class TestEvGoalHeadroomBoost:
         state = _ev_state(ev_soc=65.0, grid_w=100.0, battery_soc_1=60.0)
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
-            mock_dt.now.return_value = MagicMock(
-                hour=2, month=3,
-                weekday=MagicMock(return_value=1)
-            )
+            mock_dt.now.return_value = MagicMock(hour=2, month=3, weekday=MagicMock(return_value=1))
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             coord.plan = [_plan_ev(hour=2, ev_kw=2.0)]
             await coord._execute_ev(state)
@@ -397,10 +411,7 @@ class TestEvGoalHeadroomBoost:
         state = _ev_state(ev_soc=65.0, grid_w=100.0, battery_soc_1=60.0)
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
-            mock_dt.now.return_value = MagicMock(
-                hour=2, month=3,
-                weekday=MagicMock(return_value=1)
-            )
+            mock_dt.now.return_value = MagicMock(hour=2, month=3, weekday=MagicMock(return_value=1))
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             coord.plan = [_plan_ev(hour=2, ev_kw=2.0)]
             await coord._execute_ev(state)
@@ -410,6 +421,7 @@ class TestEvGoalHeadroomBoost:
 
 
 # ── Cable disconnected → stop (lines 2644-2647) ──────────────────────────────
+
 
 class TestEvCableDisconnected:
     """No cable lock → stop EV if enabled, then return."""
@@ -441,6 +453,7 @@ class TestEvCableDisconnected:
 
 # ── EV-4: Day — solar EV charging (lines 2960-2981) ──────────────────────────
 
+
 class TestEvSolarCharging:
     """Day solar EV charging: stop/adjust/start based on PV surplus.
 
@@ -462,8 +475,7 @@ class TestEvSolarCharging:
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(
-                hour=14, month=3,
-                weekday=MagicMock(return_value=1)
+                hour=14, month=3, weekday=MagicMock(return_value=1)
             )
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             await coord._execute_ev(state)
@@ -491,8 +503,7 @@ class TestEvSolarCharging:
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(
-                hour=13, month=3,
-                weekday=MagicMock(return_value=1)
+                hour=13, month=3, weekday=MagicMock(return_value=1)
             )
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             await coord._execute_ev(state)
@@ -510,14 +521,12 @@ class TestEvSolarCharging:
 
         # grid=-2000 (exporting 2kW) → solar_amps = int(2000/230) = 8 >= 6 → start
         state = _ev_state(
-            ev_soc=70.0, grid_w=-2000.0, pv_power_w=5000.0,
-            battery_soc_1=96.0, battery_soc_2=96.0
+            ev_soc=70.0, grid_w=-2000.0, pv_power_w=5000.0, battery_soc_1=96.0, battery_soc_2=96.0
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
             mock_dt.now.return_value = MagicMock(
-                hour=12, month=6,
-                weekday=MagicMock(return_value=1)
+                hour=12, month=6, weekday=MagicMock(return_value=1)
             )
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             await coord._execute_ev(state)

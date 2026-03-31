@@ -17,6 +17,7 @@ from tests.unit.test_expert_control import _make_coord
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _state_importing(grid_w: float = 1500.0, price: float = 150.0, **kwargs) -> CarmaboxState:
     return CarmaboxState(
         grid_power_w=grid_w,
@@ -76,6 +77,7 @@ def _add_cirk(coord, entity_id: str = "switch.pool_cirk", on: bool = False) -> N
 
 
 # ── _execute_climate ──────────────────────────────────────────────────────────
+
 
 class TestExecuteClimate:
     """Lines 2144-2195: VP/AC thermal storage control."""
@@ -223,6 +225,7 @@ class TestExecuteClimate:
 
 # ── _execute_pool ─────────────────────────────────────────────────────────────
 
+
 class TestExecutePool:
     """Lines 2228-2268: Pool heater surplus control."""
 
@@ -345,6 +348,7 @@ class TestExecutePool:
 
 
 # ── _execute_pool_circulation ─────────────────────────────────────────────────
+
 
 class TestExecutePoolCirculation:
     """Lines 2298-2327: Pool circulation pump control."""

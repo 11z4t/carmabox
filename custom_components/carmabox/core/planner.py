@@ -29,6 +29,14 @@ from ..const import (
 from ..optimizer.planner import generate_plan
 from .plan_executor import PlanAction
 
+# EXP-11: Named constants for allocate_pv_surplus policy values
+PV_BATTERY_FILL_MARGIN_KWH = 1.0  # Extra kWh margin for "battery fills from PV"
+BATTERY_NEAR_FULL_PCT = 95.0  # SoC threshold: battery considered "nearly full"
+BATTERY_LOW_NEED_KWH = 1.0  # Below this kWh need → EV gets priority
+MIN_BATTERY_CHARGE_SURPLUS_W = 300  # Min surplus watts to start battery charge
+MIN_CONSUMER_SURPLUS_W = 200  # Min surplus watts to activate consumers
+MIN_EXPORT_THRESHOLD_W = 50  # Below this → not considered export
+
 
 @dataclass
 class SolarAllocationResult:
@@ -375,7 +383,7 @@ def allocate_pv_surplus(
     battery_need_kwh = max(0, (100 - battery_soc_pct) / 100 * battery_cap_kwh)
     # Can battery fill before sunset from remaining PV?
     remaining_pv_kwh = sum(hourly_pv_remaining_kw) * pv_confidence
-    battery_fills_from_pv = remaining_pv_kwh >= battery_need_kwh + 1.0  # 1 kWh margin
+    battery_fills_from_pv = remaining_pv_kwh >= battery_need_kwh + PV_BATTERY_FILL_MARGIN_KWH
 
     # ── EV allocation ────────────────────────────────────────
     ev_action = "hold"
@@ -395,8 +403,8 @@ def allocate_pv_surplus(
         # Workday/battery won't fill → battery first, EV only from excess
         ev_priority = (
             (not is_workday and battery_fills_from_pv)
-            or battery_soc_pct >= 95  # Battery nearly full → EV
-            or battery_need_kwh < 1.0  # Very little battery need → EV
+            or battery_soc_pct >= BATTERY_NEAR_FULL_PCT  # Battery nearly full → EV
+            or battery_need_kwh < BATTERY_LOW_NEED_KWH  # Very little battery need → EV
         )
 
         if ev_priority and remaining_w >= ev_min_w:
@@ -424,7 +432,7 @@ def allocate_pv_surplus(
     battery_action = "hold"
     battery_target_w = 0
 
-    if battery_soc_pct < 100 and remaining_w > 300:
+    if battery_soc_pct < 100 and remaining_w > MIN_BATTERY_CHARGE_SURPLUS_W:
         # Charge battery from remaining surplus
         charge_w = min(int(remaining_w), battery_max_charge_w)
         battery_action = "charge"
@@ -435,13 +443,13 @@ def allocate_pv_surplus(
     consumers_action = "hold"
     consumers_available_w = 0
 
-    if remaining_w > 200:
+    if remaining_w > MIN_CONSUMER_SURPLUS_W:
         consumers_action = "activate"
         consumers_available_w = remaining_w
         remaining_w = 0  # Consumers absorb everything
 
     # ── Export check ─────────────────────────────────────────
-    will_export = remaining_w > 50
+    will_export = remaining_w > MIN_EXPORT_THRESHOLD_W
     export_w = max(0, remaining_w)
 
     # Build reason

@@ -42,6 +42,7 @@ from custom_components.carmabox.optimizer.savings import SavingsState
 
 # ── Shared fixture factory ────────────────────────────────────────────────────
 
+
 def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     """Construct a fully wired CarmaboxCoordinator without real HA.
 
@@ -209,8 +210,13 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     # License (full premium for tests)
     coord._license_tier = "premium"
     coord._license_features = [
-        "analyzer", "executor", "dashboard",
-        "ev_control", "miner_control", "watchdog", "self_healing",
+        "analyzer",
+        "executor",
+        "dashboard",
+        "ev_control",
+        "miner_control",
+        "watchdog",
+        "self_healing",
     ]
     coord._license_last_check = 0.0
     coord._license_check_interval = 99_999_999
@@ -246,13 +252,22 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
 def _plan_hour(hour: int, action: str = "i", price: float = 50.0) -> HourPlan:
     """Create a minimal HourPlan for use in coordinator.plan."""
     return HourPlan(
-        hour=hour, action=action, battery_kw=0.0, grid_kw=0.0,
-        weighted_kw=0.0, pv_kw=0.0, consumption_kw=2.0,
-        ev_kw=0.0, ev_soc=0, battery_soc=60, price=price,
+        hour=hour,
+        action=action,
+        battery_kw=0.0,
+        grid_kw=0.0,
+        weighted_kw=0.0,
+        pv_kw=0.0,
+        consumption_kw=2.0,
+        ev_kw=0.0,
+        ev_soc=0,
+        battery_soc=60,
+        price=price,
     )
 
 
 # ── 1. BMS Taper Detection ────────────────────────────────────────────────────
+
 
 class TestIsTaperDetection:
     """_is_in_taper — boundary values and persistenece across command cycles."""
@@ -260,7 +275,7 @@ class TestIsTaperDetection:
     def _taper_state(self, **kwargs) -> CarmaboxState:
         """Baseline: charging from PV, exporting 300 W, SoC 97%, PV 2 kW."""
         defaults = {
-            "grid_power_w": -300.0,   # exporting
+            "grid_power_w": -300.0,  # exporting
             "pv_power_w": 2000.0,
             "battery_soc_1": 97.0,
             "battery_power_1": -500.0,
@@ -318,8 +333,8 @@ class TestIsTaperDetection:
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV
 
-        assert coord._is_in_taper(self._taper_state(pv_power_w=500.0)) is False   # ≤500
-        assert coord._is_in_taper(self._taper_state(pv_power_w=501.0)) is True    # >500
+        assert coord._is_in_taper(self._taper_state(pv_power_w=500.0)) is False  # ≤500
+        assert coord._is_in_taper(self._taper_state(pv_power_w=501.0)) is True  # >500
 
     def test_taper_target_kw_restored_after_path(self) -> None:
         """Cold lock / taper temporarily sets target_kw=0; must restore afterwards."""
@@ -337,6 +352,7 @@ class TestIsTaperDetection:
 
 # ── 2. BMS Cold Lock Detection ────────────────────────────────────────────────
 
+
 class TestIsColdLocked:
     """_is_cold_locked — 10 °C threshold and two-battery logic (IT-1948)."""
 
@@ -346,8 +362,8 @@ class TestIsColdLocked:
             "grid_power_w": -500.0,
             "pv_power_w": 2000.0,
             "battery_soc_1": 60.0,
-            "battery_power_1": 0.0,   # BMS not accepting → near-zero
-            "battery_soc_2": -1.0,    # no second battery
+            "battery_power_1": 0.0,  # BMS not accepting → near-zero
+            "battery_soc_2": -1.0,  # no second battery
             "battery_min_cell_temp_1": 9.0,
         }
         defaults.update(kwargs)
@@ -393,8 +409,8 @@ class TestIsColdLocked:
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV
         state = self._cold_state(
-            battery_min_cell_temp_1=15.0,   # warm ✓
-            battery_min_cell_temp_2=7.0,    # cold ✗
+            battery_min_cell_temp_1=15.0,  # warm ✓
+            battery_min_cell_temp_2=7.0,  # cold ✗
             battery_soc_2=50.0,
             battery_power_2=0.0,
         )
@@ -419,6 +435,7 @@ class TestIsColdLocked:
 
 # ── 3. RULE 2 Hysteresis ─────────────────────────────────────────────────────
 
+
 class TestDischargeHysteresis:
     """RULE 2: 10% hysteresis prevents oscillation when grid ≈ target."""
 
@@ -433,7 +450,7 @@ class TestDischargeHysteresis:
         coord._last_discharge_w = 0  # different wattage → K1 skip won't fire
 
         state = CarmaboxState(
-            grid_power_w=1900.0,    # 95% of 2000 W target
+            grid_power_w=1900.0,  # 95% of 2000 W target
             battery_soc_1=60.0,
             current_price=80.0,
             pv_power_w=0.0,
@@ -491,7 +508,7 @@ class TestDischargeHysteresis:
             battery_soc_1=60.0,
             current_price=80.0,
             pv_power_w=0.0,
-            solar_radiation_wm2=0.0,   # no sun → no proactive discharge
+            solar_radiation_wm2=0.0,  # no sun → no proactive discharge
             rain_mm=0.0,
         )
 
@@ -505,6 +522,7 @@ class TestDischargeHysteresis:
 
 
 # ── 4. Safety Gate Ordering ───────────────────────────────────────────────────
+
 
 class TestSafetyGateOrdering:
     """Safety gates run in strict order: heartbeat → rate limit → crosscharge."""
@@ -571,7 +589,7 @@ class TestSafetyGateOrdering:
         """All gates pass → execution continues to RULE 2 → discharge above target."""
         coord = _make_coord({"target_weighted_kw": 2.0})
         state = CarmaboxState(
-            grid_power_w=3000.0,    # well above 2 kW target
+            grid_power_w=3000.0,  # well above 2 kW target
             battery_soc_1=60.0,
             current_price=80.0,
             pv_power_w=0.0,
@@ -586,6 +604,7 @@ class TestSafetyGateOrdering:
 
 # ── 5. PLAT-946: Crosscharge with Invalid Power Flags ────────────────────────
 
+
 class TestCrosschargeWithInvalidFlags:
     """PLAT-946: power_valid=False means HA hasn't read the sensor yet.
 
@@ -598,7 +617,7 @@ class TestCrosschargeWithInvalidFlags:
         coord = _make_coord()
         state = CarmaboxState(
             battery_power_1=0.0,
-            battery_power_1_valid=False,   # HA sensor unavailable at startup
+            battery_power_1_valid=False,  # HA sensor unavailable at startup
             battery_power_2=2000.0,
             battery_power_2_valid=True,
             battery_soc_2=50.0,
@@ -610,7 +629,8 @@ class TestCrosschargeWithInvalidFlags:
             power_2_valid=state.battery_power_2_valid,
         )
         coord.safety.check_crosscharge.assert_called_once_with(
-            0.0, 2000.0,
+            0.0,
+            2000.0,
             power_1_valid=False,
             power_2_valid=True,
         )
@@ -619,8 +639,10 @@ class TestCrosschargeWithInvalidFlags:
         """Both batteries unavailable at startup → both valid=False forwarded."""
         coord = _make_coord()
         state = CarmaboxState(
-            battery_power_1=0.0, battery_power_1_valid=False,
-            battery_power_2=0.0, battery_power_2_valid=False,
+            battery_power_1=0.0,
+            battery_power_1_valid=False,
+            battery_power_2=0.0,
+            battery_power_2_valid=False,
             battery_soc_2=50.0,
         )
         coord.safety.check_crosscharge(
@@ -645,25 +667,28 @@ class TestCrosschargeWithInvalidFlags:
 
 # ── 6. RULE 1.5: Grid Charge Dynamic Threshold ───────────────────────────────
 
+
 class TestGridChargeDynamicThreshold:
     """RULE 1.5: dynamic threshold = min(static, max(5.0, daily_avg * 0.4))."""
 
     @pytest.mark.asyncio
     async def test_dynamic_threshold_triggers_charge_in_low_price_season(self) -> None:
         """Summer avg 15 öre → dynamic = 6 öre; price at 5 öre → grid charge."""
-        coord = _make_coord({
-            "grid_charge_price_threshold": 15.0,
-            "grid_charge_max_soc": 90.0,
-        })
-        coord._daily_avg_price = 15.0   # summer avg
+        coord = _make_coord(
+            {
+                "grid_charge_price_threshold": 15.0,
+                "grid_charge_max_soc": 90.0,
+            }
+        )
+        coord._daily_avg_price = 15.0  # summer avg
         # dynamic = max(5.0, 15*0.4=6) = 6; min(15, 6) = 6 öre threshold
         # price 5 öre < 6 öre → should trigger
 
         state = CarmaboxState(
-            grid_power_w=500.0,    # importing (not exporting, rule 1 won't intercept)
+            grid_power_w=500.0,  # importing (not exporting, rule 1 won't intercept)
             battery_soc_1=50.0,
             pv_power_w=0.0,
-            current_price=5.0,     # below 6 öre threshold
+            current_price=5.0,  # below 6 öre threshold
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -676,11 +701,13 @@ class TestGridChargeDynamicThreshold:
     @pytest.mark.asyncio
     async def test_dynamic_threshold_floored_at_5_ore(self) -> None:
         """Even with daily_avg=5 öre (2 öre raw dynamic), floor is 5 öre."""
-        coord = _make_coord({
-            "grid_charge_price_threshold": 15.0,
-            "grid_charge_max_soc": 90.0,
-        })
-        coord._daily_avg_price = 5.0   # very low avg
+        coord = _make_coord(
+            {
+                "grid_charge_price_threshold": 15.0,
+                "grid_charge_max_soc": 90.0,
+            }
+        )
+        coord._daily_avg_price = 5.0  # very low avg
         # dynamic = max(5.0, 5*0.4=2) = 5; price 4 öre < 5 öre → triggers
 
         state = CarmaboxState(
@@ -699,17 +726,19 @@ class TestGridChargeDynamicThreshold:
     @pytest.mark.asyncio
     async def test_grid_charge_blocked_when_soc_above_max(self) -> None:
         """SoC ≥ grid_charge_max_soc → no grid charge regardless of price."""
-        coord = _make_coord({
-            "grid_charge_price_threshold": 50.0,
-            "grid_charge_max_soc": 90.0,
-        })
+        coord = _make_coord(
+            {
+                "grid_charge_price_threshold": 50.0,
+                "grid_charge_max_soc": 90.0,
+            }
+        )
         coord._daily_avg_price = 80.0
 
         state = CarmaboxState(
             grid_power_w=500.0,
-            battery_soc_1=91.0,     # above 90% cap
+            battery_soc_1=91.0,  # above 90% cap
             pv_power_w=0.0,
-            current_price=5.0,      # very cheap, but blocked by SoC
+            current_price=5.0,  # very cheap, but blocked by SoC
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -721,10 +750,12 @@ class TestGridChargeDynamicThreshold:
     @pytest.mark.asyncio
     async def test_grid_charge_does_not_fire_when_exporting(self) -> None:
         """RULE 1 (export → solar charge) takes priority over RULE 1.5."""
-        coord = _make_coord({
-            "grid_charge_price_threshold": 50.0,
-            "grid_charge_max_soc": 90.0,
-        })
+        coord = _make_coord(
+            {
+                "grid_charge_price_threshold": 50.0,
+                "grid_charge_max_soc": 90.0,
+            }
+        )
         coord._daily_avg_price = 80.0
 
         # Exporting → RULE 1 intercepts and charges from solar
@@ -750,6 +781,7 @@ class TestGridChargeDynamicThreshold:
 
 # ── 7. RULE 1.8: Proactive Discharge ─────────────────────────────────────────
 
+
 class TestProactiveDischarge:
     """RULE 1.8: aggressiveness scales with sun / rain / night conditions."""
 
@@ -759,9 +791,9 @@ class TestProactiveDischarge:
         coord = _make_coord({"target_weighted_kw": 2.0})
 
         state = CarmaboxState(
-            grid_power_w=200.0,            # importing but below target → RULE 2 won't fire
-            battery_soc_1=80.0,            # high SoC ≥ 40% (sun threshold)
-            solar_radiation_wm2=500.0,     # strong sun → _sun_available=True
+            grid_power_w=200.0,  # importing but below target → RULE 2 won't fire
+            battery_soc_1=80.0,  # high SoC ≥ 40% (sun threshold)
+            solar_radiation_wm2=500.0,  # strong sun → _sun_available=True
             rain_mm=0.0,
             pv_power_w=0.0,
             current_price=80.0,
@@ -802,9 +834,9 @@ class TestProactiveDischarge:
         # SoC 60% < 80%, rain active → should NOT discharge
         state = CarmaboxState(
             grid_power_w=300.0,
-            battery_soc_1=60.0,        # below 80% rainy threshold
+            battery_soc_1=60.0,  # below 80% rainy threshold
             solar_radiation_wm2=50.0,
-            rain_mm=2.0,               # rain active
+            rain_mm=2.0,  # rain active
             pv_power_w=0.0,
             current_price=80.0,
         )
@@ -821,9 +853,9 @@ class TestProactiveDischarge:
         coord = _make_coord({"target_weighted_kw": 2.0})
 
         state = CarmaboxState(
-            grid_power_w=30.0,           # below 50 W sun threshold
-            battery_soc_1=90.0,          # high SoC
-            solar_radiation_wm2=500.0,   # sun available
+            grid_power_w=30.0,  # below 50 W sun threshold
+            battery_soc_1=90.0,  # high SoC
+            solar_radiation_wm2=500.0,  # sun available
             rain_mm=0.0,
             pv_power_w=1000.0,
             current_price=80.0,
@@ -838,6 +870,7 @@ class TestProactiveDischarge:
 
 
 # ── 8. _cmd_charge_pv Idempotency ────────────────────────────────────────────
+
 
 class TestCmdChargePvIdempotency:
     """_cmd_charge_pv must not re-send commands when already in the charge state."""
@@ -881,6 +914,7 @@ class TestCmdChargePvIdempotency:
 
 # ── 9. RULE 2: Price-Aware Discharge Throttling ───────────────────────────────
 
+
 class TestPriceAwareDischargeThrottling:
     """IT-2074: Throttle discharge to 50% when price drops >30% within next 2h."""
 
@@ -903,7 +937,7 @@ class TestPriceAwareDischargeThrottling:
         ]
 
         state = CarmaboxState(
-            grid_power_w=4000.0,   # 2 kW above target → RULE 2 fires
+            grid_power_w=4000.0,  # 2 kW above target → RULE 2 fires
             battery_soc_1=60.0,
             pv_power_w=0.0,
             current_price=100.0,
@@ -915,9 +949,9 @@ class TestPriceAwareDischargeThrottling:
 
         assert coord._last_command == BatteryCommand.DISCHARGE
         # Unthrottled: (4000-2000)/1 = 2000 W; throttled: max(100, 2000//2) = 1000 W
-        assert coord.last_decision.discharge_w <= 1000, (
-            f"Expected throttled discharge ≤ 1000 W, got {coord.last_decision.discharge_w} W"
-        )
+        assert (
+            coord.last_decision.discharge_w <= 1000
+        ), f"Expected throttled discharge ≤ 1000 W, got {coord.last_decision.discharge_w} W"
 
     @pytest.mark.asyncio
     async def test_no_throttle_when_price_stays_similar(self) -> None:
@@ -941,9 +975,9 @@ class TestPriceAwareDischargeThrottling:
 
         assert coord._last_command == BatteryCommand.DISCHARGE
         # 5% drop < 30% threshold → no throttle → ~2000 W
-        assert coord.last_decision.discharge_w >= 1500, (
-            f"Expected full discharge ≥ 1500 W, got {coord.last_decision.discharge_w} W"
-        )
+        assert (
+            coord.last_decision.discharge_w >= 1500
+        ), f"Expected full discharge ≥ 1500 W, got {coord.last_decision.discharge_w} W"
 
     @pytest.mark.asyncio
     async def test_no_throttle_with_empty_plan(self) -> None:
@@ -968,6 +1002,7 @@ class TestPriceAwareDischargeThrottling:
 
 # ── 10. Predictor Integration ─────────────────────────────────────────────────
 
+
 class TestPredictorIntegration:
     """PLAT-965: Predictor in _generate_plan — all Solcast properties mocked."""
 
@@ -977,7 +1012,7 @@ class TestPredictorIntegration:
         mock.today_hourly_kw = [0.0] * 24
         mock.tomorrow_hourly_kw = [0.0] * 24
         mock.forecast_daily_3d = [10.0, 10.0, 10.0]
-        mock.power_now_kw = 0.0   # ← critical: prevents TypeError at line 1150
+        mock.power_now_kw = 0.0  # ← critical: prevents TypeError at line 1150
         return mock
 
     def _setup_price_state(self, coord: CarmaboxCoordinator, entity_id: str) -> CarmaboxState:
@@ -1051,6 +1086,7 @@ class TestPredictorIntegration:
 
 # ── 11. CarmaboxState Model Boundary Values ───────────────────────────────────
 
+
 class TestCarmaboxStateModel:
     """Boundary conditions on CarmaboxState computed properties.
 
@@ -1092,16 +1128,20 @@ class TestCarmaboxStateModel:
     def test_total_battery_soc_capacity_weighted(self) -> None:
         """15 kWh @ 80% + 5 kWh @ 40% = (12+2)/20 = 70.0%."""
         s = CarmaboxState(
-            battery_soc_1=80.0, battery_cap_1_kwh=15.0,
-            battery_soc_2=40.0, battery_cap_2_kwh=5.0,
+            battery_soc_1=80.0,
+            battery_cap_1_kwh=15.0,
+            battery_soc_2=40.0,
+            battery_cap_2_kwh=5.0,
         )
         assert abs(s.total_battery_soc - 70.0) < 0.01
 
     def test_total_battery_soc_equal_capacities(self) -> None:
         """Equal capacities → simple average."""
         s = CarmaboxState(
-            battery_soc_1=60.0, battery_cap_1_kwh=10.0,
-            battery_soc_2=40.0, battery_cap_2_kwh=10.0,
+            battery_soc_1=60.0,
+            battery_cap_1_kwh=10.0,
+            battery_soc_2=40.0,
+            battery_cap_2_kwh=10.0,
         )
         assert abs(s.total_battery_soc - 50.0) < 0.01
 
@@ -1124,6 +1164,7 @@ class TestCarmaboxStateModel:
 
 # ── 12. RULE 4: Default Idle and SoC Safety Guard ────────────────────────────
 
+
 class TestRuleIdleAndSafetyFloor:
     """RULE 4 and SoC-floor behavior in the discharge path."""
 
@@ -1134,7 +1175,7 @@ class TestRuleIdleAndSafetyFloor:
         coord._last_command = BatteryCommand.STANDBY
 
         state = CarmaboxState(
-            grid_power_w=1000.0,    # 1 kW — well below 2 kW target
+            grid_power_w=1000.0,  # 1 kW — well below 2 kW target
             battery_soc_1=60.0,
             pv_power_w=0.0,
             current_price=80.0,
@@ -1157,8 +1198,8 @@ class TestRuleIdleAndSafetyFloor:
         )
 
         state = CarmaboxState(
-            grid_power_w=5000.0,    # well above target → RULE 2 fires
-            battery_soc_1=15.0,     # at min_soc floor
+            grid_power_w=5000.0,  # well above target → RULE 2 fires
+            battery_soc_1=15.0,  # at min_soc floor
             pv_power_w=0.0,
             current_price=80.0,
         )

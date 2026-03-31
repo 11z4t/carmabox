@@ -138,11 +138,11 @@ class TestDecisionEngine:
             battery_soc_pct=80.0,
             battery_cap_kwh=10.0,
             grid_import_w=0.0,
-            pv_power_w=6000.0,   # High PV
+            pv_power_w=6000.0,  # High PV
             ev_soc_pct=60.0,
             ev_connected=True,
             house_load_w=1000.0,
-            is_night=False,       # Daytime → EV surplus path
+            is_night=False,  # Daytime → EV surplus path
             tak_kw=4.0,
         )
         assert result is not None
@@ -155,7 +155,7 @@ class TestDecisionEngine:
             battery_soc_pct=80.0,
             battery_cap_kwh=10.0,
             grid_import_w=0.0,
-            pv_power_w=2500.0,   # Medium PV
+            pv_power_w=2500.0,  # Medium PV
             ev_soc_pct=60.0,
             ev_connected=True,
             house_load_w=800.0,
@@ -198,8 +198,12 @@ class TestMlPredictor:
         predictor._max_samples = 3  # Force small max
         for i in range(5):
             s = PlanAccuracySample(
-                hour=10, planned_grid_kw=2.0, actual_grid_kw=1.9 + i * 0.1,
-                planned_action="discharge", actual_action="discharge", price=50.0,
+                hour=10,
+                planned_grid_kw=2.0,
+                actual_grid_kw=1.9 + i * 0.1,
+                planned_action="discharge",
+                actual_action="discharge",
+                price=50.0,
             )
             predictor.add_plan_accuracy(s)
         assert len(predictor._plan_accuracy[10]) <= 3
@@ -211,8 +215,12 @@ class TestMlPredictor:
         predictor = MLPredictor()
         predictor.add_plan_accuracy(
             PlanAccuracySample(
-                hour=5, planned_grid_kw=2.0, actual_grid_kw=2.0,
-                planned_action="idle", actual_action="idle", price=50.0,
+                hour=5,
+                planned_grid_kw=2.0,
+                actual_grid_kw=2.0,
+                planned_action="idle",
+                actual_action="idle",
+                price=50.0,
             )
         )
         result = predictor.get_plan_correction_factor(hour=5)

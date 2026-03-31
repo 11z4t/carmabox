@@ -19,6 +19,7 @@ from tests.unit.test_expert_control import _make_coord
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _state_importing(grid_w: float = 1000.0, **kwargs) -> CarmaboxState:
     """Basic importing state."""
     defaults = {
@@ -46,13 +47,22 @@ def _state_exporting(grid_w: float = -500.0, **kwargs) -> CarmaboxState:
 def _plan_with_grid_kw(hour: int, action: str, grid_kw: float, price: float = 80.0) -> HourPlan:
     """HourPlan with explicit grid_kw for plan deviation testing."""
     return HourPlan(
-        hour=hour, action=action, battery_kw=0.0, grid_kw=grid_kw,
-        weighted_kw=grid_kw, pv_kw=0.0, consumption_kw=2.0,
-        ev_kw=0.0, ev_soc=0, battery_soc=60, price=price,
+        hour=hour,
+        action=action,
+        battery_kw=0.0,
+        grid_kw=grid_kw,
+        weighted_kw=grid_kw,
+        pv_kw=0.0,
+        consumption_kw=2.0,
+        ev_kw=0.0,
+        ev_soc=0,
+        battery_soc=60,
+        price=price,
     )
 
 
 # ── _check_plan_correction ────────────────────────────────────────────────────
+
 
 class TestCheckPlanCorrection:
     """Lines 2329-2424: _check_plan_correction self-correction logic."""
@@ -200,6 +210,7 @@ class TestCheckPlanCorrection:
 
 # ── _execute_miner ────────────────────────────────────────────────────────────
 
+
 class TestExecuteMiner:
     """Lines 3019-3116: _execute_miner body — miner control decisions."""
 
@@ -239,8 +250,8 @@ class TestExecuteMiner:
         coord._miner_on = True
 
         state = _state_importing(
-            battery_soc_1=25.0,    # < 30%
-            current_price=100.0,   # > 80 öre (expensive)
+            battery_soc_1=25.0,  # < 30%
+            current_price=100.0,  # > 80 öre (expensive)
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -406,6 +417,7 @@ class TestExecuteMiner:
 
 
 # ── _watchdog (self-correction) ───────────────────────────────────────────────
+
 
 class TestWatchdog:
     """Lines 2425-2544: _watchdog — catches obvious decision errors."""

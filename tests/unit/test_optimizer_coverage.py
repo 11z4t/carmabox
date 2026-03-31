@@ -37,7 +37,7 @@ class TestEvSchedulePvSurplus:
         """pv_tomorrow > daily_consumption + 10 → battery_budget = battery_available (line 122)."""
         schedule = self._base_call(
             battery_kwh_available=10.0,
-            pv_tomorrow_kwh=30.0,        # surplus = 30 - 15 = 15 > 10
+            pv_tomorrow_kwh=30.0,  # surplus = 30 - 15 = 15 > 10
             daily_consumption_kwh=15.0,
         )
         assert len(schedule) == 8  # Runs without error; path covered
@@ -46,7 +46,7 @@ class TestEvSchedulePvSurplus:
         """0 < pv_surplus <= 10 → battery_budget = min(available, surplus) (line 124)."""
         schedule = self._base_call(
             battery_kwh_available=10.0,
-            pv_tomorrow_kwh=20.0,        # surplus = 20 - 15 = 5, in (0, 10]
+            pv_tomorrow_kwh=20.0,  # surplus = 20 - 15 = 5, in (0, 10]
             daily_consumption_kwh=15.0,
         )
         assert len(schedule) == 8
@@ -80,7 +80,7 @@ class TestEvScheduleShortfallPhase:
         schedule = calculate_ev_schedule(
             start_hour=22,
             num_hours=8,
-            ev_soc_pct=10,              # Needs a lot of charge
+            ev_soc_pct=10,  # Needs a lot of charge
             ev_capacity_kwh=98,
             hourly_prices=prices,
             hourly_loads=[1.0] * 8,
@@ -105,7 +105,7 @@ class TestEvScheduleShortfallPhase:
             ev_soc_pct=5,
             ev_capacity_kwh=98,
             hourly_prices=prices,
-            hourly_loads=[3.9] * 8,    # House load ~= target → almost no headroom
+            hourly_loads=[3.9] * 8,  # House load ~= target → almost no headroom
             target_weighted_kw=4.0,
             morning_target_soc=75.0,
             night_weight=0.5,
@@ -128,7 +128,7 @@ class TestEvMultinightPlan:
             ev_soc_pct=70.0,
             ev_capacity_kwh=98,
             target_soc=75.0,
-            tonight_max_kwh=10.0,   # 70 + 10/98*100 ≈ 80.2% → reaches 75%
+            tonight_max_kwh=10.0,  # 70 + 10/98*100 ≈ 80.2% → reaches 75%
             pv_tomorrow_kwh=20.0,
             daily_consumption_kwh=15.0,
             battery_cap_kwh=20.0,
@@ -145,7 +145,7 @@ class TestEvMultinightPlan:
             ev_soc_pct=20.0,
             ev_capacity_kwh=98,
             target_soc=90.0,
-            tonight_max_kwh=5.0,    # 20 + 5/98*100 ≈ 25% → doesn't reach 90%
+            tonight_max_kwh=5.0,  # 20 + 5/98*100 ≈ 25% → doesn't reach 90%
             pv_tomorrow_kwh=20.0,
             daily_consumption_kwh=15.0,
             battery_cap_kwh=20.0,
@@ -386,7 +386,7 @@ class TestPVCorrectionProfileEarlyReturns:
     def test_trend_insufficient_daily_records(self) -> None:
         """< 14 daily_records → 'insufficient_data' (lines 198-199)."""
         c = self._make_corrector()
-        for i in range(10):
+        for _i in range(10):
             c.record_daily(month=3, forecast_kwh=10.0, actual_kwh=9.5)
         assert c.trend == "insufficient_data"
 

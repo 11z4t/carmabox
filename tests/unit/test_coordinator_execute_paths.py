@@ -30,6 +30,7 @@ from tests.unit.test_expert_control import _make_coord, _plan_hour
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _importing_state(**kwargs) -> CarmaboxState:
     """Baseline: 1 kW import, SoC 60%, no PV, no sun.
 
@@ -66,22 +67,39 @@ def _exporting_pv_state(**kwargs) -> CarmaboxState:
 def _plan_discharge(hour: int, battery_kw: float = -2.0, price: float = 80.0) -> HourPlan:
     """HourPlan with discharge action (battery_kw < 0)."""
     return HourPlan(
-        hour=hour, action="d", battery_kw=battery_kw, grid_kw=0.0,
-        weighted_kw=0.0, pv_kw=0.0, consumption_kw=2.0,
-        ev_kw=0.0, ev_soc=0, battery_soc=60, price=price,
+        hour=hour,
+        action="d",
+        battery_kw=battery_kw,
+        grid_kw=0.0,
+        weighted_kw=0.0,
+        pv_kw=0.0,
+        consumption_kw=2.0,
+        ev_kw=0.0,
+        ev_soc=0,
+        battery_soc=60,
+        price=price,
     )
 
 
 def _plan_grid_charge(hour: int, price: float = 15.0) -> HourPlan:
     """HourPlan with grid-charge action (action='g')."""
     return HourPlan(
-        hour=hour, action="g", battery_kw=0.0, grid_kw=0.0,
-        weighted_kw=0.0, pv_kw=0.0, consumption_kw=2.0,
-        ev_kw=0.0, ev_soc=0, battery_soc=60, price=price,
+        hour=hour,
+        action="g",
+        battery_kw=0.0,
+        grid_kw=0.0,
+        weighted_kw=0.0,
+        pv_kw=0.0,
+        consumption_kw=2.0,
+        ev_kw=0.0,
+        ev_soc=0,
+        battery_soc=60,
+        price=price,
     )
 
 
 # ── 1. bat_support_kw — batteries discharging (lines 1441/1443) ──────────────
+
 
 class TestBatSupportKwNegativePower:
     """Lines 1441/1443: bat_support_kw accumulates when battery_power < 0."""
@@ -133,6 +151,7 @@ class TestBatSupportKwNegativePower:
 
 # ── 2. SoC reasoning: dual battery + EV (lines 1483/1487) ────────────────────
 
+
 class TestSocReasoningDualBatteryAndEv:
     """Lines 1483/1487: has_battery_2 and has_ev in reasoning chain."""
 
@@ -173,7 +192,7 @@ class TestSocReasoningDualBatteryAndEv:
         state = _importing_state(
             battery_soc_1=70.0,
             battery_soc_2=50.0,  # has_battery_2
-            ev_soc=65.0,          # has_ev
+            ev_soc=65.0,  # has_ev
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -184,6 +203,7 @@ class TestSocReasoningDualBatteryAndEv:
 
 
 # ── 3. RULE 0.5: PV surplus + BMS cold lock (lines 1511-1536) ────────────────
+
 
 class TestRule05BmsColdLock:
     """Lines 1511-1536: RULE_0_5 cold lock → surplus chain + BMS_COLD_LOCK command."""
@@ -201,7 +221,7 @@ class TestRule05BmsColdLock:
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV
         state = _exporting_pv_state(
-            battery_power_1=30.0,         # abs < 100: BMS is blocking charging
+            battery_power_1=30.0,  # abs < 100: BMS is blocking charging
             battery_min_cell_temp_1=5.0,  # cold: < 10°C → cold lock triggers
         )
 
@@ -217,10 +237,10 @@ class TestRule05BmsColdLock:
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV_TAPER
         state = _exporting_pv_state(
-            battery_power_1=0.0,           # abs < 100
-            battery_power_2=0.0,           # abs < 100
-            battery_soc_2=80.0,            # has_battery_2 = True
-            battery_min_cell_temp_2=3.0,   # battery 2 is cold
+            battery_power_1=0.0,  # abs < 100
+            battery_power_2=0.0,  # abs < 100
+            battery_soc_2=80.0,  # has_battery_2 = True
+            battery_min_cell_temp_2=3.0,  # battery 2 is cold
         )
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -268,6 +288,7 @@ class TestRule05BmsColdLock:
 
 
 # ── 4. RULE 0.5: PV surplus + BMS taper (lines 1539-1562) ────────────────────
+
 
 class TestRule05BmsTaper:
     """Lines 1539-1562: RULE_0_5 taper → surplus chain + CHARGE_PV_TAPER command."""
@@ -352,6 +373,7 @@ class TestRule05BmsTaper:
 
 # ── 5. RULE 1: export + taper when RULE 0.5 charge is blocked (lines 1596-1617) ─
 
+
 class TestRule1ExportPathTaper:
     """Lines 1596-1617: RULE_1 taper path when RULE_0_5 charge check fails.
 
@@ -372,10 +394,12 @@ class TestRule1ExportPathTaper:
         coord._last_command = BatteryCommand.CHARGE_PV
 
         # side_effect: first call fails (blocks RULE_0_5), second succeeds (RULE_1)
-        coord.safety.check_charge = MagicMock(side_effect=[
-            MagicMock(ok=False, reason="safety_test_block"),
-            MagicMock(ok=True, reason=""),
-        ])
+        coord.safety.check_charge = MagicMock(
+            side_effect=[
+                MagicMock(ok=False, reason="safety_test_block"),
+                MagicMock(ok=True, reason=""),
+            ]
+        )
 
         state = _exporting_pv_state(
             battery_power_1=-500.0,
@@ -395,10 +419,12 @@ class TestRule1ExportPathTaper:
         """_active_rule_id must be 'RULE_1' (not 'RULE_0_5') for this taper path."""
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV
-        coord.safety.check_charge = MagicMock(side_effect=[
-            MagicMock(ok=False, reason="safety_test"),
-            MagicMock(ok=True, reason=""),
-        ])
+        coord.safety.check_charge = MagicMock(
+            side_effect=[
+                MagicMock(ok=False, reason="safety_test"),
+                MagicMock(ok=True, reason=""),
+            ]
+        )
         state = _exporting_pv_state(battery_power_1=-500.0)
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -413,10 +439,12 @@ class TestRule1ExportPathTaper:
         coord = _make_coord()
         coord._last_command = BatteryCommand.CHARGE_PV
         coord.target_kw = 3.5
-        coord.safety.check_charge = MagicMock(side_effect=[
-            MagicMock(ok=False, reason="safety_test"),
-            MagicMock(ok=True, reason=""),
-        ])
+        coord.safety.check_charge = MagicMock(
+            side_effect=[
+                MagicMock(ok=False, reason="safety_test"),
+                MagicMock(ok=True, reason=""),
+            ]
+        )
         state = _exporting_pv_state(battery_power_1=-500.0)
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -427,6 +455,7 @@ class TestRule1ExportPathTaper:
 
 
 # ── 6. Arbitrage threshold update (lines 1675-1678) ──────────────────────────
+
 
 class TestArbitrageThresholdUpdate:
     """Lines 1675-1678: arb_threshold overrides grid_charge_threshold when spread > 30.
@@ -452,7 +481,7 @@ class TestArbitrageThresholdUpdate:
         # SoC >= 90% prevents any grid charge from actually firing
         state = _importing_state(
             grid_power_w=0.0,
-            battery_soc_1=95.0,   # >= DEFAULT_GRID_CHARGE_MAX_SOC (90%)
+            battery_soc_1=95.0,  # >= DEFAULT_GRID_CHARGE_MAX_SOC (90%)
             current_price=200.0,  # way above any threshold
         )
 
@@ -499,6 +528,7 @@ class TestArbitrageThresholdUpdate:
 
 
 # ── 7. Plan-directed grid charge (lines 1691-1709) ───────────────────────────
+
 
 class TestPlanDirectedGridCharge:
     """Lines 1691-1709: plan.action == 'g' at current hour → grid charge regardless of threshold."""
@@ -602,6 +632,7 @@ class TestPlanDirectedGridCharge:
 
 # ── 8. Plan-directed proactive discharge (lines 1916-2002) ───────────────────
 
+
 class TestPlanDirectedProactiveDischarge:
     """Lines 1916-2002: plan.action == 'd' + battery_kw < -0.1 → proactive discharge.
 
@@ -624,14 +655,14 @@ class TestPlanDirectedProactiveDischarge:
     def _planned_discharge_state(self, **kwargs) -> CarmaboxState:
         """State that safely falls through to planned discharge without triggering earlier rules."""
         defaults = {
-            "grid_power_w": 1000.0,    # importing 1 kW (below target 2 kW → RULE 2 won't fire)
-            "battery_soc_1": 70.0,     # 70% < 80% proactive threshold → RULE 1.8 won't fire
+            "grid_power_w": 1000.0,  # importing 1 kW (below target 2 kW → RULE 2 won't fire)
+            "battery_soc_1": 70.0,  # 70% < 80% proactive threshold → RULE 1.8 won't fire
             "battery_power_1": 0.0,
-            "pv_power_w": 0.0,          # no PV → RULE 0.5 won't fire
-            "solar_radiation_wm2": 0.0, # cloudy → proactive threshold = 80%
+            "pv_power_w": 0.0,  # no PV → RULE 0.5 won't fire
+            "solar_radiation_wm2": 0.0,  # cloudy → proactive threshold = 80%
             "illuminance_lx": 0.0,
             "rain_mm": 0.0,
-            "current_price": 200.0,     # high price → regular grid charge won't fire
+            "current_price": 200.0,  # high price → regular grid charge won't fire
         }
         defaults.update(kwargs)
         return CarmaboxState(**defaults)
@@ -760,6 +791,7 @@ class TestPlanDirectedProactiveDischarge:
 
 # ── 9. Grid samples circular-buffer trimming (line 1855) ─────────────────────
 
+
 class TestGridSamplesTrimming:
     """Line 1855: _grid_samples trimmed when len > _grid_sample_max (10)."""
 
@@ -796,6 +828,7 @@ class TestGridSamplesTrimming:
 
 
 # ── 10. Ellevio sensor float reads + prognos warning (lines 1835-1844) ────────
+
 
 class TestEllevioSensorReads:
     """Lines 1835-1844: ellevio sensor states read and prognos warning logged."""
@@ -884,6 +917,7 @@ class TestEllevioSensorReads:
 
 
 # ── 11. Flat-line proactive discharge controller (lines 1889-1905) ────────────
+
 
 class TestFlatLineProactiveDischarge:
     """Lines 1889-1905: flat-line controller discharges proactively when rolling_avg > target-0.3.
@@ -979,6 +1013,7 @@ class TestFlatLineProactiveDischarge:
 
 # ── 12. Planned discharge: cold lock redistribution (lines 1946-1956) ─────────
 
+
 class TestPlannedDischargeColdLockRedistribution:
     """Lines 1946-1956: temperature-based battery share redistribution in planned discharge.
 
@@ -1053,7 +1088,7 @@ class TestPlannedDischargeColdLockRedistribution:
         coord._grid_samples = [0.5] * 9
         coord.plan = [_plan_discharge(hour=10, battery_kw=-2.0)]
         self._add_cell_temp_state(coord, "kontor", 20.0)  # warm
-        self._add_cell_temp_state(coord, "forrad", 18.0)   # warm
+        self._add_cell_temp_state(coord, "forrad", 18.0)  # warm
 
         state = self._planned_discharge_state()
 
@@ -1065,6 +1100,7 @@ class TestPlannedDischargeColdLockRedistribution:
 
 
 # ── 13. RULE 2: Discharge with appliance sensor present ───────────────────────
+
 
 class TestRule2DishwasherCompensation:
     """RULE 2 discharge calculation: grid > target → discharge proportional gap."""

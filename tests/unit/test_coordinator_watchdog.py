@@ -15,6 +15,7 @@ from tests.unit.test_expert_control import _make_coord
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
+
 def _state_importing(
     grid_w: float = 1500.0,
     soc: float = 60.0,
@@ -53,6 +54,7 @@ def _make_watchdog_coord(action: str = "idle") -> object:
 
 # ── W0: executor_enabled = False → return early (line 2441-2442) ─────────────
 
+
 class TestWatchdogExecutorDisabled:
     @pytest.mark.asyncio
     async def test_returns_early_when_executor_disabled(self) -> None:
@@ -70,6 +72,7 @@ class TestWatchdogExecutorDisabled:
 
 
 # ── W1: Exporting + battery not full + not charging → charge_pv ──────────────
+
 
 class TestWatchdogW1ExportingNotCharging:
     """Lines 2462-2480: W1 corrects idle-while-exporting to charge_pv."""
@@ -126,6 +129,7 @@ class TestWatchdogW1ExportingNotCharging:
 
 
 # ── W2: Grid > target + battery capacity + not discharging ───────────────────
+
 
 class TestWatchdogW2HighGrid:
     """Lines 2484-2522: W2 corrects idle when grid > target*1.1."""
@@ -206,6 +210,7 @@ class TestWatchdogW2HighGrid:
 
 # ── W4: EV charging + grid importing (day) ───────────────────────────────────
 
+
 class TestWatchdogW4EvImporting:
     """Lines 2524-2535: W4 stops EV when charging during daytime import."""
 
@@ -257,6 +262,7 @@ class TestWatchdogW4EvImporting:
 
 
 # ── W5: High price + battery capacity + idle ─────────────────────────────────
+
 
 class TestWatchdogW5HighPriceIdle:
     """Lines 2537-2550: W5 logs warning when high price + battery + idle."""

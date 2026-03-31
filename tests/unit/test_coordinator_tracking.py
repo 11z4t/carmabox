@@ -68,6 +68,7 @@ def _make_coord(*, cfg: dict | None = None, executor_enabled: bool = True) -> ob
     coord._bat_idle_seconds = 0
     coord._bat_daily_idle_seconds = 0
     import datetime as dt
+
     coord._bat_idle_day = dt.datetime.now().day
     coord._ev_last_known_enabled = None
     coord._ev_enabled = False
@@ -76,10 +77,13 @@ def _make_coord(*, cfg: dict | None = None, executor_enabled: bool = True) -> ob
     coord._peak_last_hour = -1
     coord.appliance_power = {}
     from custom_components.carmabox.optimizer.report import ReportCollector
+
     coord.report_collector = ReportCollector(month=1, year=2026)
     from custom_components.carmabox.optimizer.models import Decision
+
     coord.last_decision = Decision()
     from custom_components.carmabox.optimizer.hourly_ledger import EnergyLedger
+
     coord.ledger = EnergyLedger()
     coord._ellevio_hour_samples = []
     coord._ellevio_current_hour = -1
@@ -89,6 +93,7 @@ def _make_coord(*, cfg: dict | None = None, executor_enabled: bool = True) -> ob
     coord.hourly_actuals = []
     coord._consumption_last_hour = -1
     from custom_components.carmabox.optimizer.consumption import ConsumptionProfile
+
     coord.consumption_profile = ConsumptionProfile()
     coord._read_battery_temp = MagicMock(return_value=20.0)
     return coord
@@ -238,13 +243,12 @@ class TestTrackSavings:
             current_price=100.0,
         )
         import datetime as dt
+
         current_hour = dt.datetime.now().hour
         # Simulate different hour from last
         coord._peak_last_hour = (current_hour + 1) % 24
 
-        with patch(
-            "custom_components.carmabox.coordinator.record_peak"
-        ) as mock_peak:
+        with patch("custom_components.carmabox.coordinator.record_peak") as mock_peak:
             coord._track_savings(state)
         mock_peak.assert_called_once()
 
@@ -336,9 +340,7 @@ class TestFeedPredictorMl:
         coord = _make_coord()
         appliance_state = MagicMock()
         appliance_state.state = "800"  # > 500W
-        coord.hass.states.get = lambda eid: (
-            appliance_state if "shelly" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (appliance_state if "shelly" in eid else None)
         state = CarmaboxState()
         coord._feed_predictor_ml(state)
         coord.predictor.add_appliance_event.assert_called()
@@ -348,9 +350,7 @@ class TestFeedPredictorMl:
         coord = _make_coord()
         temp_state = MagicMock()
         temp_state.state = "15.3"
-        coord.hass.states.get = lambda eid: (
-            temp_state if "tempest_temperature" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (temp_state if "tempest_temperature" in eid else None)
         state = CarmaboxState()
         coord._feed_predictor_ml(state)
         coord.predictor.add_temperature_sample.assert_called_once()
@@ -360,6 +360,7 @@ class TestFeedPredictorMl:
 
         coord = _make_coord()
         import datetime as dt
+
         current_hour = dt.datetime.now().hour
         coord._last_feedback_hour = (current_hour + 1) % 24  # different hour
 
@@ -377,6 +378,7 @@ class TestFeedPredictorMl:
         """Same feedback hour → plan feedback skipped (line 5951)."""
         coord = _make_coord()
         import datetime as dt
+
         current_hour = dt.datetime.now().hour
         coord._last_feedback_hour = current_hour  # same hour
         coord.hass.states.get = MagicMock(return_value=None)
@@ -410,6 +412,7 @@ class TestCheckRepairIssues:
         """Hub last_sync > 24h ago → raise_hub_offline_issue (lines 5247-5252)."""
         coord = _make_coord()
         import datetime as dt
+
         hub = MagicMock()
         hub.last_sync = dt.datetime.now() - dt.timedelta(hours=25)
         coord._hub = hub
@@ -426,6 +429,7 @@ class TestCheckRepairIssues:
         """Hub last_sync < 24h → clear_issue('hub_offline') (line 5254)."""
         coord = _make_coord()
         import datetime as dt
+
         hub = MagicMock()
         hub.last_sync = dt.datetime.now() - dt.timedelta(hours=2)
         coord._hub = hub
@@ -512,9 +516,7 @@ class TestSafeServiceCall:
     async def test_dry_run_logs_and_returns_true(self) -> None:
         """executor_enabled=False → dry-run log, return True (lines 6289-6297)."""
         coord = _make_coord(executor_enabled=False)
-        result = await coord._safe_service_call(
-            "switch", "turn_on", {"entity_id": "switch.miner"}
-        )
+        result = await coord._safe_service_call("switch", "turn_on", {"entity_id": "switch.miner"})
         assert result is True
         coord.hass.services.async_call.assert_not_called()
 
@@ -525,9 +527,7 @@ class TestSafeServiceCall:
 
         coord = _make_coord(executor_enabled=True)
         coord.hass.services.async_call.side_effect = ServiceNotFound("switch", "turn_on")
-        result = await coord._safe_service_call(
-            "switch", "turn_on", {"entity_id": "switch.miner"}
-        )
+        result = await coord._safe_service_call("switch", "turn_on", {"entity_id": "switch.miner"})
         assert result is False
 
     @pytest.mark.asyncio
@@ -543,7 +543,8 @@ class TestSafeServiceCall:
         ]
         with patch("asyncio.sleep", new=AsyncMock()):
             result = await coord._safe_service_call(
-                "select", "select_option",
+                "select",
+                "select_option",
                 {"entity_id": "select.ems_mode", "option": "peak_shaving"},
             )
         assert result is True
@@ -558,7 +559,8 @@ class TestSafeServiceCall:
         ]
         with patch("asyncio.sleep", new=AsyncMock()):
             result = await coord._safe_service_call(
-                "select", "select_option",
+                "select",
+                "select_option",
                 {"entity_id": "select.ems_mode", "option": "peak_shaving"},
             )
         assert result is True

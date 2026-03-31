@@ -61,9 +61,7 @@ class TestCheckDailyGoals:
         """Ellevio max ≤ target → goal_met=True."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="1.8")
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state(battery_soc_1=60.0)
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_goal_met") is True
@@ -72,9 +70,7 @@ class TestCheckDailyGoals:
         """Ellevio max > 5 → cause='EV+disk overlap' (line 5999)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="5.5")  # > 5
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_goal_met") is False
@@ -84,9 +80,7 @@ class TestCheckDailyGoals:
         """Ellevio max 4-5 → cause='EV 10A burst' (line 6002)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="4.3")  # 4-5
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "EV 10A burst"
@@ -95,9 +89,7 @@ class TestCheckDailyGoals:
         """Ellevio max 3-4 → cause='High base load' (line 6004)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="3.2")  # 3-4
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "High base load"
@@ -106,9 +98,7 @@ class TestCheckDailyGoals:
         """Ellevio max 2-3 → cause='Unknown' (line 6006)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="2.5")  # 2-3
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "Unknown"
@@ -117,9 +107,7 @@ class TestCheckDailyGoals:
         """Non-numeric ellevio state → ValueError caught (line 6015)."""
         coord = _make_coordinator()
         ell_max = _make_state(state="invalid")
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         # Should not raise
         results = coord._check_daily_goals(state)
@@ -132,9 +120,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 1.5},
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_goal_met") is True
@@ -146,9 +132,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 6.0},
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_goal_met") is False
@@ -161,9 +145,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 3.0},
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_root_cause") == "Battery full + no EV"
@@ -175,9 +157,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 5.0, "total_export_kwh": 1.5},
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_root_cause") == "Normal surplus"
@@ -186,13 +166,9 @@ class TestCheckDailyGoals:
         """3+ breaches in 7 days → escalation level 2 (lines 6083-6088)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         # Pre-fill breach history with 3 recent dates
-        coord._breach_history = {
-            "ellevio": ["2026-03-29", "2026-03-30", "2026-03-31"]
-        }
+        coord._breach_history = {"ellevio": ["2026-03-29", "2026-03-30", "2026-03-31"]}
         ell_max = _make_state(state="5.5")  # breaches ellevio goal
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         # Should set escalation to CRITICAL
@@ -201,13 +177,9 @@ class TestCheckDailyGoals:
     def test_breach_escalation_warning_2_breaches(self) -> None:
         """2 breaches in 7 days → escalation level 1 (lines 6090-6096)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
-        coord._breach_history = {
-            "ellevio": ["2026-03-30", "2026-03-31"]
-        }
+        coord._breach_history = {"ellevio": ["2026-03-30", "2026-03-31"]}
         ell_max = _make_state(state="5.5")
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         assert coord._breach_escalation.get("ellevio") == 1
@@ -217,9 +189,7 @@ class TestCheckDailyGoals:
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         # Empty history
         ell_max = _make_state(state="5.5")
-        coord.hass.states.get = lambda eid: (
-            ell_max if "ellevio_dagens_max" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         assert coord._breach_escalation.get("ellevio") == 0
@@ -235,9 +205,7 @@ class TestCheckDailyGoals:
                 "battery_net_saving_kr": 5.0,
             },
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state(battery_soc_1=70.0, battery_power_1=1000.0)
         results = coord._check_daily_goals(state)
         assert "battery_score" in results
@@ -265,9 +233,7 @@ class TestCheckDailyGoals:
                 "without_battery_kr": 12.0,
             },
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert "cost_savings_pct" in results
@@ -280,9 +246,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_cost_kr": 11.9, "without_battery_kr": 12.0},
         )
-        coord.hass.states.get = lambda eid: (
-            ledger if "energy_ledger" in eid else None
-        )
+        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         if not results.get("cost_goal_met", True):
@@ -358,8 +322,10 @@ class TestGenerateBreachCorrections:
         coord._breach_corrections = [expired_corr]
         state = _make_carmabox_state()
         coord._generate_breach_corrections(state, breach_hour=8, actual_avg=2.5)
-        assert not any(c.action == "reduce_ev" and c.created == "2026-01-01T00:00:00"
-                       for c in coord._breach_corrections)
+        assert not any(
+            c.action == "reduce_ev" and c.created == "2026-01-01T00:00:00"
+            for c in coord._breach_corrections
+        )
 
     def test_corrupt_created_date_marked_expired(self) -> None:
         """Corrupt created date → entry marked expired (lines 5505-5506)."""
@@ -384,14 +350,16 @@ class TestGenerateBreachCorrections:
         coord._MAX_CORRECTIONS = 3
         # Pre-fill with 3 recent corrections
         for i in range(3):
-            coord._breach_corrections.append(BreachCorrection(
-                created="2026-03-31T10:00:00",
-                source_breach_hour=i,
-                action="reduce_ev",
-                target_hour=i,
-                param="ev_amps=6",
-                reason=f"test {i}",
-            ))
+            coord._breach_corrections.append(
+                BreachCorrection(
+                    created="2026-03-31T10:00:00",
+                    source_breach_hour=i,
+                    action="reduce_ev",
+                    target_hour=i,
+                    param="ev_amps=6",
+                    reason=f"test {i}",
+                )
+            )
         coord._miner_on = True
         state = _make_carmabox_state(ev_power_w=1000.0, battery_power_1=0.0)
         # Adding 3 more should trigger cap
@@ -408,12 +376,15 @@ class TestCalculateEvTarget:
     def test_solcast_exception_returns_default(self) -> None:
         """SolcastAdapter raises → returns ev_night_target_soc (line 4085-4087)."""
         coord = _make_coordinator(cfg={"ev_night_target_soc": 75})
-        with patch(
-            "custom_components.carmabox.coordinator.CarmaboxCoordinator._calculate_ev_target",
-            wraps=coord._calculate_ev_target,
-        ), patch(
-            "custom_components.carmabox.adapters.solcast.SolcastAdapter",
-            side_effect=RuntimeError("no solcast"),
+        with (
+            patch(
+                "custom_components.carmabox.coordinator.CarmaboxCoordinator._calculate_ev_target",
+                wraps=coord._calculate_ev_target,
+            ),
+            patch(
+                "custom_components.carmabox.adapters.solcast.SolcastAdapter",
+                side_effect=RuntimeError("no solcast"),
+            ),
         ):
             result = coord._calculate_ev_target()
         assert result == 75.0
@@ -435,12 +406,14 @@ class TestCalculateEvTarget:
         """worst_3_days < solar_ok → max_target (lines 4096-4102)."""
         from custom_components.carmabox.const import DEFAULT_EV_SOC_MAX_TARGET
 
-        coord = _make_coordinator(cfg={
-            "solar_ok_kwh": 20.0,
-            "solar_good_kwh": 30.0,
-            "ev_soc_min_target": 75.0,
-            "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
-        })
+        coord = _make_coordinator(
+            cfg={
+                "solar_ok_kwh": 20.0,
+                "solar_good_kwh": 30.0,
+                "ev_soc_min_target": 75.0,
+                "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
+            }
+        )
         mock_solcast = MagicMock()
         mock_solcast.forecast_daily_3d = [15.0, 18.0, 10.0, 8.0]  # worst=8 < solar_ok=20
 
@@ -455,12 +428,14 @@ class TestCalculateEvTarget:
         """tomorrow > solar_good → max_target (lines 4104-4111)."""
         from custom_components.carmabox.const import DEFAULT_EV_SOC_MAX_TARGET
 
-        coord = _make_coordinator(cfg={
-            "solar_ok_kwh": 20.0,
-            "solar_good_kwh": 30.0,
-            "ev_soc_min_target": 75.0,
-            "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
-        })
+        coord = _make_coordinator(
+            cfg={
+                "solar_ok_kwh": 20.0,
+                "solar_good_kwh": 30.0,
+                "ev_soc_min_target": 75.0,
+                "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
+            }
+        )
         mock_solcast = MagicMock()
         mock_solcast.forecast_daily_3d = [20.0, 35.0, 32.0, 28.0]  # tomorrow=35 > solar_good=30
 
@@ -475,12 +450,14 @@ class TestCalculateEvTarget:
         """solar_ok < tomorrow < solar_good → linear interpolation (lines 4113-4122)."""
         from custom_components.carmabox.const import DEFAULT_EV_SOC_MAX_TARGET
 
-        coord = _make_coordinator(cfg={
-            "solar_ok_kwh": 20.0,
-            "solar_good_kwh": 30.0,
-            "ev_soc_min_target": 75.0,
-            "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
-        })
+        coord = _make_coordinator(
+            cfg={
+                "solar_ok_kwh": 20.0,
+                "solar_good_kwh": 30.0,
+                "ev_soc_min_target": 75.0,
+                "ev_soc_max_target": DEFAULT_EV_SOC_MAX_TARGET,
+            }
+        )
         mock_solcast = MagicMock()
         # tomorrow=25 (between solar_ok=20 and solar_good=30), worst=22 > solar_ok=20
         mock_solcast.forecast_daily_3d = [20.0, 25.0, 22.0, 25.0]
@@ -503,12 +480,14 @@ class TestCalculateEvTarget:
         Since worst_3_days = min(daily[1:]), all days must be >= solar_ok.
         tomorrow == solar_ok exactly satisfies all conditions.
         """
-        coord = _make_coordinator(cfg={
-            "solar_ok_kwh": 20.0,
-            "solar_good_kwh": 30.0,
-            "ev_soc_min_target": 75.0,
-            "ev_soc_max_target": 100.0,
-        })
+        coord = _make_coordinator(
+            cfg={
+                "solar_ok_kwh": 20.0,
+                "solar_good_kwh": 30.0,
+                "ev_soc_min_target": 75.0,
+                "ev_soc_max_target": 100.0,
+            }
+        )
         mock_solcast = MagicMock()
         # tomorrow=20 == solar_ok, worst_3=20 >= solar_ok → Rule 1/2/3 all skip → Rule 4
         mock_solcast.forecast_daily_3d = [15.0, 20.0, 20.0, 20.0]

@@ -56,22 +56,40 @@ def _make_bridge_full(data: dict | None = None) -> CoordinatorBridge:
             "custom_components.carmabox.coordinator_bridge.DataUpdateCoordinator.__init__",
             return_value=None,
         ),
-        patch("custom_components.carmabox.coordinator_bridge.GoodWeAdapter", return_value=MagicMock(
-            soc=50.0, power_w=0.0, temperature_c=20.0, ems_mode="peak_shaving",
-            fast_charging_on=False, prefix="kontor", _analyze_only=False,
-            set_ems_mode=AsyncMock(return_value=True),
-            set_discharge_limit=AsyncMock(return_value=True),
-        )),
-        patch("custom_components.carmabox.coordinator_bridge.EaseeAdapter", return_value=MagicMock(
-            status="", cable_locked=False, is_charging=False, _analyze_only=False,
-        )),
+        patch(
+            "custom_components.carmabox.coordinator_bridge.GoodWeAdapter",
+            return_value=MagicMock(
+                soc=50.0,
+                power_w=0.0,
+                temperature_c=20.0,
+                ems_mode="peak_shaving",
+                fast_charging_on=False,
+                prefix="kontor",
+                _analyze_only=False,
+                set_ems_mode=AsyncMock(return_value=True),
+                set_discharge_limit=AsyncMock(return_value=True),
+            ),
+        ),
+        patch(
+            "custom_components.carmabox.coordinator_bridge.EaseeAdapter",
+            return_value=MagicMock(
+                status="",
+                cable_locked=False,
+                is_charging=False,
+                _analyze_only=False,
+            ),
+        ),
         patch(
             "custom_components.carmabox.coordinator_bridge.TempestAdapter",
             return_value=MagicMock(),
         ),
-        patch("custom_components.carmabox.coordinator_bridge.Store", return_value=MagicMock(
-            async_save=AsyncMock(), async_load=AsyncMock(return_value=None),
-        )),
+        patch(
+            "custom_components.carmabox.coordinator_bridge.Store",
+            return_value=MagicMock(
+                async_save=AsyncMock(),
+                async_load=AsyncMock(return_value=None),
+            ),
+        ),
     ):
         bridge = CoordinatorBridge(hass, entry)
         bridge.hass = hass
@@ -110,12 +128,14 @@ class TestBridgeInitBranches:
 
     def test_ev_adapter_created_when_enabled(self) -> None:
         """ev_enabled=True → EaseeAdapter created (lines 141-145)."""
-        bridge = _make_bridge_full({
-            "ev_enabled": True,
-            "ev_prefix": "easee_test",
-            "ev_device_id": "dev_ev",
-            "ev_charger_id": "c1",
-        })
+        bridge = _make_bridge_full(
+            {
+                "ev_enabled": True,
+                "ev_prefix": "easee_test",
+                "ev_device_id": "dev_ev",
+                "ev_charger_id": "c1",
+            }
+        )
         assert bridge.ev_adapter is not None
 
     def test_weather_adapter_created_when_enabled(self) -> None:
@@ -125,21 +145,25 @@ class TestBridgeInitBranches:
 
     def test_executor_with_hub_url(self) -> None:
         """hub_url set → executor_enabled from config (line 161)."""
-        bridge = _make_bridge_full({
-            "hub_url": "https://hub.example.com",
-            "executor_enabled": True,
-        })
+        bridge = _make_bridge_full(
+            {
+                "hub_url": "https://hub.example.com",
+                "executor_enabled": True,
+            }
+        )
         assert isinstance(bridge.executor_enabled, bool)
 
     def test_ev_adapter_analyze_only_propagated(self) -> None:
         """ev_adapter._analyze_only set based on executor_enabled (line 167)."""
-        bridge = _make_bridge_full({
-            "ev_enabled": True,
-            "ev_prefix": "easee_test",
-            "ev_device_id": "dev_ev",
-            "ev_charger_id": "c1",
-            "executor_enabled": False,
-        })
+        bridge = _make_bridge_full(
+            {
+                "ev_enabled": True,
+                "ev_prefix": "easee_test",
+                "ev_device_id": "dev_ev",
+                "ev_charger_id": "c1",
+                "executor_enabled": False,
+            }
+        )
         if bridge.ev_adapter:
             # When executor_enabled=False, _analyze_only should be True
             assert bridge.ev_adapter._analyze_only is True
@@ -391,9 +415,7 @@ class TestStatusText:
         # Mock system_health to return pausad
         from unittest.mock import PropertyMock
 
-        with patch.object(
-            type(bridge), "system_health", new_callable=PropertyMock
-        ) as mock_health:
+        with patch.object(type(bridge), "system_health", new_callable=PropertyMock) as mock_health:
             mock_health.return_value = {"styrning": "pausad", "sakerhet": "ok"}
             text = bridge.status_text
         assert "pausad" in text.lower()
@@ -409,10 +431,12 @@ class TestCollectSystemState:
         """Second adapter's data used for battery_2 fields."""
 
         # Use full bridge with 2 inverters
-        bridge = _make_bridge_full({
-            "inverter_2_prefix": "forrad",
-            "inverter_2_device_id": "dev2",
-        })
+        bridge = _make_bridge_full(
+            {
+                "inverter_2_prefix": "forrad",
+                "inverter_2_device_id": "dev2",
+            }
+        )
         # Should complete without error even with 2 adapters
         try:
             result = bridge._collect_system_state()

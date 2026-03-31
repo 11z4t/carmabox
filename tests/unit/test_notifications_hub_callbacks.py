@@ -163,6 +163,7 @@ class TestHubOnConnect:
 
     def _make_on_connect(self, hub: object) -> object:
         """Reconstruct on_connect closure exactly as hub.py defines it (lines 289-298)."""
+
         def on_connect(client: object, userdata: object, flags: object, rc: int) -> None:
             if rc == 0:
                 hub._mqtt_connected = True  # type: ignore[union-attr]
@@ -171,6 +172,7 @@ class TestHubOnConnect:
                 client.subscribe(f"{hub.topic_prefix}/insights")  # type: ignore[union-attr]
             else:
                 hub._mqtt_connected = False  # type: ignore[union-attr]
+
         return on_connect
 
     def test_on_connect_rc0_sets_connected(self) -> None:
@@ -320,6 +322,7 @@ class TestHubMQTTCallbacks:
             payload = raw
             if hub.mqtt_hmac_key and isinstance(raw, dict) and "sig" in raw:
                 from custom_components.carmabox.hub import _verify_mqtt_envelope
+
                 valid, unwrapped = _verify_mqtt_envelope(raw, hub.mqtt_hmac_key)
                 if not valid:
                     return

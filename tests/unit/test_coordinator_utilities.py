@@ -113,9 +113,7 @@ class TestDetectMinerEntity:
     def test_finds_miner_from_appliances(self) -> None:
         """Appliance with category=miner + matching switch → returns switch id."""
         coord = _make_coord()
-        coord._appliances = [
-            {"entity_id": "sensor.shelly1pmg4_xxx_power", "category": "miner"}
-        ]
+        coord._appliances = [{"entity_id": "sensor.shelly1pmg4_xxx_power", "category": "miner"}]
         switch_state = MagicMock()
         switch_state.entity_id = "switch.shelly1pmg4_xxx"
 
@@ -405,9 +403,7 @@ class TestTrackShadow:
 
         state = _state(battery_power_1=0.0, battery_power_2=0.0)
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
-            mock_dt.now.return_value = MagicMock(
-                hour=10, isoformat=lambda: "2026-03-31T10:00:00"
-            )
+            mock_dt.now.return_value = MagicMock(hour=10, isoformat=lambda: "2026-03-31T10:00:00")
             mock_dt.now.return_value.isoformat.return_value = "2026-03-31T10:00:00"
             coord._track_shadow(state)
 

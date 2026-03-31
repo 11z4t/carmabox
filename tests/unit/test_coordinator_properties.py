@@ -305,8 +305,7 @@ class TestPlanScore:
 
         coord = _make_coord()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
-            for h in range(2)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(2)
         ]
         # 14 days: last 7 total=70, prev 7 total=50 → improving
         older = [DailySavings(date=f"2026-02-{i:02d}", total_kr=50.0 / 7) for i in range(1, 8)]
@@ -321,8 +320,7 @@ class TestPlanScore:
 
         coord = _make_coord()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
-            for h in range(2)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(2)
         ]
         older = [DailySavings(date=f"2026-02-{i:02d}", total_kr=70.0 / 7) for i in range(1, 8)]
         recent = [DailySavings(date=f"2026-03-{i:02d}", total_kr=50.0 / 7) for i in range(1, 8)]
@@ -336,8 +334,7 @@ class TestPlanScore:
 
         coord = _make_coord()
         coord.hourly_actuals = [
-            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0)
-            for h in range(2)
+            HourActual(hour=h, planned_weighted_kw=2.0, actual_weighted_kw=2.0) for h in range(2)
         ]
         ds = [DailySavings(date=f"2026-03-{i:02d}", total_kr=8.0) for i in range(1, 31)]
         coord.savings.daily_savings = ds
