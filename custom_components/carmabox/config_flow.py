@@ -521,7 +521,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             try:
                 return f"{int(float(state.state))}%"
             except (ValueError, TypeError):
-                pass
+                _LOGGER.debug("Could not parse SoC state: %s", state.state)
         return ""
 
     def _read_ev_status(self, prefix: str) -> str:
@@ -544,9 +544,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 price = float(state.state)
                 # S2: Don't auto-convert — Nordpool already reports in öre
                 # (the old < 20 heuristic corrupted prices like 19.5 öre → 1950)
-                return f"{int(round(price))} öre"
+                return f"{round(price)} öre"
             except (ValueError, TypeError):
-                pass
+                _LOGGER.debug("Could not parse price state: %s", state.state)
         return ""
 
     def _create_entry(self) -> ConfigFlowResult:
@@ -834,7 +834,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             if entry and entry.device_id:
                 return entry.device_id
         except Exception:
-            pass
+            _LOGGER.debug("Could not resolve device_id via entity registry", exc_info=True)
 
         # Strategy 2: Match suffix against detected inverter device_ids
         for inv in inverters:

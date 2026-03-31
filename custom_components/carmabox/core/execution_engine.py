@@ -503,7 +503,7 @@ class ExecutionEngine:
                             hour=hour,
                         )
                     except Exception:
-                        pass
+                        _LOGGER.debug("Could not add weather sample to predictor", exc_info=True)
 
                 is_workday = now.weekday() < 5
                 sunset_h = 19 if now.month in (3, 4, 5, 6, 7, 8, 9) else 16

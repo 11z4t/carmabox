@@ -193,14 +193,15 @@ def test_all_functions_return_explicitly():
 
 def test_no_bare_except_pass():
     """except Exception: pass swallows errors silently. Use logging."""
-    code = COORDINATOR.read_text()
+    all_prod = list(Path("custom_components/carmabox").rglob("*.py"))
     violations = []
-    lines = code.split("\n")
-    for i, line in enumerate(lines):
-        if "except" in line and i + 1 < len(lines):
-            next_line = lines[i + 1].strip()
-            if next_line == "pass":
-                violations.append(f"  L{i + 1}: {line.strip()} / {next_line}")
+    for path in sorted(all_prod):
+        lines = path.read_text().split("\n")
+        for i, line in enumerate(lines):
+            if "except" in line and i + 1 < len(lines):
+                next_line = lines[i + 1].strip()
+                if next_line == "pass":
+                    violations.append(f"  {path}:L{i + 1}: {line.strip()} / {next_line}")
     assert not violations, (
         "Bare except:pass found — use _LOGGER.debug('...', exc_info=True):\n"
         + "\n".join(violations)
