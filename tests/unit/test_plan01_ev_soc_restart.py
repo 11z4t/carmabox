@@ -8,13 +8,13 @@ from unix time (stored in runtime store) rather than monotonic
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 
 def _make_coordinator() -> MagicMock:
     """Minimal coordinator stub for restore testing."""
-    from custom_components.carmabox.coordinator import CarmaboxCoordinator
     from custom_components.carmabox.const import DEFAULT_EV_MIN_AMPS
+    from custom_components.carmabox.coordinator import CarmaboxCoordinator
 
     coord = MagicMock(spec=CarmaboxCoordinator)
     coord._last_known_ev_soc = -1.0
@@ -85,8 +85,6 @@ class TestPlan01EvSocRestart:
     def test_old_soc_discarded_after_restart(self) -> None:
         """EV SoC recorded 5 hours ago → discarded (timeout)."""
         stored_unix = time.time() - 5 * 3600  # 5h ago
-        stored_soc = 45.0
-
         age_s = time.time() - stored_unix
         assert age_s >= 14400  # >= 4h — should be discarded
 
@@ -94,16 +92,12 @@ class TestPlan01EvSocRestart:
         """If ev_soc_unix_time missing in store → soc not restored."""
         # stored_unix = 0.0 (default)
         stored_unix = 0.0
-        stored_soc = 66.4
-
         # With stored_unix = 0, condition stored_unix > 0 is False → skip restore
         assert stored_unix <= 0  # Triggers discard path
 
     def test_negative_soc_not_restored(self) -> None:
         """If stored EV SoC is -1 or 0 → skip restore regardless of timestamp."""
         stored_soc = -1.0
-        stored_unix = time.time() - 60  # 1 min ago — would be fresh
-
         # Condition: stored_soc > 0 must be False to skip
         assert stored_soc <= 0  # Triggers discard path
 

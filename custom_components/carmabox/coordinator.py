@@ -89,7 +89,6 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
-from .core.commands import cmd_charge_pv
 from .core.execution_engine import ExecutionEngine
 from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
@@ -2310,8 +2309,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
                 # Pad to match prices length (predict_24h returns exactly 24)
                 consumption = (consumption or base[start_hour:]) + base
+                _LOGGER.info(
+                    "Plan: using ML consumption profile (trained, %d samples)",
+                    self.predictor.total_samples,
+                )
             else:
                 consumption = base[start_hour:] + base
+                _LOGGER.info(
+                    "Plan: using static consumption profile (%d/%d samples)",
+                    self.predictor.total_samples,
+                    24,
+                )
 
             # EV demand — dynamic schedule based on prices + SoC
             _step = "ev_schedule"
@@ -2742,6 +2750,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     grid_charge_max_soc=grid_charge_max_soc,
                     max_discharge_kw=max_discharge_kw,
                     max_grid_charge_kw=max_grid_charge_kw,
+                    night_ev_active=getattr(self, "_night_ev_active", False),
                 )
 
                 _LOGGER.info(
@@ -5912,6 +5921,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     temperature_c=temp_c,
                 )
             )
+            # ML-01/ML-03: Log sample count and training state every hour
+            _LOGGER.info(
+                "Predictor: %d samples, trained=%s",
+                self.predictor.total_samples,
+                self.predictor.is_trained,
+            )
+            if not self.predictor.is_trained:
+                from .optimizer.predictor import MIN_TRAINING_SAMPLES
+
+                _LOGGER.info(
+                    "ML: %d/%d samples collected",
+                    self.predictor.total_samples,
+                    MIN_TRAINING_SAMPLES,
+                )
 
     def _feed_predictor_ml(self, state: CarmaboxState) -> None:
         """Feed all ML data to predictor every cycle."""
