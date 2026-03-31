@@ -2193,6 +2193,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "plan_hours": len(self.plan),
                     "plan_step": getattr(self, "_last_plan_step", ""),
                     "errors": getattr(self, "_consecutive_errors", 0),
+                    "disabled": list(self._disabled_methods.keys()),
+                    "predictor_samples": self.predictor.total_samples,
                 }
                 with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
