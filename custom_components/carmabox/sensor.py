@@ -516,7 +516,7 @@ def _rules_value(coord: CarmaboxCoordinator) -> str:
         "RULE_2": "Peak shaving",
         "RULE_4": "Idle / standby",
     }
-    return rule_names.get(active_rule_id, active_rule_id)
+    return str(rule_names.get(active_rule_id, active_rule_id))
 
 
 def _rules_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
@@ -621,7 +621,7 @@ def _scheduler_last_breach_value(coord: CarmaboxCoordinator) -> str:
     breaches = coord.scheduler_plan.breaches
     if not breaches:
         return "Inga överträdelser"
-    return breaches[-1].root_cause[:200]
+    return str(breaches[-1].root_cause)[:200]
 
 
 def _scheduler_last_breach_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
@@ -702,6 +702,29 @@ def _scheduler_24h_plan_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
 def _scheduler_ev_full_charge_value(coord: CarmaboxCoordinator) -> str:
     """Next planned EV 100% charge date."""
     return coord.scheduler_plan.ev_next_full_charge_date or "Ej planerad"
+
+
+def _idle_analysis_value(coord: CarmaboxCoordinator) -> int:
+    """Battery utilization score (0 if no idle analysis)."""
+    ia = coord.scheduler_plan.idle_analysis
+    if ia is None:
+        return 0
+    return ia.score
+
+
+def _idle_analysis_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """Idle analysis extra attributes."""
+    ia = coord.scheduler_plan.idle_analysis
+    if ia is None:
+        return {}
+    return {
+        "idle_hours_today": ia.idle_hours_today,
+        "idle_pct": ia.idle_pct,
+        "missed_charge_kwh": ia.missed_charge_kwh,
+        "missed_discharge_kwh": ia.missed_discharge_kwh,
+        "missed_savings_kr": ia.missed_savings_kr,
+        "opportunities": ia.opportunities,
+    }
 
 
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
@@ -924,21 +947,8 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         icon="mdi:battery-charging-high",
         native_unit_of_measurement="%",
         state_class=SensorStateClass.MEASUREMENT,
-        value_fn=lambda coord: (
-            coord.scheduler_plan.idle_analysis.score if coord.scheduler_plan.idle_analysis else 0
-        ),
-        extra_attrs_fn=lambda coord: (
-            {
-                "idle_hours_today": ia.idle_hours_today,
-                "idle_pct": ia.idle_pct,
-                "missed_charge_kwh": ia.missed_charge_kwh,
-                "missed_discharge_kwh": ia.missed_discharge_kwh,
-                "missed_savings_kr": ia.missed_savings_kr,
-                "opportunities": ia.opportunities,
-            }
-            if (ia := coord.scheduler_plan.idle_analysis)
-            else {}
-        ),
+        value_fn=_idle_analysis_value,
+        extra_attrs_fn=_idle_analysis_attrs,
     ),
     CarmaboxSensorDescription(
         key="breach_monitor_projected",
