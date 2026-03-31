@@ -290,8 +290,10 @@ class GridGuard:
 
         # INV-5: Never discharge below min_soc
         for bat in batteries:
+            # PLAT-1161: 0.0 is falsy — must use explicit None check
             effective_min = (
-                self.config.cold_lock_temp_c and bat.cell_temp_c < self.config.cold_lock_temp_c
+                self.config.cold_lock_temp_c is not None
+                and bat.cell_temp_c < self.config.cold_lock_temp_c
             )
             min_soc = 20.0 if effective_min else 15.0  # cold → higher floor
             if bat.soc < 0:
@@ -469,6 +471,7 @@ class GridGuard:
         self._hour = hour
         self._accumulated_viktat_wh = 0.0
         self._sample_count = 0
+        self._last_update = 0.0  # PLAT-1160: must reset to avoid stale dt_s
 
     def _accumulate(self, grid_w: float, hour: int, ts: float) -> None:
         """Accumulate weighted energy for own projection."""
