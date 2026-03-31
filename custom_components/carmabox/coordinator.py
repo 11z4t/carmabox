@@ -3108,9 +3108,25 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             else:
                 day_key = "day3"
 
-            label = {"c": "⚡Ladda", "d": "🔋Urladda", "g": "🔌Nät"}.get(hp.action)
-            if label:
-                days[day_key].append(f"{hour:02d}:{label} {int(hp.price)}öre")
+            action_label = {"c": "⚡Ladda", "d": "🔋Urladda", "g": "🔌Nät", "i": "💤"}.get(
+                hp.action, hp.action
+            )
+            # Battery power + SoC
+            bat_str = f"{abs(hp.battery_kw):.1f}kW" if abs(hp.battery_kw) > 0.1 else ""
+            soc_str = f"B{hp.battery_soc}%"
+            # EV
+            ev_str = f" EV{hp.ev_kw:.1f}kW→{hp.ev_soc}%" if hp.ev_kw > 0.1 else ""
+            # Price
+            price_str = f"{int(hp.price)}öre"
+
+            # Only show non-idle hours (active actions)
+            if hp.action == "i" and hp.ev_kw < 0.1:
+                continue
+            entry = f"{hour:02d} {action_label}"
+            if bat_str:
+                entry += f" {bat_str}"
+            entry += f" {soc_str}{ev_str} {price_str}"
+            days[day_key].append(entry)
 
         # Write each day to its own input_text
         entities = {

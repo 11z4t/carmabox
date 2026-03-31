@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio as _asyncio
 import os
 import socket
 
@@ -101,3 +102,18 @@ def expected_lingering_tasks():
 def expected_lingering_timers():
     """Override HA default — not applicable to e2e tests."""
     return True
+
+
+@pytest.fixture()
+def event_loop():
+    """Override HA plugin event_loop — provide fresh loop per test for Playwright.
+
+    pytest-homeassistant-custom-component + pytest-asyncio 0.24.x create event
+    loop conflicts when used with pytest-playwright async fixtures. Providing a
+    fresh function-scoped loop prevents 'Cannot run the event loop while another
+    loop is running' errors.
+    """
+    loop = _asyncio.new_event_loop()
+    _asyncio.set_event_loop(loop)
+    yield loop
+    loop.close()
