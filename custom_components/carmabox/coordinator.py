@@ -516,9 +516,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         3. Hub returns: signed JWT with tier + features + expiry
         4. CARMA Box stores license locally (offline grace 7 days)
         """
-        import time as _time
-
-        now = _time.monotonic()
+        now = time.monotonic()
         if now - self._license_last_check < self._license_check_interval:
             return
         self._license_last_check = now
@@ -750,8 +748,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _async_save_savings(self) -> None:
         """Persist savings state (rate-limited to every 5 minutes)."""
-        import time
-
         now = time.monotonic()
         if now - self._savings_last_save < SAVINGS_SAVE_INTERVAL:
             return
@@ -786,8 +782,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _async_save_consumption(self) -> None:
         """Persist consumption profile (rate-limited to every 5 minutes)."""
-        import time
-
         now = time.monotonic()
         if now - self._consumption_last_save < SAVINGS_SAVE_INTERVAL:
             return
@@ -964,8 +958,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _async_save_ledger(self) -> None:
         """Persist ledger state (rate-limited to every 5 minutes, CARMA-P0-FIXES Task 4)."""
-        import time
-
         now = time.monotonic()
         if now - self._ledger_last_save < SAVINGS_SAVE_INTERVAL:
             return
@@ -977,8 +969,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _async_save_predictor(self) -> None:
         """Persist predictor state (rate-limited to every 5 minutes)."""
-        import time
-
         now = time.monotonic()
         if now - self._predictor_last_save < SAVINGS_SAVE_INTERVAL:
             return
@@ -990,7 +980,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _async_fetch_benchmarking(self) -> None:
         """PLAT-962: Fetch benchmarking data from hub (rate-limited to every hour)."""
-        import time
+
 
         now = time.monotonic()
         last_fetch = getattr(self, "_benchmark_last_fetch", 0.0)
@@ -2721,10 +2711,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "",
             ):
                 try:
-                    import time as _time_mod
-
                     pressure_hpa = float(tempest_pressure.state)
-                    now_ts = _time_mod.time()
+                    now_ts = time.time()
                     self._pressure_history.append((now_ts, pressure_hpa))
                     cutoff = now_ts - 10800  # 3h
                     self._pressure_history = [
@@ -4381,8 +4369,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         Runs AFTER battery rules. Controls Easee enable/disable + amps.
         Always starts at 6A, ramps gradually, reduces immediately.
         """
-        import time as _time
-
         if not self.ev_adapter:
             return
 
@@ -4639,7 +4625,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if not self._ev_enabled:
                     await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
                 elif optimal_amps > self._ev_current_amps:
-                    now = _time.monotonic()
+                    now = time.monotonic()
                     if now - self._ev_last_ramp_time >= EV_RAMP_INTERVAL_S:
                         await self._cmd_ev_adjust(optimal_amps)
                         self._ev_last_ramp_time = now
@@ -5030,9 +5016,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             health["sakerhet"] = "ok"
 
         # Self-healing pause
-        import time as _time
-
-        if _time.monotonic() < self._ems_pause_until:
+        if time.monotonic() < self._ems_pause_until:
             health["styrning"] = "pausad"
         else:
             health["styrning"] = "ok"
@@ -6451,10 +6435,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _self_heal_goodwe_entries(self) -> None:
         """PLAT-972: Self-healing — check GoodWe config entries and reload if needed."""
-        import time as _time
-
         # Skip if paused after repeated failures
-        if _time.monotonic() < self._ems_pause_until:
+        if time.monotonic() < self._ems_pause_until:
             return
 
         for adapter in self.inverter_adapters:
@@ -6487,7 +6469,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self._ems_consecutive_failures,
                     SELF_HEALING_PAUSE_SECONDS,
                 )
-                self._ems_pause_until = _time.monotonic() + SELF_HEALING_PAUSE_SECONDS
+                self._ems_pause_until = time.monotonic() + SELF_HEALING_PAUSE_SECONDS
                 self._ems_consecutive_failures = 0
                 return
 
