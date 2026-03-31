@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 
 # Minimum samples before prediction is trusted
 MIN_TRAINING_SAMPLES = 24  # 1 day x 24 hours
+TRAINING_THRESHOLD_SAMPLES = MIN_TRAINING_SAMPLES  # ML-03: named alias
 
 
 @dataclass
@@ -68,11 +69,25 @@ class ConsumptionPredictor:
 
     def add_sample(self, sample: HourSample) -> None:
         """Add a consumption sample for training."""
+        # ML-01: Guard against invalid inputs that would corrupt history
+        if sample.consumption_kw is None or not isinstance(sample.consumption_kw, int | float):
+            _LOGGER.warning(
+                "ML-01: add_sample rejected — invalid consumption_kw=%r", sample.consumption_kw
+            )
+            return
+        if sample.weekday not in range(7) or sample.hour not in range(24):
+            _LOGGER.warning(
+                "ML-01: add_sample rejected — weekday=%r hour=%r out of range",
+                sample.weekday,
+                sample.hour,
+            )
+            return
+
         key = f"{sample.weekday}_{sample.hour}"
         if key not in self.history:
             self.history[key] = []
 
-        self.history[key].append(sample.consumption_kw)
+        self.history[key].append(float(sample.consumption_kw))
 
         # Keep last 30 samples per slot (30 days of data per hour)
         if len(self.history[key]) > 30:
