@@ -21,6 +21,7 @@ def _bat(
     min_soc_cold: float = 20.0,
     cold_temp_c: float = 4.0,
     max_discharge_w: float = 5000.0,
+    soh_pct: float = 100.0,
 ) -> BatteryInfo:
     return BatteryInfo(
         id=consumer_id,
@@ -31,6 +32,7 @@ def _bat(
         min_soc_cold=min_soc_cold,
         cold_temp_c=cold_temp_c,
         max_discharge_w=max_discharge_w,
+        soh_pct=soh_pct,
     )
 
 
@@ -330,3 +332,33 @@ class TestBMSCurrentLimits:
         # kontor share = 9.0/12.25 = 73.5% of 4000 = 2938 → capped 2800
         assert k.watts == 2800
         assert f.watts > 0
+
+
+class TestSoHDerating:
+    """EXP-06: SoH monitoring — aged batteries get higher min_soc."""
+
+    def test_soh_100_no_derating(self):
+        """Healthy battery (100% SoH) — no derating applied."""
+        bat = _bat(soh_pct=100.0, min_soc=15.0)
+        assert effective_min_soc(bat) == 15.0
+
+    def test_soh_75_adds_5_pct(self):
+        """SoH 75% (< 80%) — adds 5% to min_soc."""
+        bat = _bat(soh_pct=75.0, min_soc=15.0)
+        assert effective_min_soc(bat) == 20.0
+
+    def test_soh_65_adds_10_pct(self):
+        """SoH 65% (< 70%) — adds 10% to min_soc."""
+        bat = _bat(soh_pct=65.0, min_soc=15.0)
+        assert effective_min_soc(bat) == 25.0
+
+    def test_soh_and_cold_combine(self):
+        """Cold + degraded battery — both deratings are cumulative."""
+        bat = _bat(
+            soh_pct=75.0,
+            cell_temp_c=3.0,
+            min_soc=15.0,
+            min_soc_cold=20.0,
+        )
+        # Cold: base = min_soc_cold = 20%, SoH < 80%: +5% → 25%
+        assert effective_min_soc(bat) == 25.0

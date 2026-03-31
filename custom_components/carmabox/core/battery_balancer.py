@@ -33,6 +33,7 @@ class BatteryInfo:
     min_soc_cold: float = 20.0  # Min SoC when cold (%)
     cold_temp_c: float = 4.0  # Below → use min_soc_cold
     max_discharge_w: float = 5000.0  # Per-battery max
+    soh_pct: float = 100.0  # State of Health (%)
 
 
 @dataclass
@@ -57,10 +58,22 @@ class BatteryAllocation:
 
 
 def effective_min_soc(bat: BatteryInfo) -> float:
-    """Calculate effective min SoC based on temperature."""
-    if bat.cell_temp_c < bat.cold_temp_c:
-        return bat.min_soc_cold
-    return bat.min_soc
+    """Calculate effective min SoC based on temperature and SoH.
+
+    SoH derating prevents over-discharge of aged batteries:
+      - soh < 70%: add 10% to min_soc
+      - soh < 80%: add 5% to min_soc
+    Cold derating and SoH derating are cumulative.
+    """
+    base = bat.min_soc_cold if bat.cell_temp_c < bat.cold_temp_c else bat.min_soc
+
+    # SoH derating — aged cells need higher floor
+    if bat.soh_pct < 70:
+        base += 10.0
+    elif bat.soh_pct < 80:
+        base += 5.0
+
+    return base
 
 
 def available_kwh(bat: BatteryInfo) -> float:
