@@ -955,8 +955,6 @@ class TestPersistence:
         g2 = GridGuard()
         g2.restore_state(saved, current_hour=9)
         # First cycle after restore: last_update=0 → no accumulation added
-        g2.evaluate(
-            viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=5, timestamp=200.0
-        )
+        g2.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=5, timestamp=200.0)
         wh_after = g2.get_persistent_state()["accumulated_viktat_wh"]
         assert wh_after == pytest.approx(wh_before)  # No spurious addition

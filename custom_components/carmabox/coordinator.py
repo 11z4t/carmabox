@@ -942,7 +942,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "below": dict(hyst.surplus_below_since.items()),
                 }
             # PLAT-1095: Persist grid_guard accumulated viktat Wh
-            if self._grid_guard is not None:
+            if hasattr(self, "_grid_guard") and self._grid_guard is not None:
                 data["grid_guard"] = self._grid_guard.get_persistent_state()
             await self._runtime_store.async_save(data)
         except Exception:
