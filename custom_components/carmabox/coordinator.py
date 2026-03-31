@@ -240,7 +240,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # EV executor state (PLAT-949)
         self._ev_enabled: bool = False
         self._last_known_ev_soc: float = -1.0
-        self._last_known_ev_soc_time: float = 0.0  # monotonic timestamp
+        self._last_known_ev_soc_time: float = 0.0  # monotonic timestamp (process-local)
+        self._last_known_ev_soc_unix: float = 0.0  # PLAN-01: unix time for restart survival
         # IT-1965: Seed from persistent helper if available
         try:
             seed = self.hass.states.get("input_number.carma_ev_last_known_soc")
@@ -818,6 +819,26 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 # Restore EV state
                 self._ev_enabled = bool(data.get("ev_enabled", False))
                 self._ev_current_amps = int(data.get("ev_current_amps", DEFAULT_EV_MIN_AMPS))
+                # PLAN-01: Restore EV SoC with unix-based age check (survives HA restart)
+                stored_soc = float(data.get("ev_soc", -1.0))
+                stored_unix = float(data.get("ev_soc_unix_time", 0.0))
+                if stored_soc > 0 and stored_unix > 0:
+                    age_s = time.time() - stored_unix
+                    if age_s < 14400:  # < 4h — still fresh
+                        self._last_known_ev_soc = stored_soc
+                        self._last_known_ev_soc_unix = stored_unix
+                        self._last_known_ev_soc_time = time.monotonic() - age_s
+                        _LOGGER.info(
+                            "PLAN-01: Restored EV SoC %.0f%% (age %.0fmin)",
+                            stored_soc,
+                            age_s / 60,
+                        )
+                    else:
+                        _LOGGER.info(
+                            "PLAN-01: EV SoC %.0f%% too old (%.1fh) — discarded",
+                            stored_soc,
+                            age_s / 3600,
+                        )
                 # Restore miner state
                 self._miner_on = bool(data.get("miner_on", False))
                 # Restore night EV state (survives HA restart)
@@ -898,6 +919,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "last_command": self._last_command.name,
                 "ev_enabled": self._ev_enabled,
                 "ev_current_amps": self._ev_current_amps,
+                # PLAN-01: persist unix timestamp so age survives HA restart
+                "ev_soc": getattr(self, "_last_known_ev_soc", -1.0),
+                "ev_soc_unix_time": getattr(self, "_last_known_ev_soc_unix", 0.0),
                 "miner_on": self._miner_on,
                 "night_ev_active": getattr(self, "_night_ev_active", False),
                 "ellevio_hour_samples": [
@@ -2343,6 +2367,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             elif state.ev_soc > 0:
                 self._last_known_ev_soc = state.ev_soc
                 self._last_known_ev_soc_time = time.monotonic()
+                self._last_known_ev_soc_unix = time.time()  # PLAN-01
                 # Persist to HA helper for restart survival
                 self.hass.async_create_task(
                     self.hass.services.async_call(
