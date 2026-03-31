@@ -11,8 +11,8 @@ Kräver:
     (HA → Profil → Säkerhet → Långlivade åtkomsttoken)
   - HA_USER / HA_PASS: för Playwright browser-login
 
-Dashboard-paths (v29.x):
-  carma=Flik1  detaljer=Flik2  installningar=Flik3  regler=Flik4  wall=Flik5
+Dashboard-paths (v24.x, numeriska index):
+  /0=Flik1(Just nu)  /1=Flik2(Varför)  /2=Flik3(Inställningar)  /3=Flik4(Regler)  /4=Flik5(Vägg)
 """
 
 from __future__ import annotations
@@ -36,14 +36,14 @@ SCREENSHOT_DIR = Path("/tmp/carmabox_e2e_screenshots")
 # States som ALDRIG ska förekomma i core-entities
 FORBIDDEN_API_STATES = frozenset({"unavailable", "unknown", "", "none", "nan"})
 
-# ── Dashboard URL:er (namngivna paths, inte numeriska) ────────────────────────
+# ── Dashboard URL:er (numeriska index = alltid giltiga i HA Lovelace) ─────────
 
 _D = f"{HA_URL}/dashboard-carmabox"
-TAB_JUST_NU = f"{_D}/carma"
-TAB_VARFOR = f"{_D}/detaljer"
-TAB_INSTALLNINGAR = f"{_D}/installningar"
-TAB_REGLER = f"{_D}/regler"
-TAB_VAGG = f"{_D}/wall"
+TAB_JUST_NU = f"{_D}/0"  # Flik 1: Just nu
+TAB_VARFOR = f"{_D}/1"  # Flik 2: Varför
+TAB_INSTALLNINGAR = f"{_D}/2"  # Flik 3: Inställningar
+TAB_REGLER = f"{_D}/3"  # Flik 4: Regler
+TAB_VAGG = f"{_D}/4"  # Flik 5: Vägg
 
 # ── JavaScript: djup Shadow DOM-traversal ─────────────────────────────────────
 
@@ -172,7 +172,7 @@ def ha_api_token(ha_reachable) -> str:
 
 @pytest.fixture
 async def tab_just_nu(page, ha_reachable):
-    """Autentiserad Playwright-page på Tab 1 — Just nu (/dashboard-carmabox/carma)."""
+    """Autentiserad Playwright-page på Tab 1 — Just nu (/dashboard-carmabox/0)."""
     await _login_and_goto(page, TAB_JUST_NU)
     yield page
     _screenshot(page, "tab1_just_nu")
@@ -180,7 +180,7 @@ async def tab_just_nu(page, ha_reachable):
 
 @pytest.fixture
 async def tab_varfor(page, ha_reachable):
-    """Autentiserad Playwright-page på Tab 2 — Varför (/dashboard-carmabox/detaljer)."""
+    """Autentiserad Playwright-page på Tab 2 — Varför (/dashboard-carmabox/1)."""
     await _login_and_goto(page, TAB_VARFOR)
     yield page
     _screenshot(page, "tab2_varfor")
@@ -216,14 +216,14 @@ async def tab_vagg(page, ha_reachable):
 # Fångar "sensor offline" tidigt utan att öppna browser.
 # ══════════════════════════════════════════════════════════════════════════════
 
-# Entities som ALLTID måste ha giltiga, numeriska värden
+# Entities som ALLTID måste ha giltiga värden (per PLAT-793 uppdragsspec)
 _CORE_ENTITIES = [
     "sensor.house_grid_power",
     "sensor.pv_solar_total",
     "sensor.pv_battery_soc_kontor",
     "sensor.pv_battery_soc_forrad",
-    "sensor.carma_box_battery_soc",
-    "sensor.carma_box_decision_reason",
+    "sensor.carma_box_decision",
+    "sensor.carma_box_rules",
     "sensor.nordpool_kwh_se3_sek_3_10_025",
     "sensor.goodwe_battery_power_kontor",
     "sensor.goodwe_battery_power_forrad",
@@ -242,32 +242,35 @@ def test_api_core_entity_not_forbidden(ha_api_token, entity_id):
     assert state.lower() not in FORBIDDEN_API_STATES, f"{entity_id} har forbidden state: '{state}'"
 
 
-def test_api_decision_reason_has_action_attribute(ha_api_token):
-    """sensor.carma_box_decision_reason måste ha 'action'-attribut med giltigt värde.
+def test_api_decision_has_valid_state(ha_api_token):
+    """sensor.carma_box_decision måste ha giltigt state (ej tom/unavailable).
 
-    Action-attributet styr CARMA Box varje minut.
-    Saknas det har koordinatorn slutat producera beslut.
+    Besluts-sensorn producerar CARMA Box aktuellt beslut varje minut.
+    Saknas state har koordinatorn slutat producera beslut.
     """
-    data = _api_state(ha_api_token, "sensor.carma_box_decision_reason")
-    assert data, "sensor.carma_box_decision_reason finns ej i HA"
-    attrs = data.get("attributes", {})
-    action = attrs.get("action", "")
-    assert action not in ("", None, "unavailable", "unknown"), (
-        f"decision_reason.action är ogiltigt: '{action}'. Tillgängliga attrs: {list(attrs.keys())}"
+    data = _api_state(ha_api_token, "sensor.carma_box_decision")
+    assert data, "sensor.carma_box_decision finns ej i HA"
+    state = data.get("state", "")
+    assert state.lower() not in FORBIDDEN_API_STATES, (
+        f"sensor.carma_box_decision har forbidden state: '{state}'"
     )
 
 
-def test_api_plan_status_has_plan_attribute(ha_api_token):
-    """sensor.carma_box_plan_status måste ha 'plan'-attribut (lista).
+def test_api_rules_has_rules_attribute(ha_api_token):
+    """sensor.carma_box_rules måste ha 'rules'-attribut med minst 1 regel.
 
-    Plan-attributet innehåller 24h-prognosen.
-    Saknas det planerar inte CARMA Box framåt.
+    Rules-attributet innehåller de 7 optimeringsreglerna (RULE_0-RULE_4).
+    Saknas det är regellogiken offline.
     """
-    data = _api_state(ha_api_token, "sensor.carma_box_plan_status")
-    assert data, "sensor.carma_box_plan_status finns ej i HA"
+    data = _api_state(ha_api_token, "sensor.carma_box_rules")
+    assert data, "sensor.carma_box_rules finns ej i HA"
     attrs = data.get("attributes", {})
-    assert "plan" in attrs, (
-        f"plan_status saknar 'plan'-attribut. Tillgängliga: {list(attrs.keys())}"
+    assert "rules" in attrs, (
+        f"carma_box_rules saknar 'rules'-attribut. Tillgängliga: {list(attrs.keys())}"
+    )
+    rules = attrs["rules"]
+    assert isinstance(rules, list) and len(rules) > 0, (
+        f"carma_box_rules.rules är tom eller ej en lista: {rules}"
     )
 
 
@@ -314,7 +317,7 @@ def test_api_unauthenticated_request_returns_401():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUP B — Tab 1: Just nu  (/dashboard-carmabox/carma)
+# GROUP B — Tab 1: Just nu  (/dashboard-carmabox/0)
 # Primär driftvy: apparater, sol/nät/batteri-gauges, power-flow, beslut.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -402,7 +405,7 @@ async def test_tab1_apparatkort_renders(tab_just_nu):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUP C — Tab 2: Varför  (/dashboard-carmabox/detaljer)
+# GROUP C — Tab 2: Varför  (/dashboard-carmabox/1)
 # Reasoning, plan-chart, elprisgraf, solprognos, logg, systemhälsa.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -478,7 +481,7 @@ async def test_tab2_health_section_renders(tab_varfor):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUP D — Tab 3: Inställningar  (/dashboard-carmabox/installningar)
+# GROUP D — Tab 3: Inställningar  (/dashboard-carmabox/2)
 # v6-helpers: input_boolean, input_number, input_select, GoodWe EMS.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -526,7 +529,7 @@ async def test_tab3_ev_section_renders(tab_installningar):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUP E — Tab 4: Regler  (/dashboard-carmabox/regler)
+# GROUP E — Tab 4: Regler  (/dashboard-carmabox/3)
 # rule_flow, EV-regler, batteri-regler, safety-sektion.
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -562,7 +565,7 @@ async def test_tab4_no_critical_load_errors(tab_regler):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# GROUP F — Tab 5: Vägg  (/dashboard-carmabox/wall)
+# GROUP F — Tab 5: Vägg  (/dashboard-carmabox/4)
 # Kiosk-vy för Samsung Tab 1280x800: hero, SoC, bästa tiderna, dagssummering.
 # ══════════════════════════════════════════════════════════════════════════════
 
