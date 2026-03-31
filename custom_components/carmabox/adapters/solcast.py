@@ -88,9 +88,9 @@ class SolcastAdapter(PVAdapter):
                 continue
 
             # Prefer conservative estimate (pv_estimate10)
-            # Solcast detailedHourly reports in W — convert to kW
-            w = entry.get("pv_estimate10", entry.get("pv_estimate", 0))
-            hourly[hour] = round(w / 1000, 2) if w > 0 else 0.0
+            # Solcast HACS detailedHourly reports in kW (NOT watts)
+            kw = entry.get("pv_estimate10", entry.get("pv_estimate", 0))
+            hourly[hour] = round(kw, 2) if kw > 0 else 0.0
 
         return hourly
 

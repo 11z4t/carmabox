@@ -85,20 +85,20 @@ class TestSolcastRead:
         hourly = [
             {
                 "period_start": "2026-03-18T08:00:00",
-                "pv_estimate10": 1000,
-                "pv_estimate": 1500,
+                "pv_estimate10": 1.0,
+                "pv_estimate": 1.5,
             },
             {
                 "period_start": "2026-03-18T09:00:00",
-                "pv_estimate10": 2000,
-                "pv_estimate": 2500,
+                "pv_estimate10": 2.0,
+                "pv_estimate": 2.5,
             },
         ]
         hass = _make_hass(attrs={"detailedHourly": hourly})
         adapter = SolcastAdapter(hass)
         result = adapter.today_hourly_kw
         assert len(result) == 24
-        assert result[8] == 1.0  # pv_estimate10 / 1000
+        assert result[8] == 1.0  # pv_estimate10 in kW
         assert result[9] == 2.0
 
     def test_hourly_forecast_empty(self) -> None:
@@ -111,7 +111,7 @@ class TestSolcastRead:
     def test_hourly_forecast_no_estimate10(self) -> None:
         """Falls back to pv_estimate if pv_estimate10 missing."""
         hourly = [
-            {"period_start": "2026-03-18T10:00:00", "pv_estimate": 3000},
+            {"period_start": "2026-03-18T10:00:00", "pv_estimate": 3.0},
         ]
         hass = _make_hass(attrs={"detailedHourly": hourly})
         adapter = SolcastAdapter(hass)
@@ -144,8 +144,8 @@ class TestSolcastEdgeCases:
     def test_hourly_bad_period_start(self) -> None:
         """Invalid period_start should be skipped."""
         hourly = [
-            {"period_start": "not-a-date", "pv_estimate10": 1000},
-            {"period_start": "2026-03-18T12:00:00", "pv_estimate10": 3000},
+            {"period_start": "not-a-date", "pv_estimate10": 1.0},
+            {"period_start": "2026-03-18T12:00:00", "pv_estimate10": 3.0},
         ]
         hass = _make_hass(attrs={"detailedHourly": hourly})
         adapter = SolcastAdapter(hass)
@@ -171,58 +171,58 @@ class TestSolcastTomorrowHourly:
         hourly_data = [
             {
                 "period_start": "2026-03-22T07:00:00",
-                "pv_estimate10": 500,
-                "pv_estimate": 800,
+                "pv_estimate10": 0.5,
+                "pv_estimate": 0.8,
             },
             {
                 "period_start": "2026-03-22T08:00:00",
-                "pv_estimate10": 1500,
-                "pv_estimate": 2000,
+                "pv_estimate10": 1.5,
+                "pv_estimate": 2.0,
             },
             {
                 "period_start": "2026-03-22T09:00:00",
-                "pv_estimate10": 3000,
-                "pv_estimate": 4000,
+                "pv_estimate10": 3.0,
+                "pv_estimate": 4.0,
             },
             {
                 "period_start": "2026-03-22T10:00:00",
-                "pv_estimate10": 4500,
-                "pv_estimate": 5500,
+                "pv_estimate10": 4.5,
+                "pv_estimate": 5.5,
             },
             {
                 "period_start": "2026-03-22T11:00:00",
-                "pv_estimate10": 5000,
-                "pv_estimate": 6000,
+                "pv_estimate10": 5.0,
+                "pv_estimate": 6.0,
             },
             {
                 "period_start": "2026-03-22T12:00:00",
-                "pv_estimate10": 5200,
-                "pv_estimate": 6200,
+                "pv_estimate10": 5.2,
+                "pv_estimate": 6.2,
             },
             {
                 "period_start": "2026-03-22T13:00:00",
-                "pv_estimate10": 4800,
-                "pv_estimate": 5800,
+                "pv_estimate10": 4.8,
+                "pv_estimate": 5.8,
             },
             {
                 "period_start": "2026-03-22T14:00:00",
-                "pv_estimate10": 3500,
-                "pv_estimate": 4500,
+                "pv_estimate10": 3.5,
+                "pv_estimate": 4.5,
             },
             {
                 "period_start": "2026-03-22T15:00:00",
-                "pv_estimate10": 2000,
-                "pv_estimate": 3000,
+                "pv_estimate10": 2.0,
+                "pv_estimate": 3.0,
             },
             {
                 "period_start": "2026-03-22T16:00:00",
-                "pv_estimate10": 800,
-                "pv_estimate": 1200,
+                "pv_estimate10": 0.8,
+                "pv_estimate": 1.2,
             },
             {
                 "period_start": "2026-03-22T17:00:00",
-                "pv_estimate10": 200,
-                "pv_estimate": 400,
+                "pv_estimate10": 0.2,
+                "pv_estimate": 0.4,
             },
         ]
         tomorrow_state = MagicMock()
@@ -246,33 +246,33 @@ class TestSolcastTomorrowHourly:
         hourly_data = [
             {
                 "period_start": "2026-03-22T09:00:00",
-                "pv_estimate10": 200,
-                "pv_estimate": 400,
+                "pv_estimate10": 0.2,
+                "pv_estimate": 0.4,
             },
             {
                 "period_start": "2026-03-22T10:00:00",
-                "pv_estimate10": 500,
-                "pv_estimate": 800,
+                "pv_estimate10": 0.5,
+                "pv_estimate": 0.8,
             },
             {
                 "period_start": "2026-03-22T11:00:00",
-                "pv_estimate10": 600,
-                "pv_estimate": 900,
+                "pv_estimate10": 0.6,
+                "pv_estimate": 0.9,
             },
             {
                 "period_start": "2026-03-22T12:00:00",
-                "pv_estimate10": 700,
-                "pv_estimate": 1000,
+                "pv_estimate10": 0.7,
+                "pv_estimate": 1.0,
             },
             {
                 "period_start": "2026-03-22T13:00:00",
-                "pv_estimate10": 500,
-                "pv_estimate": 700,
+                "pv_estimate10": 0.5,
+                "pv_estimate": 0.7,
             },
             {
                 "period_start": "2026-03-22T14:00:00",
-                "pv_estimate10": 300,
-                "pv_estimate": 500,
+                "pv_estimate10": 0.3,
+                "pv_estimate": 0.5,
             },
         ]
         tomorrow_state = MagicMock()
