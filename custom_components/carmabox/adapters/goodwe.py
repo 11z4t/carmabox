@@ -9,9 +9,10 @@ concurrent bus access (root cause of 2026-03-26 grid spike).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
@@ -240,18 +241,42 @@ class GoodWeAdapter(InverterAdapter):
         }
     )
 
+    # Map EMS modes to legacy desired_mode values
+    _EMS_TO_DESIRED: ClassVar[dict[str, str]] = {
+        "charge_pv": "charge",
+        "charge_battery": "charge",
+        "discharge_pv": "discharge",
+        "discharge_battery": "discharge",
+        "battery_standby": "wait",
+        "auto": "wait",
+    }
+
     async def set_ems_mode(self, mode: str, verify: bool = False) -> bool:
         """Set EMS mode with optional read-back verification.
 
+        Also writes to legacy input_select.goodwe_{prefix}_desired_mode
+        so that any legacy arbiter automations respect CARMA Box decisions.
+
         EXP-08: When verify=True, waits 1s and reads back the mode to confirm
         the Modbus write was accepted. Retries once on verify failure.
-        Default verify=False for backward compatibility — coordinator should
-        pass verify=True for critical mode changes.
         """
         if mode not in self.VALID_EMS_MODES:
             _LOGGER.error("GoodWe %s: REJECTED invalid EMS mode '%s'", self.prefix, mode)
             return False
         _LOGGER.info("GoodWe %s: set EMS -> %s", self.prefix, mode)
+
+        # Write to legacy desired_mode so arbiter doesn't override (best-effort)
+        desired = self._EMS_TO_DESIRED.get(mode, "wait")
+        with contextlib.suppress(Exception):
+            await self.hass.services.async_call(
+                "input_select",
+                "select_option",
+                {
+                    "entity_id": f"input_select.goodwe_{self.prefix}_desired_mode",
+                    "option": desired,
+                },
+            )
+
         ok = await self._safe_call(
             "select",
             "select_option",

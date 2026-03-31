@@ -81,11 +81,18 @@ class TestGoodWeAdapter:
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         await adapter.set_ems_mode("battery_standby", verify=False)
-        hass.services.async_call.assert_called_once_with(
+        # Writes legacy desired_mode + EMS mode select
+        calls = [c[0] for c in hass.services.async_call.call_args_list]
+        assert (
+            "input_select",
+            "select_option",
+            {"entity_id": "input_select.goodwe_kontor_desired_mode", "option": "wait"},
+        ) in calls
+        assert (
             "select",
             "select_option",
             {"entity_id": "select.goodwe_kontor_ems_mode", "option": "battery_standby"},
-        )
+        ) in calls
 
     @pytest.mark.asyncio
     async def test_set_discharge_limit(self) -> None:
@@ -180,8 +187,8 @@ class TestGoodWeWriteVerification:
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         result = await adapter.set_ems_mode("charge_pv", verify=False)
         assert result is True
-        # Only 1 service call (no retry)
-        assert hass.services.async_call.call_count == 1
+        # 2 calls: legacy desired_mode + EMS mode select (no retry)
+        assert hass.services.async_call.call_count == 2
 
     @pytest.mark.asyncio
     async def test_set_ems_mode_verify_mismatch_retries(self) -> None:
@@ -192,8 +199,8 @@ class TestGoodWeWriteVerification:
         result = await adapter.set_ems_mode("discharge_pv", verify=True)
         # Returns False because state never matches
         assert result is False
-        # 2 calls: initial + retry
-        assert hass.services.async_call.call_count == 2
+        # 3 calls: desired_mode + ems_mode + retry ems_mode
+        assert hass.services.async_call.call_count == 3
 
     @pytest.mark.asyncio
     async def test_set_ems_mode_invalid_rejected(self) -> None:
@@ -530,7 +537,8 @@ class TestGoodWeSafeCall:
         with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
             result = await adapter.set_ems_mode("charge_pv")
         assert result is False
-        assert hass.services.async_call.call_count == 2  # 1 + 1 retry
+        # 3 calls: 1 desired_mode (best-effort) + 2 EMS retries
+        assert hass.services.async_call.call_count == 3
 
     @pytest.mark.asyncio
     async def test_unexpected_error_retries(self) -> None:
@@ -540,7 +548,8 @@ class TestGoodWeSafeCall:
         with patch("custom_components.carmabox.adapters.goodwe._RETRY_DELAY_S", 0):
             result = await adapter.set_ems_mode("charge_pv")
         assert result is False
-        assert hass.services.async_call.call_count == 2
+        # 3 calls: 1 desired_mode (best-effort, raises) + 2 EMS retries
+        assert hass.services.async_call.call_count == 3
 
     @pytest.mark.asyncio
     async def test_set_fast_charging_partial_failure(self) -> None:

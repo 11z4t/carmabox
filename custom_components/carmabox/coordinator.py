@@ -441,6 +441,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         ha_toggle = self.hass.states.get("input_boolean.carma_ev_executor_enabled")
         if ha_toggle and ha_toggle.state == "on":
             config_executor = True
+        elif ha_toggle is None:
+            # States not loaded yet at init — defer to runtime check
+            # Log so we can trace if this is the issue
+            _LOGGER.info("CARMA Box: input_boolean not available at init — will check runtime")
         self.executor_enabled = config_executor and self._has_feature("executor")
         if config_executor and not self._has_feature("executor"):
             _LOGGER.warning(
