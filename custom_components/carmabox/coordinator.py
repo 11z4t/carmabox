@@ -3099,8 +3099,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         opts = self._cfg
         bat_kwh = float(opts.get("battery_1_kwh", 15.0)) + float(opts.get("battery_2_kwh", 5.0))
         efficiency = float(opts.get("battery_efficiency", 0.92))
-        current_soc = getattr(self, "data", None)
-        soc_pct = current_soc.total_battery_soc if current_soc else 50.0
+        # Read actual SoC from HA sensors (self.data may be None during plan generation)
+        soc1 = self._read_float("sensor.pv_battery_soc_kontor", 50.0)
+        soc2 = self._read_float("sensor.pv_battery_soc_forrad", 50.0)
+        bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
+        bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
+        soc_pct = (soc1 * bat1_kwh + soc2 * bat2_kwh) / bat_kwh if bat_kwh > 0 else 50.0
         soc_kwh = soc_pct / 100 * bat_kwh
 
         days: dict[str, list[str]] = {"today": [], "tomorrow": [], "day3": []}
