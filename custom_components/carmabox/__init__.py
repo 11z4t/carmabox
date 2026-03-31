@@ -8,7 +8,6 @@ electricity costs and peak power charges.
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -85,28 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload CARMA Box config entry."""
     _LOGGER.info("Unloading CARMA Box: %s", entry.title)
-    ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
-    if ok:
-        _invalidate_module_cache()
-    return ok
-
-
-def _invalidate_module_cache() -> None:
-    """IT-2466: Purge all carmabox modules from sys.modules.
-
-    Python caches imported modules in sys.modules. When files are changed
-    on disk (e.g. via sed hotfix) and the integration is reloaded, Python
-    reuses the stale cached bytecode instead of re-reading from disk.
-
-    By removing all carmabox entries from sys.modules during unload,
-    the next async_setup_entry will force a fresh import from disk.
-    """
-    prefix = f"custom_components.{DOMAIN}"
-    stale = [name for name in sys.modules if name == prefix or name.startswith(f"{prefix}.")]
-    for name in stale:
-        del sys.modules[name]
-    if stale:
-        _LOGGER.info("IT-2466: Purged %d cached modules for hotfix support", len(stale))
+    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
 
 
 async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:

@@ -1,7 +1,6 @@
 """Coverage tests for carmabox __init__.py.
 
-Targets lines 36-37, 44, 56-98, 103-107, 120-125, 130-131:
-  - _invalidate_module_cache
+Targets:
   - async_unload_entry
   - _async_options_updated
   - async_setup_entry (full path including cable entity)
@@ -9,7 +8,6 @@ Targets lines 36-37, 44, 56-98, 103-107, 120-125, 130-131:
 
 from __future__ import annotations
 
-import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -50,73 +48,38 @@ def _make_coordinator(*, cable_entity: str | None = None) -> MagicMock:
     return coord
 
 
-# ── Tests: _invalidate_module_cache ──────────────────────────────────────────
-
-
-class TestInvalidateModuleCache:
-    """Lines 120-125: _invalidate_module_cache purges sys.modules."""
-
-    def test_purges_carmabox_modules(self) -> None:
-        """Adds fake carmabox modules to sys.modules, then purges them."""
-        from custom_components.carmabox import _invalidate_module_cache
-
-        # Add fake modules
-        fake_modules = {
-            "custom_components.carmabox.fake_mod": MagicMock(),
-            "custom_components.carmabox.another.sub": MagicMock(),
-        }
-        sys.modules.update(fake_modules)
-
-        # Run purge
-        _invalidate_module_cache()
-
-        # Verify removed
-        for mod_name in fake_modules:
-            assert mod_name not in sys.modules
-
-    def test_no_carmabox_modules_no_error(self) -> None:
-        """With no extra carmabox modules, function runs without error."""
-        from custom_components.carmabox import _invalidate_module_cache
-
-        # Should not raise
-        _invalidate_module_cache()
-
-
 # ── Tests: async_unload_entry ─────────────────────────────────────────────────
 
 
 class TestAsyncUnloadEntry:
-    """Lines 103-107: async_unload_entry."""
+    """async_unload_entry forwards platform unload result."""
 
     @pytest.mark.asyncio
-    async def test_unload_success_calls_invalidate(self) -> None:
-        """Successful unload → _invalidate_module_cache called."""
+    async def test_unload_success_returns_true(self) -> None:
+        """Successful platform unload → returns True."""
         from custom_components.carmabox import async_unload_entry
 
         hass = _make_hass()
         hass.config_entries.async_unload_platforms = AsyncMock(return_value=True)
         entry = _make_entry()
 
-        with patch("custom_components.carmabox._invalidate_module_cache") as mock_inv:
-            result = await async_unload_entry(hass, entry)
+        result = await async_unload_entry(hass, entry)
 
         assert result is True
-        mock_inv.assert_called_once()
+        hass.config_entries.async_unload_platforms.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_unload_failure_skips_invalidate(self) -> None:
-        """Failed unload → _invalidate_module_cache NOT called."""
+    async def test_unload_failure_returns_false(self) -> None:
+        """Failed platform unload → returns False."""
         from custom_components.carmabox import async_unload_entry
 
         hass = _make_hass()
         hass.config_entries.async_unload_platforms = AsyncMock(return_value=False)
         entry = _make_entry()
 
-        with patch("custom_components.carmabox._invalidate_module_cache") as mock_inv:
-            result = await async_unload_entry(hass, entry)
+        result = await async_unload_entry(hass, entry)
 
         assert result is False
-        mock_inv.assert_not_called()
 
 
 # ── Tests: _async_options_updated ────────────────────────────────────────────
