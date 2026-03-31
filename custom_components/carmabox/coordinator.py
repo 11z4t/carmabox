@@ -2467,11 +2467,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     def _generate_plan(self, state: CarmaboxState) -> None:
         """Generate energy plan from Nordpool + Solcast + consumption."""
+        _step = "init"
         try:
             now = datetime.now()
             start_hour = now.hour
+            _LOGGER.info("PLANNER START: hour=%d, soc=%.0f%%", start_hour, state.total_battery_soc)
 
             # Collect prices — try primary, fallback to secondary
+            _step = "prices"
             price_entity = self._get_entity("price_entity", "")
             price_entity_fallback = self._get_entity("price_entity_fallback", "")
             fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
@@ -2495,12 +2498,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
 
             # Collect PV forecast — today remaining + tomorrow hourly
+            _step = "solcast"
             solcast = SolcastAdapter(self.hass)
             pv_today = solcast.today_hourly_kw
             pv_tomorrow = solcast.tomorrow_hourly_kw
             pv_forecast = pv_today[start_hour:] + pv_tomorrow
+            _LOGGER.info(
+                "PLANNER [solcast]: today=%d entries, tomorrow=%d", len(pv_today), len(pv_tomorrow)
+            )
 
             # PLAT-965: Use predictor if trained, else fallback to profile
+            _step = "consumption"
             base = self.consumption_profile.get_profile_for_date(now)
             if self.predictor.is_trained:
                 consumption = self.predictor.predict_24h(
@@ -2515,6 +2523,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 consumption = base[start_hour:] + base
 
             # EV demand — dynamic schedule based on prices + SoC
+            _step = "ev_schedule"
             opts = self._cfg
             ev_enabled = opts.get("ev_enabled", False)
             ev_capacity = float(opts.get("ev_capacity_kwh", 98))
@@ -2579,7 +2588,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                 )
 
+            _step = "ev_calculate"
             if ev_enabled and ev_soc_for_plan >= 0:
+                _LOGGER.info(
+                    "PLANNER [ev]: soc=%.0f%%, target=%.0f%%", ev_soc_for_plan, ev_morning_target
+                )
                 ev_demand = calculate_ev_schedule(
                     start_hour=start_hour,
                     num_hours=len(prices),
@@ -2856,6 +2869,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 weekday_profile = base_profile
                 weekend_profile = base_profile  # Simplified: same for now
 
+                _step = "multiday_build"
                 day_inputs = build_day_inputs(
                     days=plan_days,
                     start_hour=start_hour,
@@ -2874,6 +2888,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     known_pv_daily=pv_daily_forecasts,
                 )
 
+                _step = "multiday_generate"
                 multiday = generate_multiday_plan(
                     day_inputs=day_inputs,
                     start_hour=start_hour,
@@ -2906,10 +2921,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
 
                 # Write multi-day plan to HA sensor (AC4)
+                _step = "write_sensor"
                 self._write_plan_to_sensor(multiday, start_hour)
 
             else:
                 # Single-day fallback (original behavior)
+                _step = "singleday_generate"
                 n = min(len(prices), len(pv_forecast), len(consumption))
                 prices = prices[:n]
                 pv_forecast = pv_forecast[:n]
@@ -2953,8 +2970,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # CARMA-P0-FIXES Task 4: Mark runtime as dirty — will be saved in next async_update_data
             self._runtime_dirty = True
 
-        except Exception:
-            _LOGGER.exception("Plan generation failed — keeping old plan")
+        except Exception as err:
+            _LOGGER.exception("PLANNER CRASH at step '%s': %s", _step, err)
+            # Write error state so dashboard shows WHY plan failed
+            with contextlib.suppress(Exception):
+                import json as _json
+
+                error_plan = _json.dumps(
+                    {
+                        "error": str(err)[:150],
+                        "step": _step,
+                        "state": "crashed",
+                        "ts": datetime.now().isoformat(),
+                    },
+                )
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "input_text",
+                        "set_value",
+                        {"entity_id": "input_text.v6_battery_plan", "value": error_plan[:255]},
+                    )
+                )
 
     def _write_plan_to_sensor(self, multiday: MultiDayPlan, start_hour: int) -> None:
         """Write multi-day plan to input_text.v6_battery_plan (AC4, PLAT-969).
