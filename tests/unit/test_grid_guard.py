@@ -754,3 +754,25 @@ class TestProjectionLevels:
         )
         # projected ~1.67 < 1.7 (tak*margin) — should be OK
         assert r.status == "OK"
+
+
+# ═══════════════════════════════════════════════════════════════
+# PLAT-1162: headroom_kw AttributeError
+# ═══════════════════════════════════════════════════════════════
+
+
+class TestHeadroomProperty:
+    def test_headroom_kw_before_evaluate_no_error(self):
+        """headroom_kw property must not raise AttributeError before evaluate()."""
+        g = _guard()
+        # Should not raise — returns tak*margin - 0 = 1.7
+        hw = g.headroom_kw
+        assert hw == 2.0 * 0.85
+
+    def test_headroom_kw_after_evaluate_reflects_projection(self):
+        """headroom_kw property returns correct value after evaluate()."""
+        g = _guard()
+        r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=2000, hour=14, minute=30)
+        # projected = (1.0*30 + 2.0*30)/60 = 1.5
+        assert abs(g.headroom_kw - (2.0 * 0.85 - 1.5)) < 0.01
+        assert abs(g.headroom_kw - r.headroom_kw) < 0.01

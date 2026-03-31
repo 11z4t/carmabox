@@ -94,6 +94,7 @@ class GridGuard:
         self._recovery_start: float = 0.0
         self._actions_taken: list[str] = []
         self._last_known_grid_w: float = 0.0
+        self._last_projected_kw: float = 0.0  # PLAT-1162: init to avoid AttributeError
 
     # ── Public API ──────────────────────────────────────────────
 
