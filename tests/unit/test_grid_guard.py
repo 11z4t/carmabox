@@ -567,6 +567,33 @@ class TestInvariants:
         )
         assert any("INV-5" in v for v in r.invariant_violations)
 
+    def test_inv5_cold_lock_temp_zero_is_not_falsy(self):
+        """PLAT-1161: cold_lock_temp_c=0.0 must NOT be treated as falsy.
+
+        0.0 is a valid temperature threshold. Python treats 0.0 as falsy
+        in boolean context → cold-lock never triggered at 0°C.
+        Fix: explicit 'is not None' check.
+        """
+        cfg = GridGuardConfig(
+            tak_kw=2.0,
+            cold_lock_temp_c=0.0,  # 0°C threshold — NOT falsy!
+        )
+        g = GridGuard(cfg)
+        # Battery at -1°C (below 0.0 threshold) + discharging at 18% SoC
+        bats = [_bat("kontor", soc=18, power_w=1500, cell_temp_c=-1.0)]
+        r = g.evaluate(
+            viktat_timmedel_kw=1.0,
+            grid_import_w=1000,
+            hour=14,
+            minute=30,
+            batteries=bats,
+        )
+        # Should trigger INV-5 with cold min_soc=20% (18% < 20%)
+        assert any("INV-5" in v for v in r.invariant_violations), (
+            f"cold_lock_temp_c=0.0 treated as falsy — INV-5 not triggered. "
+            f"Violations: {r.invariant_violations}"
+        )
+
     def test_invariants_plus_headroom_both_run(self):
         """If invariant violated AND over limit, BOTH fixes run."""
         g = _guard()
