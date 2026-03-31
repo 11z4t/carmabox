@@ -1359,7 +1359,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     {"entity_id": "button.easee_home_12840_override_schedule"},
                 )
             except Exception:
-                _LOGGER.warning("NATT-EV: override_schedule misslyckades")
+                _LOGGER.warning("NATT-EV: override_schedule misslyckades", exc_info=True)
             await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
             self._night_ev_active = True
 
@@ -1764,6 +1764,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     _LOGGER.warning(
                         "EMS ENFORCE: %s failed to reset ems_power_limit",
                         _adp.prefix,
+                        exc_info=True,
                     )
 
             # --- Drift correction: re-apply mode if actual != desired ---
