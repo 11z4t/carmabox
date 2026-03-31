@@ -192,22 +192,21 @@ def calculate_proportional_discharge(
 def redistribute_on_depletion(
     batteries: list[BatteryInfo],
     total_watts: int,
-    min_soc: float = 15.0,
 ) -> BalancerResult:
-    """When one battery hits min_soc, redistribute its share to others.
+    """When one battery hits effective_min_soc, redistribute its share to others.
 
-    If battery A is at min_soc but battery B has capacity,
+    If battery A is at effective_min_soc but battery B has capacity,
     battery B takes the full discharge load.
-    If all batteries at min_soc, return 0W for all.
+    If all batteries at effective_min_soc, return 0W for all.
 
-    Uses a 1% margin: batteries with soc <= min_soc + 1 are excluded.
+    Uses a 1% margin per battery: soc <= effective_min_soc + 1 → excluded.
+    Cold batteries (effective_min_soc=20%) use a higher threshold than warm ones.
     """
     margin = 1.0
-    threshold = min_soc + margin
 
-    # Split into available vs depleted
-    available = [b for b in batteries if b.soc > threshold]
-    depleted = [b for b in batteries if b.soc <= threshold]
+    # Split into available vs depleted using per-battery effective_min_soc
+    available = [b for b in batteries if b.soc > effective_min_soc(b) + margin]
+    depleted = [b for b in batteries if b.soc <= effective_min_soc(b) + margin]
 
     # Build depleted allocations (0W each)
     depleted_allocs = [

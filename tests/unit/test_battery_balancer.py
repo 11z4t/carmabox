@@ -274,6 +274,22 @@ class TestRedistributeOnDepletion:
         assert k.at_min_soc is True
         assert f.watts == 2000
 
+    def test_redistribute_cold_battery_uses_effective_min_soc(self):
+        """PLAT-1163: cold battery (effective_min_soc=20%) excluded at 20.5%, not 15.5%."""
+        # kontor is cold → effective_min_soc=20, threshold=21.0
+        # soc=20.5 → <= 21.0 → depleted
+        # Without fix (global min_soc=15): threshold=16.0 → soc=20.5 > 16.0 → wrongly available
+        bats = [
+            _bat("kontor", soc=20.5, cap_kwh=15.0, cell_temp_c=2.0),  # cold
+            _bat("forrad", soc=50.0, cap_kwh=5.0, cell_temp_c=15.0),
+        ]
+        result = redistribute_on_depletion(bats, 2000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 0
+        assert k.at_min_soc is True
+        assert f.watts == 2000
+
 
 class TestBMSCurrentLimits:
     """EXP-02: BMS discharge current limit caps allocation."""
