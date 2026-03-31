@@ -79,6 +79,11 @@ from .const import (
     DEFAULT_WATCHDOG_EV_IMPORT_W,
     DEFAULT_WATCHDOG_EXPORT_W,
     DEFAULT_WATCHDOG_MIN_SOC_PCT,
+    DRIFT_ACTUAL_RATIO_THRESHOLD,
+    DRIFT_ESCALATION_CYCLES,
+    DRIFT_GRID_MARGIN_FACTOR,
+    DRIFT_MIN_DISCHARGE_W,
+    DRIFT_MIN_EXPECTED_W,
     EV_RAMP_INTERVAL_S,
     EV_RAMP_STEPS,
     PLAN_INTERVAL_SECONDS,
@@ -2309,7 +2314,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not hasattr(cmd, "battery_action") or cmd.battery_action != "discharge":
             self._drift_count = 0
             return
-        if cmd.battery_discharge_w < 100:
+        if cmd.battery_discharge_w < DRIFT_MIN_DISCHARGE_W:
             self._drift_count = 0
             return
 
@@ -2320,19 +2325,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         grid_w = max(0, state.grid_power_w)
         target_w = self.target_kw * 1000
 
-        # Grid fortfarande över target OCH discharge < 30% av förväntad
-        if grid_w > target_w * 1.1 and expected > 500 and actual_discharge < expected * 0.3:
+        grid_over = grid_w > target_w * DRIFT_GRID_MARGIN_FACTOR
+        discharge_low = actual_discharge < expected * DRIFT_ACTUAL_RATIO_THRESHOLD
+        if grid_over and expected > DRIFT_MIN_EXPECTED_W and discharge_low:
             self._drift_count = getattr(self, "_drift_count", 0) + 1
             _LOGGER.error(
-                "DISCHARGE DRIFT (%d/3): expected %dW, actual %dW, grid %.0fW > target %.0fW",
+                "DISCHARGE DRIFT (%d/%d): expected %dW, actual %dW, grid %.0fW > target %.0fW",
                 self._drift_count,
+                DRIFT_ESCALATION_CYCLES,
                 expected,
                 int(actual_discharge),
                 grid_w,
                 target_w,
             )
-            if self._drift_count >= 3:
-                _LOGGER.error("DISCHARGE DRIFT P1: 3 cykler utan förbättring — eskalerar")
+            if self._drift_count >= DRIFT_ESCALATION_CYCLES:
+                _LOGGER.error(
+                    "DISCHARGE DRIFT P1: eskalerar efter %d cykler",
+                    DRIFT_ESCALATION_CYCLES,
+                )
                 # Force discharge on all adapters
                 if not hasattr(self, "_drift_tasks"):
                     self._drift_tasks: list[asyncio.Task[bool]] = []

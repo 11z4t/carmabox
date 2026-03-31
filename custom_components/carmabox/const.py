@@ -64,6 +64,13 @@ EV_RAMP_INTERVAL_S = 300  # 5 min between ramp-up steps
 EV_RAMP_STEPS = [6, 8, 10]  # Gradual: 6A → 8A → 10A
 EV_FALLBACK_AMPS = 6  # Safe fallback (not 16A!)
 
+# Discharge drift-guard (RC3)
+DRIFT_MIN_DISCHARGE_W = 100  # Ignore drift when discharge command < this
+DRIFT_GRID_MARGIN_FACTOR = 1.1  # Grid must exceed target * this to trigger
+DRIFT_MIN_EXPECTED_W = 500  # Min expected discharge to evaluate drift
+DRIFT_ACTUAL_RATIO_THRESHOLD = 0.3  # Actual < expected * this = drift detected
+DRIFT_ESCALATION_CYCLES = 3  # Consecutive drift cycles before P1 escalation
+
 # Grid
 DEFAULT_VOLTAGE = 230.0
 DEFAULT_MIN_CHARGE_THRESHOLD_KW = 0.3
