@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from custom_components.carmabox.core.grid_guard import (
     BatteryState,
     Consumer,
@@ -890,3 +892,71 @@ class TestLadderHysteresis:
             timestamp=115.0,
         )
         assert len(r2.commands) > 0  # 15s > 10s cooldown → fires
+
+
+class TestPersistence:
+    """PLAT-1095: get_persistent_state / restore_state."""
+
+    def test_get_persistent_state_returns_current_accumulation(self):
+        """get_persistent_state returns hour + accumulated_viktat_wh."""
+        g = GridGuard()
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=14, minute=10, timestamp=100.0)
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=14, minute=10, timestamp=130.0)
+        state = g.get_persistent_state()
+        assert state["hour"] == 14
+        assert state["accumulated_viktat_wh"] > 0
+        assert state["sample_count"] == 2
+        assert "last_grid_w" in state
+
+    def test_restore_state_same_hour_restores_accumulation(self):
+        """restore_state restores accumulation when hour matches."""
+        g = GridGuard()
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=3000, hour=10, minute=5, timestamp=100.0)
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=3000, hour=10, minute=5, timestamp=160.0)
+        saved = g.get_persistent_state()
+        expected_wh = saved["accumulated_viktat_wh"]
+
+        g2 = GridGuard()
+        g2.restore_state(saved, current_hour=10)
+        restored = g2.get_persistent_state()
+        assert restored["accumulated_viktat_wh"] == pytest.approx(expected_wh)
+        assert restored["hour"] == 10
+        assert restored["sample_count"] == saved["sample_count"]
+
+    def test_restore_state_stale_hour_ignored(self):
+        """restore_state discards data when stored hour != current hour."""
+        g = GridGuard()
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=3000, hour=10, minute=5, timestamp=100.0)
+        saved = g.get_persistent_state()
+
+        g2 = GridGuard()
+        g2.restore_state(saved, current_hour=11)  # Different hour — must be ignored
+        assert g2.get_persistent_state()["accumulated_viktat_wh"] == 0.0
+        assert g2.get_persistent_state()["hour"] == -1
+
+    def test_restore_state_empty_data_ignored(self):
+        """restore_state with empty dict leaves GridGuard in default state."""
+        g = GridGuard()
+        g.restore_state({}, current_hour=14)
+        assert g.get_persistent_state()["accumulated_viktat_wh"] == 0.0
+
+    def test_restore_state_last_update_reset_to_zero(self):
+        """After restore, first cycle skips accumulation (last_update=0).
+
+        Monotonic timestamps don't survive restart — _last_update must be 0
+        so the first evaluate() after restore does NOT add a bogus dt_s.
+        """
+        g = GridGuard()
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=0, timestamp=100.0)
+        g.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=0, timestamp=130.0)
+        saved = g.get_persistent_state()
+        wh_before = saved["accumulated_viktat_wh"]
+
+        g2 = GridGuard()
+        g2.restore_state(saved, current_hour=9)
+        # First cycle after restore: last_update=0 → no accumulation added
+        g2.evaluate(
+            viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=5, timestamp=200.0
+        )
+        wh_after = g2.get_persistent_state()["accumulated_viktat_wh"]
+        assert wh_after == pytest.approx(wh_before)  # No spurious addition

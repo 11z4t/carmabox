@@ -877,6 +877,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         len(hyst.surplus_above_since),
                         len(hyst.surplus_below_since),
                     )
+                # PLAT-1095: Restore grid_guard accumulated viktat Wh
+                gg_data = data.get("grid_guard")
+                if gg_data and self._grid_guard is not None:
+                    from datetime import datetime as _dt
+
+                    self._grid_guard.restore_state(gg_data, _dt.now().hour)
+                    _LOGGER.info(
+                        "Restored grid_guard: hour=%s, accumulated=%.3f Wh",
+                        gg_data.get("hour"),
+                        gg_data.get("accumulated_viktat_wh", 0.0),
+                    )
                 _LOGGER.info(
                     "Restored: plan=%d, cmd=%s, ev=%s@%dA, miner=%s, night=%s, ellevio=%d/%d",
                     len(self.plan),
@@ -930,6 +941,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "above": dict(hyst.surplus_above_since.items()),
                     "below": dict(hyst.surplus_below_since.items()),
                 }
+            # PLAT-1095: Persist grid_guard accumulated viktat Wh
+            if self._grid_guard is not None:
+                data["grid_guard"] = self._grid_guard.get_persistent_state()
             await self._runtime_store.async_save(data)
         except Exception:
             _LOGGER.debug("Failed to save runtime", exc_info=True)

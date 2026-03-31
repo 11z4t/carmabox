@@ -500,3 +500,28 @@ class GridGuard:
         self._sample_count += 1
         self._last_grid_w = grid_w
         self._last_update = ts
+
+    # ── PLAT-1095: Persistence helpers ──────────────────────────
+
+    def get_persistent_state(self) -> dict:
+        """Return state dict for persistence. Called by coordinator before saving."""
+        return {
+            "hour": self._hour,
+            "accumulated_viktat_wh": self._accumulated_viktat_wh,
+            "sample_count": self._sample_count,
+            "last_grid_w": self._last_grid_w,
+        }
+
+    def restore_state(self, data: dict, current_hour: int) -> None:
+        """Restore state from persistence. Discards if hour has changed.
+
+        _last_update is intentionally NOT restored — monotonic timestamps
+        don't survive restarts. The first cycle after restore will skip
+        accumulation (last_update=0) and resume normally from the second cycle.
+        """
+        if not data or data.get("hour", -1) != current_hour:
+            return
+        self._hour = current_hour
+        self._accumulated_viktat_wh = float(data.get("accumulated_viktat_wh", 0.0))
+        self._sample_count = int(data.get("sample_count", 0))
+        self._last_grid_w = float(data.get("last_grid_w", 0.0))
