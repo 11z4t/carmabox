@@ -229,3 +229,92 @@ class TestChargerIdFallback:
         call_args = [c[0] for c in hass.services.async_call.call_args_list]
         resume_calls = [c for c in call_args if len(c) >= 2 and c[1] == "action_command"]
         assert len(resume_calls) == 0
+
+
+SHELLY_PREFIX = "shellypro3em_8813bffea620"
+
+
+class TestShellyPro3EMIntegration:
+    """EXP-01: Shelly Pro 3EM as primary EV power sensor."""
+
+    def test_power_w_prefers_shelly_over_easee(self) -> None:
+        """When Shelly reads >10W, power_w returns Shelly value."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "10.0"),  # 10A x 230V = 2300W
+            (f"sensor.{PREFIX}_power", "2.1"),  # Easee: 2100W
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        assert adapter.power_w == 2300.0  # Shelly wins
+
+    def test_power_w_falls_back_to_easee_when_shelly_zero(self) -> None:
+        """When Shelly reads 0W (EV off), falls back to Easee."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "0.0"),
+            (f"sensor.{PREFIX}_power", "1.5"),  # Easee: 1500W
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        assert adapter.power_w == 1500.0  # Easee fallback
+
+    def test_power_w_falls_back_when_shelly_unavailable(self) -> None:
+        """When Shelly entity unavailable, uses Easee."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "unavailable"),
+            (f"sensor.{PREFIX}_power", "2.0"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        assert adapter.power_w == 2000.0
+
+    def test_power_w_without_shelly_uses_easee(self) -> None:
+        """No Shelly configured → always use Easee sensor."""
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_power", "3.0"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.power_w == 3000.0
+
+    def test_shelly_power_w_returns_zero_without_prefix(self) -> None:
+        """shelly_power_w = 0 when no prefix configured."""
+        hass = _make_hass()
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.shelly_power_w == 0.0
+
+    def test_shelly_phase_powers_per_phase(self) -> None:
+        """Per-phase power from Shelly Pro 3EM — phase C is primary for XPENG."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_a_current", "0.5"),
+            (f"sensor.{SHELLY_PREFIX}_a_voltage", "231.0"),
+            (f"sensor.{SHELLY_PREFIX}_b_current", "0.3"),
+            (f"sensor.{SHELLY_PREFIX}_b_voltage", "230.0"),
+            (f"sensor.{SHELLY_PREFIX}_c_current", "15.8"),
+            (f"sensor.{SHELLY_PREFIX}_c_voltage", "229.0"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        phases = adapter.shelly_phase_powers_w
+        assert abs(phases["a"] - 115.5) < 1
+        assert abs(phases["b"] - 69.0) < 1
+        assert abs(phases["c"] - 3618.2) < 1  # Primary EV phase
+
+    def test_shelly_phase_powers_empty_without_prefix(self) -> None:
+        """No Shelly configured → empty dict."""
+        hass = _make_hass()
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.shelly_phase_powers_w == {}
+
+    def test_power_kw_derived_from_power_w(self) -> None:
+        """power_kw = power_w / 1000."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "6.5"),
+            (f"sensor.{PREFIX}_power", "0.5"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        assert abs(adapter.power_kw - 1.495) < 0.01  # 6.5A x 230V / 1000

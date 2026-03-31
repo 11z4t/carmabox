@@ -40,11 +40,13 @@ class EaseeAdapter(EVAdapter):
         device_id: str,
         entity_prefix: str = "easee_home_12840",
         charger_id: str = "",
+        shelly_3em_prefix: str = "",
     ) -> None:
         self.hass = hass
         self.device_id = device_id
         self.charger_id = charger_id
         self.prefix = entity_prefix
+        self.shelly_3em_prefix = shelly_3em_prefix
         self._initialized = False
 
     async def ensure_initialized(self, force: bool = False) -> None:
@@ -134,12 +136,69 @@ class EaseeAdapter(EVAdapter):
         return self._state("current")
 
     @property
+    def shelly_power_w(self) -> float:
+        """EV power from Shelly Pro 3EM (1s update, <0.1% accuracy).
+
+        Returns 0.0 if Shelly not configured or unavailable.
+        Shelly Pro 3EM sits on the EV charger circuit — fastest and
+        most accurate EV power measurement available.
+        """
+        if not self.shelly_3em_prefix:
+            return 0.0
+        current = self._state_by_id(f"sensor.{self.shelly_3em_prefix}_current", default=0.0)
+        return current * 230
+
+    @property
+    def shelly_phase_powers_w(self) -> dict[str, float]:
+        """Per-phase EV power from Shelly Pro 3EM.
+
+        Returns {'a': W, 'b': W, 'c': W}. Empty dict if not configured.
+        Phase C is typically the primary EV charging phase for XPENG G9.
+        """
+        if not self.shelly_3em_prefix:
+            return {}
+        result = {}
+        for phase in ("a", "b", "c"):
+            entity_id = f"sensor.{self.shelly_3em_prefix}_{phase}_current"
+            current = self._state_by_id(entity_id, default=0.0)
+            voltage = self._state_by_id(
+                f"sensor.{self.shelly_3em_prefix}_{phase}_voltage", default=230.0
+            )
+            result[phase] = current * voltage
+        return result
+
+    def _state_by_id(self, entity_id: str, default: float = 0.0) -> float:
+        """Read float from full entity_id (not suffix)."""
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return default
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return default
+
+    @property
     def power_w(self) -> float:
-        return self._state("power") * 1000
+        """EV charging power — prefers Shelly Pro 3EM (1s) over Easee sensor (15-30s).
+
+        Shelly is faster AND more accurate (ADE7953 IC, <0.1%).
+        Falls back to Easee if Shelly unavailable.
+        """
+        shelly = self.shelly_power_w
+        if shelly > 10:  # > 10W = valid reading (not noise)
+            return shelly
+        # Shelly shows 0 or unavailable — check if Easee also shows 0
+        easee = self._state("power") * 1000
+        if easee > 10 and shelly <= 0 and self.shelly_3em_prefix:
+            _LOGGER.debug(
+                "Easee: Shelly 3EM=0W but Easee=%dW — using Easee (Shelly stale?)",
+                int(easee),
+            )
+        return easee if easee > 10 else shelly
 
     @property
     def power_kw(self) -> float:
-        return self._state("power")
+        return self.power_w / 1000
 
     @property
     def is_enabled(self) -> bool:
