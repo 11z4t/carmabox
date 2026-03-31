@@ -173,6 +173,57 @@ class GoodWeAdapter(InverterAdapter):
         val = self._state(f"sensor.goodwe_battery_min_cell_temperature_{self.prefix}", -999)
         return val if val > -999 else None
 
+    @property
+    def bms_charge_limit_a(self) -> float:
+        """BMS max charge current (A). Returns 0 if unavailable.
+
+        BMS reduces this in cold weather (LFP lithium plating protection).
+        At 5°C kontor battery showed only 1A — virtually no charging possible.
+        """
+        return self._state(f"sensor.goodwe_battery_charge_limit_{self.prefix}")
+
+    @property
+    def bms_discharge_limit_a(self) -> float:
+        """BMS max discharge current (A). Returns 0 if unavailable.
+
+        BMS reduces this in extreme cold. At 5°C kontor showed 22A (normal),
+        but at 0°C can drop significantly.
+        """
+        return self._state(f"sensor.goodwe_battery_discharge_limit_{self.prefix}")
+
+    @property
+    def voltage(self) -> float:
+        """Battery voltage (V). Typical ~400V for GoodWe Lynx LFP."""
+        return self._state(f"sensor.goodwe_battery_voltage_{self.prefix}", default=400.0)
+
+    @property
+    def max_discharge_w(self) -> int:
+        """Max discharge power based on BMS current limit and voltage.
+
+        This is the ACTUAL hardware limit — requesting more will be ignored
+        by the BMS. battery_balancer should use this to cap allocation.
+        """
+        limit_a = self.bms_discharge_limit_a
+        if limit_a <= 0:
+            return 0
+        return int(limit_a * self.voltage)
+
+    @property
+    def max_charge_w(self) -> int:
+        """Max charge power based on BMS current limit and voltage.
+
+        Critical in cold weather — BMS may allow only 1A (400W) at 5°C.
+        """
+        limit_a = self.bms_charge_limit_a
+        if limit_a <= 0:
+            return 0
+        return int(limit_a * self.voltage)
+
+    @property
+    def soh_pct(self) -> float:
+        """State of Health (0-100%). Returns 100 if unavailable."""
+        return self._state(f"sensor.goodwe_battery_soh_{self.prefix}", default=100.0)
+
     # ── Write ─────────────────────────────────────────────────
 
     # S7: Valid EMS modes — reject unknown values

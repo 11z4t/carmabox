@@ -1078,9 +1078,27 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             temp1 = getattr(state, "battery_min_cell_temp_1", 15.0) or 15.0
             temp2 = getattr(state, "battery_min_cell_temp_2", 15.0) or 15.0
 
+            # EXP-02: BMS discharge current limits → max_discharge_w per battery
+            adapters = self.inverter_adapters
+            max_disch_1 = adapters[0].max_discharge_w if len(adapters) > 0 else 5000
+            max_disch_2 = adapters[1].max_discharge_w if len(adapters) > 1 else 5000
             bats = [
-                BatteryInfo("kontor", state.battery_soc_1, bat1_kwh, temp1, min_soc=min_soc),
-                BatteryInfo("forrad", state.battery_soc_2, bat2_kwh, temp2, min_soc=min_soc),
+                BatteryInfo(
+                    "kontor",
+                    state.battery_soc_1,
+                    bat1_kwh,
+                    temp1,
+                    min_soc=min_soc,
+                    max_discharge_w=max_disch_1 or 5000,
+                ),
+                BatteryInfo(
+                    "forrad",
+                    state.battery_soc_2,
+                    bat2_kwh,
+                    temp2,
+                    min_soc=min_soc,
+                    max_discharge_w=max_disch_2 or 5000,
+                ),
             ]
             bal = calculate_proportional_discharge(bats, cmd.battery_discharge_w)
 
@@ -1311,6 +1329,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 min_soc_val = float(opts.get("battery_min_soc", 15.0))
                 temp1 = getattr(state, "battery_min_cell_temp_1", 15.0) or 15.0
                 temp2 = getattr(state, "battery_min_cell_temp_2", 15.0) or 15.0
+                # EXP-02: BMS discharge current limits
+                _adapters = self.inverter_adapters
+                _max_d1 = _adapters[0].max_discharge_w if len(_adapters) > 0 else 5000
+                _max_d2 = _adapters[1].max_discharge_w if len(_adapters) > 1 else 5000
                 bats = [
                     BatteryInfo(
                         "kontor",
@@ -1318,6 +1340,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         bat1_kwh,
                         temp1,
                         min_soc=min_soc_val,
+                        max_discharge_w=_max_d1 or 5000,
                     ),
                     BatteryInfo(
                         "forrad",
@@ -1325,6 +1348,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         bat2_kwh,
                         temp2,
                         min_soc=min_soc_val,
+                        max_discharge_w=_max_d2 or 5000,
                     ),
                 ]
                 bal = calculate_proportional_discharge(

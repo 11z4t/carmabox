@@ -99,6 +99,69 @@ class TestGoodWeAdapter:
         )
 
 
+class TestGoodWeBMSLimits:
+    """EXP-02: BMS charge/discharge current limits and SoH."""
+
+    def test_bms_discharge_limit(self) -> None:
+        hass = _make_hass(("sensor.goodwe_battery_discharge_limit_kontor", "22.0"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.bms_discharge_limit_a == 22.0
+
+    def test_bms_charge_limit_cold(self) -> None:
+        """At 5C, BMS may limit charge to 1A."""
+        hass = _make_hass(("sensor.goodwe_battery_charge_limit_kontor", "1.0"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.bms_charge_limit_a == 1.0
+
+    def test_bms_limits_unavailable_returns_zero(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.bms_discharge_limit_a == 0.0
+        assert adapter.bms_charge_limit_a == 0.0
+
+    def test_max_discharge_w_from_bms(self) -> None:
+        """max_discharge_w = bms_discharge_limit_a x voltage."""
+        hass = _make_hass(
+            ("sensor.goodwe_battery_discharge_limit_kontor", "22.0"),
+            ("sensor.goodwe_battery_voltage_kontor", "399.2"),
+        )
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.max_discharge_w == int(22.0 * 399.2)  # 8782W
+
+    def test_max_discharge_w_zero_when_bms_zero(self) -> None:
+        hass = _make_hass(
+            ("sensor.goodwe_battery_discharge_limit_kontor", "0"),
+            ("sensor.goodwe_battery_voltage_kontor", "400.0"),
+        )
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.max_discharge_w == 0
+
+    def test_max_charge_w_cold_limited(self) -> None:
+        """At 5C, charge limit 1A x 400V = 400W."""
+        hass = _make_hass(
+            ("sensor.goodwe_battery_charge_limit_kontor", "1.0"),
+            ("sensor.goodwe_battery_voltage_kontor", "400.0"),
+        )
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.max_charge_w == 400
+
+    def test_voltage_default(self) -> None:
+        """voltage defaults to 400V when unavailable."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.voltage == 400.0
+
+    def test_soh_pct(self) -> None:
+        hass = _make_hass(("sensor.goodwe_battery_soh_kontor", "98.0"))
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.soh_pct == 98.0
+
+    def test_soh_default_100(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        assert adapter.soh_pct == 100.0
+
+
 class TestEaseeAdapter:
     def test_read_status(self) -> None:
         hass = _make_hass(("sensor.easee_home_12840_status", "charging"))

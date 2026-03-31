@@ -270,3 +270,63 @@ class TestRedistributeOnDepletion:
         assert k.watts == 0
         assert k.at_min_soc is True
         assert f.watts == 2000
+
+
+class TestBMSCurrentLimits:
+    """EXP-02: BMS discharge current limit caps allocation."""
+
+    def test_bms_limit_caps_allocation(self) -> None:
+        """If BMS allows only 2000W, battery gets max 2000W even if share is higher."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, max_discharge_w=2000),
+            _bat("forrad", soc=80, cap_kwh=5.0, max_discharge_w=5000),
+        ]
+        result = calculate_proportional_discharge(bats, 5000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        # kontor share = 75% of 5000 = 3750, but BMS caps at 2000
+        assert k.watts == 2000
+        # forrad gets its proportional share (25% = 1250)
+        assert f.watts == 1250
+
+    def test_bms_zero_disables_battery(self) -> None:
+        """BMS discharge limit 0A = battery cannot discharge."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, max_discharge_w=0),
+            _bat("forrad", soc=80, cap_kwh=5.0, max_discharge_w=5000),
+        ]
+        result = calculate_proportional_discharge(bats, 3000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        # kontor capped to 0 by BMS
+        assert k.watts == 0
+        # forrad gets its share only
+        assert f.watts == 750
+
+    def test_both_bms_limited(self) -> None:
+        """Both batteries BMS-limited — total discharge < requested."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, max_discharge_w=1000),
+            _bat("forrad", soc=80, cap_kwh=5.0, max_discharge_w=500),
+        ]
+        result = calculate_proportional_discharge(bats, 5000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        assert k.watts == 1000
+        assert f.watts == 500
+        assert result.total_w == 1500  # Only 1500W possible out of 5000 requested
+
+    def test_asymmetric_cold_bms_limit(self) -> None:
+        """Cold kontor (BMS 2800W), warm forrad (8800W) — caps correctly."""
+        bats = [
+            _bat("kontor", soc=80, cap_kwh=15.0, cell_temp_c=3.0, max_discharge_w=2800),
+            _bat("forrad", soc=80, cap_kwh=5.0, cell_temp_c=15.0, max_discharge_w=8800),
+        ]
+        result = calculate_proportional_discharge(bats, 4000)
+        k = next(a for a in result.allocations if a.id == "kontor")
+        f = next(a for a in result.allocations if a.id == "forrad")
+        # kontor cold: min_soc=20%, available = (80-20)/100*15 = 9.0 kWh
+        # forrad warm: min_soc=15%, available = (80-15)/100*5 = 3.25 kWh
+        # kontor share = 9.0/12.25 = 73.5% of 4000 = 2938 → capped 2800
+        assert k.watts == 2800
+        assert f.watts > 0
