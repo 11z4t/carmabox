@@ -438,3 +438,425 @@ class TestEllevioRealtimeAttrs:
         assert attrs["top2_kw"] == 0.0
 
 
+# ── Additional sensor.py functions (sensor.py lines 366-703) ─────────────────
+
+# Imported locally since they weren't in the original import block
+from custom_components.carmabox.sensor import (  # noqa: E402
+    _daily_insight_attrs,
+    _daily_insight_value,
+    _energy_ledger_attrs,
+    _energy_ledger_value,
+    _household_insights_attrs,
+    _household_insights_value,
+    _rules_attrs,
+    _rules_value,
+    _scheduler_24h_plan_attrs,
+    _scheduler_24h_plan_value,
+    _scheduler_breach_count_value,
+    _scheduler_last_breach_attrs,
+    _scheduler_last_breach_value,
+    _scheduler_ev_full_charge_value,
+    _shadow_attrs,
+    _shadow_value,
+)
+
+
+def _shadow(*, timestamp: str = "", agreement: bool = True, reason: str = "") -> ShadowComparison:
+    s = ShadowComparison()
+    s.timestamp = timestamp
+    s.agreement = agreement
+    s.reason = reason
+    s.carma_action = "idle"
+    s.actual_action = "idle"
+    s.carma_weighted_kw = 1.5
+    s.actual_weighted_kw = 1.5
+    s.carma_better_kr = 0.0
+    s.price_ore = 80.0
+    return s
+
+
+def _sched_slot(
+    hour: int = 10, action: str = "c", constraint_ok: bool = True
+) -> MagicMock:
+    s = MagicMock()
+    s.hour = hour
+    s.action = action
+    s.battery_kw = 2.0
+    s.ev_kw = 0.0
+    s.ev_amps = 0
+    s.miner_on = False
+    s.grid_kw = 0.5
+    s.weighted_kw = 0.5
+    s.pv_kw = 3.0
+    s.consumption_kw = 1.0
+    s.price = 85.0
+    s.battery_soc = 80
+    s.ev_soc = 50
+    s.constraint_ok = constraint_ok
+    s.reasoning = "Test"
+    return s
+
+
+def _breach_record() -> MagicMock:
+    b = MagicMock()
+    b.timestamp = "2026-03-31T10:00:00"
+    b.hour = 10
+    b.actual_weighted_kw = 3.0
+    b.target_kw = 2.0
+    b.loads_active = ["ev", "miner"]
+    b.root_cause = "EV + miner running simultaneously"
+    b.remediation = "Schedule EV off-peak"
+    b.severity = "high"
+    return b
+
+
+def _sched_plan(*, breaches: list | None = None, slots: list | None = None) -> MagicMock:
+    p = MagicMock()
+    p.breaches = breaches or []
+    p.breach_count_month = len(p.breaches)
+    p.learnings = []
+    p.slots = slots or []
+    p.target_weighted_kw = 2.0
+    p.max_weighted_kw = 2.5
+    p.total_ev_kwh = 20.0
+    p.ev_soc_at_06 = 75
+    p.total_charge_kwh = 5.0
+    p.total_discharge_kwh = 3.0
+    p.estimated_cost_kr = 12.5
+    p.ev_next_full_charge_date = "2026-04-01"
+    return p
+
+
+# ── _shadow_value ─────────────────────────────────────────────────────────────
+
+
+class TestShadowValue:
+    def test_no_timestamp_returns_ingen_data(self) -> None:
+        """No timestamp → 'Ingen data'."""
+        coord = _coord(shadow=_shadow(timestamp=""))
+        assert _shadow_value(coord) == "Ingen data"
+
+    def test_agreement_shows_action(self) -> None:
+        """Agreement → 'Eniga: <action>'."""
+        s = _shadow(timestamp="2026-03-31T10:00:00", agreement=True)
+        s.carma_action = "charge_pv"
+        coord = _coord(shadow=s)
+        assert _shadow_value(coord) == "Eniga: charge_pv"
+
+    def test_disagreement_with_reason(self) -> None:
+        """Disagreement + reason → reason returned."""
+        s = _shadow(timestamp="2026-03-31T10:00:00", agreement=False, reason="v6 laddar ur")
+        coord = _coord(shadow=s)
+        assert _shadow_value(coord) == "v6 laddar ur"
+
+    def test_disagreement_no_reason_fallback(self) -> None:
+        """Disagreement without reason → 'CARMA: X, v6: Y' format."""
+        s = _shadow(timestamp="2026-03-31T10:00:00", agreement=False, reason="")
+        s.carma_action = "idle"
+        s.actual_action = "discharge"
+        coord = _coord(shadow=s)
+        result = _shadow_value(coord)
+        assert "CARMA:" in result and "idle" in result
+
+
+# ── _shadow_attrs ─────────────────────────────────────────────────────────────
+
+
+class TestShadowAttrs:
+    def test_returns_complete_attrs(self) -> None:
+        """Returns all required keys including agreement_pct_24h."""
+        s1 = _shadow(timestamp="T", agreement=True)
+        s2 = _shadow(timestamp="T2", agreement=False, reason="Test")
+        s2.timestamp = "2026-03-31T10:00:00"
+        coord = _coord(shadow=s1, shadow_log=[s1, s2])
+        coord._shadow_savings_kr = 2.5
+        attrs = _shadow_attrs(coord)
+        assert "agreement_pct_24h" in attrs
+        assert attrs["agreement_pct_24h"] == 50.0
+
+    def test_empty_log(self) -> None:
+        """Empty log → agreement_pct = 0."""
+        coord = _coord(shadow=_shadow(), shadow_log=[])
+        attrs = _shadow_attrs(coord)
+        assert attrs["agreement_pct_24h"] == 0
+
+
+# ── _energy_ledger_value ──────────────────────────────────────────────────────
+
+
+class TestEnergyLedgerValue:
+    def test_returns_formatted_string(self) -> None:
+        """Returns 'X.X kr sparat, Y.Y kr total (Zh)'."""
+        ledger = MagicMock()
+        ledger.daily_summary = MagicMock(
+            return_value={"battery_net_saving_kr": 5.3, "total_cost_kr": 12.1, "hours": 8}
+        )
+        coord = _coord()
+        coord.ledger = ledger
+        result = _energy_ledger_value(coord)
+        assert "5.3 kr sparat" in result
+        assert "12.1 kr total" in result
+        assert "8h" in result
+
+
+# ── _energy_ledger_attrs ──────────────────────────────────────────────────────
+
+
+class TestEnergyLedgerAttrs:
+    def test_returns_daily_summary_dict(self) -> None:
+        """Returns ledger.daily_summary result."""
+        summary = {"battery_net_saving_kr": 5.3, "total_cost_kr": 12.1, "hours": 8}
+        ledger = MagicMock()
+        ledger.daily_summary = MagicMock(return_value=summary)
+        coord = _coord()
+        coord.ledger = ledger
+        result = _energy_ledger_attrs(coord)
+        assert result == summary
+
+
+# ── _daily_insight_value ──────────────────────────────────────────────────────
+
+
+class TestDailyInsightValue:
+    def test_collecting_returns_samlar_data(self) -> None:
+        """status=collecting → 'Samlar data'."""
+        coord = _coord()
+        coord.daily_insight = MagicMock(return_value={"status": "collecting"})
+        # daily_insight is a property, override via mock attr
+        type(coord).daily_insight = property(lambda self: {"status": "collecting"})
+        result = _daily_insight_value(coord)
+        assert result == "Samlar data"
+
+    def test_ready_returns_summary(self) -> None:
+        """status=ready → summary string with max_kw, cost, recs."""
+        coord = _coord()
+        type(coord).daily_insight = property(
+            lambda self: {
+                "status": "ready",
+                "recommendation_count": 2,
+                "ellevio_max_kw": 3.5,
+                "total_cost_kr": 45.0,
+            }
+        )
+        result = _daily_insight_value(coord)
+        assert "3.5" in result
+        assert "45" in result
+        assert "2" in result
+
+
+# ── _household_insights_value ────────────────────────────────────────────────
+
+
+class TestHouseholdInsightsValue:
+    def test_no_data_returns_samlar_data(self) -> None:
+        """No benchmark_data → 'Samlar data'."""
+        coord = _coord()
+        coord.benchmark_data = None
+        assert _household_insights_value(coord) == "Samlar data"
+
+    def test_below_10_households_returns_samlar(self) -> None:
+        """similar_households < 10 → 'Samlar data'."""
+        coord = _coord()
+        coord.benchmark_data = {"similar_households": 5}
+        assert _household_insights_value(coord) == "Samlar data"
+
+    def test_below_average(self) -> None:
+        """diff_pct < -5 → 'X% under snittet'."""
+        coord = _coord()
+        coord.benchmark_data = {"similar_households": 50, "diff_pct": -12.0}
+        assert "under snittet" in _household_insights_value(coord)
+
+    def test_above_average(self) -> None:
+        """diff_pct > 5 → 'X% över snittet'."""
+        coord = _coord()
+        coord.benchmark_data = {"similar_households": 50, "diff_pct": 10.0}
+        assert "över snittet" in _household_insights_value(coord)
+
+    def test_near_average(self) -> None:
+        """diff_pct in [-5, 5] → 'Nära snittet'."""
+        coord = _coord()
+        coord.benchmark_data = {"similar_households": 50, "diff_pct": 2.0}
+        assert _household_insights_value(coord) == "Nära snittet"
+
+
+# ── _household_insights_attrs ─────────────────────────────────────────────────
+
+
+class TestHouseholdInsightsAttrs:
+    def test_no_data_returns_waiting(self) -> None:
+        """No benchmark_data → waiting status."""
+        coord = _coord()
+        coord.benchmark_data = None
+        attrs = _household_insights_attrs(coord)
+        assert attrs["status"] == "waiting"
+
+    def test_with_data_returns_full_attrs(self) -> None:
+        """With benchmark_data → returns structured attrs."""
+        coord = _coord()
+        coord.benchmark_data = {
+            "similar_households": 50,
+            "comparison_group": "villa_10-20kwp",
+            "your_monthly_kwh": 350,
+            "avg_monthly_kwh": 400,
+            "diff_pct": -12.5,
+            "trend_3m": "improving",
+            "your_savings_kr": 250,
+            "avg_savings_kr": 180,
+            "savings_rank_pct": 75,
+            "tips": ["Charge EV off-peak"],
+            "battery_roi_months": 84,
+            "solar_roi_months": 120,
+            "updated": "2026-03-31",
+        }
+        attrs = _household_insights_attrs(coord)
+        assert attrs["similar_households"] == 50
+        assert attrs["diff_pct"] == -12.5
+
+
+# ── _rules_value ──────────────────────────────────────────────────────────────
+
+
+class TestRulesValue:
+    def test_no_active_rule(self) -> None:
+        """_active_rule_id = '' → 'Ingen aktiv regel'."""
+        coord = _coord()
+        coord._active_rule_id = ""
+        assert _rules_value(coord) == "Ingen aktiv regel"
+
+    def test_known_rule(self) -> None:
+        """RULE_0_5 → 'Solar charge'."""
+        coord = _coord()
+        coord._active_rule_id = "RULE_0_5"
+        assert _rules_value(coord) == "Solar charge"
+
+    def test_unknown_rule_returns_id(self) -> None:
+        """Unknown rule ID → returns the ID itself."""
+        coord = _coord()
+        coord._active_rule_id = "RULE_9999"
+        assert _rules_value(coord) == "RULE_9999"
+
+
+# ── _rules_attrs ───────────────────────────────────────────────────────────────
+
+
+class TestRulesAttrs:
+    def test_no_data_returns_no_data_status(self) -> None:
+        """coord.data = None → status: no_data."""
+        coord = _coord()
+        coord.data = None
+        attrs = _rules_attrs(coord)
+        assert attrs == {"status": "no_data"}
+
+    def test_with_data_returns_all_rules(self) -> None:
+        """coord.data set → returns list of 7 rules."""
+        coord = _coord()
+        coord.data = CarmaboxState()
+        coord._active_rule_id = "RULE_2"
+        coord._rule_triggers = {}
+        attrs = _rules_attrs(coord)
+        assert "rules" in attrs
+        assert len(attrs["rules"]) == 7
+        # Active rule is marked
+        rule_2 = next(r for r in attrs["rules"] if r["id"] == "RULE_2")
+        assert rule_2["active"] is True
+
+
+# ── Scheduler sensor functions ────────────────────────────────────────────────
+
+
+class TestSchedulerLastBreachValue:
+    def test_no_breaches_returns_no_overträdelser(self) -> None:
+        """No breaches → 'Inga överträdelser'."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        assert _scheduler_last_breach_value(coord) == "Inga överträdelser"
+
+    def test_with_breach(self) -> None:
+        """Has breach → root_cause[:200]."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan(breaches=[_breach_record()])
+        result = _scheduler_last_breach_value(coord)
+        assert "EV" in result
+
+
+class TestSchedulerLastBreachAttrs:
+    def test_no_breaches(self) -> None:
+        """No breaches → breach_count_month key present."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        attrs = _scheduler_last_breach_attrs(coord)
+        assert "breach_count_month" in attrs
+
+    def test_with_breach_returns_details(self) -> None:
+        """Breach exists → full details including severity."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan(breaches=[_breach_record()])
+        attrs = _scheduler_last_breach_attrs(coord)
+        assert attrs["hour"] == 10
+        assert attrs["severity"] == "high"
+
+
+class TestSchedulerBreachCountValue:
+    def test_returns_count(self) -> None:
+        """Returns breach_count_month from scheduler_plan."""
+        coord = _coord()
+        plan = _sched_plan(breaches=[_breach_record()])
+        plan.breach_count_month = 5
+        coord.scheduler_plan = plan
+        assert _scheduler_breach_count_value(coord) == 5
+
+
+class TestScheduler24hPlanValue:
+    def test_no_slots_returns_ingen_plan(self) -> None:
+        """No slots → 'Ingen plan'."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        assert _scheduler_24h_plan_value(coord) == "Ingen plan"
+
+    def test_slots_all_ok(self) -> None:
+        """All slots ok → 'Plan aktiv — alla timmar OK'."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan(slots=[_sched_slot()])
+        assert "OK" in _scheduler_24h_plan_value(coord)
+
+    def test_slots_with_violations(self) -> None:
+        """Some slots not ok → 'varning(ar)' in result."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan(slots=[_sched_slot(constraint_ok=False)])
+        result = _scheduler_24h_plan_value(coord)
+        assert "varning" in result
+
+
+class TestScheduler24hPlanAttrs:
+    def test_returns_plan_structure(self) -> None:
+        """Returns slots data with all fields."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan(slots=[_sched_slot(hour=10)])
+        attrs = _scheduler_24h_plan_attrs(coord)
+        assert len(attrs["slots"]) == 1
+        assert attrs["slots"][0]["h"] == 10
+
+    def test_empty_slots(self) -> None:
+        """No slots → empty slots list."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        attrs = _scheduler_24h_plan_attrs(coord)
+        assert attrs["slots"] == []
+
+
+class TestSchedulerEvFullChargeValue:
+    def test_returns_date(self) -> None:
+        """date set → returns it."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        coord.scheduler_plan.ev_next_full_charge_date = "2026-04-05"
+        assert _scheduler_ev_full_charge_value(coord) == "2026-04-05"
+
+    def test_no_date_returns_ej_planerad(self) -> None:
+        """date = None → 'Ej planerad'."""
+        coord = _coord()
+        coord.scheduler_plan = _sched_plan()
+        coord.scheduler_plan.ev_next_full_charge_date = None
+        assert _scheduler_ev_full_charge_value(coord) == "Ej planerad"
+
+
