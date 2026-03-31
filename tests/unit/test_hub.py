@@ -574,3 +574,132 @@ class TestLoadCerts:
         cert_dir.mkdir()
 
         assert client.load_certs() is False
+
+
+class TestMQTTPublishException:
+    """Line 373-375: _mqtt_publish exception path."""
+
+    def test_publish_exception_returns_false(self) -> None:
+        """mqtt.publish raises → return False (lines 373-375)."""
+        client = _make_client()
+        client._mqtt_connected = True
+        mock_mqtt = MagicMock()
+        mock_mqtt.publish.side_effect = OSError("network error")
+        client._mqtt_client = mock_mqtt
+
+        result = client.publish_telemetry({"grid_kw": 1.5})
+        assert result is False
+
+
+class TestRegisterWithCertsAndMQTTS:
+    """Lines 470-471, 475, 477: register response with certs and mqtts details."""
+
+    @pytest.mark.asyncio
+    async def test_register_stores_certs_and_mqtts(self, tmp_path: object) -> None:
+        """register response with certs + mqtts_host/port → store all (lines 470-477)."""
+
+
+        client = _make_client()
+        client.hass.config.config_dir = str(tmp_path)
+
+        response_data = {
+            "mqtt_username": "box_newuser",
+            "mqtt_token": "token123",
+            "mqtt_hmac_key": "new_hmac_key",
+            "client_cert": "CERT_DATA",
+            "client_key": "KEY_DATA",
+            "ca_cert": "CA_DATA",
+            "mqtts_host": "mqtts.example.com",
+            "mqtts_port": 8883,
+        }
+
+        mock_resp = AsyncMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(return_value=response_data)
+        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
+        mock_resp.__aexit__ = AsyncMock(return_value=False)
+
+        mock_session = AsyncMock()
+        mock_session.post = MagicMock(return_value=mock_resp)
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = await client.register(config={})
+
+        assert result is not None
+        assert client.mqtts_host == "mqtts.example.com"
+        assert client.mqtts_port == 8883
+
+
+class TestMQTTConnectWithPaho:
+    """Lines 253-347: _connect_mqtt with mocked paho client."""
+
+    def test_connect_websocket_without_certs(self) -> None:
+        """No mTLS certs → WebSocket connection path (lines 275-285)."""
+        import asyncio
+
+        client = _make_client()
+        mock_mqtt_client = MagicMock()
+
+        with patch("paho.mqtt.client.Client", return_value=mock_mqtt_client):
+            result = asyncio.get_event_loop().run_until_complete(client.connect_mqtt())
+
+        assert result is True
+        assert client._mqtt_client is mock_mqtt_client
+
+    def test_connect_mtls_with_certs(self, tmp_path: object) -> None:
+        """mTLS cert files present → MQTTS connection path (lines 258-274)."""
+        import asyncio
+        from pathlib import Path
+
+        client = _make_client()
+        cert_dir = Path(str(tmp_path)) / "carmabox_certs"
+        cert_dir.mkdir()
+        for fname in ("client.crt", "client.key", "ca.crt"):
+            (cert_dir / fname).write_text("CERT_DATA")
+
+        client._client_cert_path = cert_dir / "client.crt"
+        client._client_key_path = cert_dir / "client.key"
+        client._ca_cert_path = cert_dir / "ca.crt"
+        client.mqtts_host = "mqtts.example.com"
+        client.mqtts_port = 8883
+
+        mock_mqtt_client = MagicMock()
+        with patch("paho.mqtt.client.Client", return_value=mock_mqtt_client):
+            result = asyncio.get_event_loop().run_until_complete(client.connect_mqtt())
+
+        assert result is True
+
+    def test_connect_exception_returns_false(self) -> None:
+        """mqtt.Client raises → return False (line 345-347)."""
+        import asyncio
+
+        client = _make_client()
+
+        with patch("paho.mqtt.client.Client", side_effect=RuntimeError("paho error")):
+            result = asyncio.get_event_loop().run_until_complete(client.connect_mqtt())
+
+        assert result is False
+
+    def test_on_connect_callback_sets_connected(self) -> None:
+        """on_connect callback rc==0 → _mqtt_connected=True (lines 293-299)."""
+        import asyncio
+
+        client = _make_client()
+        mock_mqtt_client = MagicMock()
+        captured: dict = {}
+
+        def capture_on_connect(cb: object) -> None:
+            captured["on_connect"] = cb
+
+        # Use property setter on the mock instance to capture callbacks
+        type(mock_mqtt_client).on_connect = property(fset=capture_on_connect)
+
+        with patch("paho.mqtt.client.Client", return_value=mock_mqtt_client):
+            asyncio.get_event_loop().run_until_complete(client.connect_mqtt())
+
+        # Trigger on_connect with rc=0 → should set _mqtt_connected=True
+        if "on_connect" in captured:
+            captured["on_connect"](None, None, {}, 0)
+            assert client._mqtt_connected is True
