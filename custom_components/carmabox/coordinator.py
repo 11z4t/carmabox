@@ -1628,7 +1628,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
         )
         # Miner
-        miner_w = self._read_float("sensor.shelly1pmg4_a085e3bd1e60_power")
+        miner_entity = self._cfg.get("miner_power_entity", "sensor.shelly1pmg4_a085e3bd1e60_power")
+        miner_w = self._read_float(miner_entity)
         consumers.append(
             SurplusConsumer(
                 "miner",
@@ -1917,7 +1918,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         opts = self._cfg
 
         # Read Ellevio weighted timmedel from HA sensor
-        viktat_kw = self._read_float("sensor.ellevio_viktad_timmedel_pagaende", 0.0)
+        viktat_kw = self._read_float(
+            self._cfg.get("ellevio_timmedel_entity", "sensor.ellevio_viktad_timmedel_pagaende"),
+            0.0,
+        )
 
         # Battery states
         adapters = self.inverter_adapters
@@ -3116,8 +3120,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         bat_kwh = float(opts.get("battery_1_kwh", 15.0)) + float(opts.get("battery_2_kwh", 5.0))
         efficiency = float(opts.get("battery_efficiency", 0.92))
         # Read actual SoC from HA sensors (self.data may be None during plan generation)
-        soc1 = self._read_float("sensor.pv_battery_soc_kontor", 50.0)
-        soc2 = self._read_float("sensor.pv_battery_soc_forrad", 50.0)
+        soc1 = self._read_float(opts.get("battery_soc_1", "sensor.pv_battery_soc_kontor"), 50.0)
+        soc2 = self._read_float(opts.get("battery_soc_2", "sensor.pv_battery_soc_forrad"), 50.0)
         bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
         bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
         soc_pct = (soc1 * bat1_kwh + soc2 * bat2_kwh) / bat_kwh if bat_kwh > 0 else 50.0
@@ -6037,13 +6041,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         temp_entity = self._cfg.get("outdoor_temp_entity", "sensor.sanduddsvagen_60_temperature")
         temperature_c = self._read_float(temp_entity, 0.0)
 
-        # IT-1936: Read per-appliance sensors
-        tvatt_w = self._read_float("sensor.102_shelly_plug_g3_power", 0.0)
-        tork_w = self._read_float("sensor.103_shelly_plug_g3_power", 0.0)
-        disk_w = self._read_float("sensor.98_shelly_plug_s_power", 0.0)
-        vp_kontor_w = self._read_float("sensor.kontor_varmepump_alltid_pa_switch_0_power", 0.0)
-        vp_pool_w = self._read_float("sensor.poolvarmare_shelly_1pm_power", 0.0)
-        cirk_pool_w = self._read_float("sensor.gv_cirkulationspump_effekt", 0.0)
+        # IT-1936: Read per-appliance sensors (configurable via opts)
+        _c = self._cfg
+        tvatt_w = self._read_float(
+            _c.get("appliance_tvatt", "sensor.102_shelly_plug_g3_power"), 0.0
+        )
+        tork_w = self._read_float(_c.get("appliance_tork", "sensor.103_shelly_plug_g3_power"), 0.0)
+        disk_w = self._read_float(_c.get("appliance_disk", "sensor.98_shelly_plug_s_power"), 0.0)
+        vp_kontor_w = self._read_float(
+            _c.get("vp_kontor", "sensor.kontor_varmepump_alltid_pa_switch_0_power"), 0.0
+        )
+        vp_pool_w = self._read_float(_c.get("vp_pool", "sensor.poolvarmare_shelly_1pm_power"), 0.0)
+        cirk_pool_w = self._read_float(
+            _c.get("cirk_pump", "sensor.gv_cirkulationspump_effekt"), 0.0
+        )
 
         self.ledger.record_sample(
             hour=hour,

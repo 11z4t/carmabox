@@ -88,7 +88,7 @@ def calculate_solar_ev_amps(
         voltage: Grid voltage.
 
     Returns:
-        EV amps (0 if below minimum, 6-16 otherwise).
+        EV amps (0 if below minimum, 6-10 otherwise (max DEFAULT_EV_MAX_AMPS)).
     """
     amps = int(pv_surplus_kw * 1000 / voltage)
     if amps < min_amps:
