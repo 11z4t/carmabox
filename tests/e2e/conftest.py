@@ -78,3 +78,26 @@ async def ha_page(page):
 
     await page.wait_for_url("**/lovelace**", timeout=15000)
     yield page
+
+
+@pytest.fixture(autouse=True)
+def verify_cleanup():
+    """No-op override — prevent HA plugin verify_cleanup from conflicting with Playwright."""
+    yield
+
+
+@pytest.fixture(autouse=True)
+def enable_event_loop_debug():
+    """No-op override — prevent HA plugin from modifying Playwright's event loop."""
+
+
+@pytest.fixture(autouse=True)
+def expected_lingering_tasks():
+    """Override HA default — not applicable to e2e tests."""
+    return True
+
+
+@pytest.fixture(autouse=True)
+def expected_lingering_timers():
+    """Override HA default — not applicable to e2e tests."""
+    return True

@@ -3051,50 +3051,84 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             payload.pop("p", None)
             raw = json.dumps(payload, separators=(",", ":"))
 
+        # input_text max 255 chars — write compact version
+        compact = self._compact_plan_string(plan, start_hour)
         self.hass.async_create_task(
             self.hass.services.async_call(
                 "input_text",
                 "set_value",
-                {"entity_id": "input_text.v6_battery_plan", "value": raw},
+                {"entity_id": "input_text.v6_battery_plan", "value": compact[:255]},
             )
         )
+        # Write human-readable display text
+        self._write_plan_display(plan, start_hour)
 
     def _write_plan_to_sensor_single(self, start_hour: int) -> None:
         """Write single-day plan to input_text.v6_battery_plan (legacy compat)."""
-        import json
-        from datetime import date as _date
-
         plan = self.plan
         if not plan:
             return
 
-        actions = "".join(hp.action for hp in plan)
-        prices = [int(hp.price) for hp in plan]
-        socs = [hp.battery_soc for hp in plan]
-
-        payload = {
-            "d": _date.today().isoformat(),
-            "s": "today",
-            "sh": start_hour,
-            "hz": len(plan),
-            "q": "known",
-            "h": actions,
-            "p": prices,
-            "soc": socs,
-        }
-
-        raw = json.dumps(payload, separators=(",", ":"))
-        if len(raw) > 4096:
-            payload.pop("soc", None)
-            raw = json.dumps(payload, separators=(",", ":"))
-
+        compact = self._compact_plan_string(plan, start_hour)
         self.hass.async_create_task(
             self.hass.services.async_call(
                 "input_text",
                 "set_value",
-                {"entity_id": "input_text.v6_battery_plan", "value": raw},
+                {"entity_id": "input_text.v6_battery_plan", "value": compact[:255]},
             )
         )
+        self._write_plan_display(plan, start_hour)
+
+    def _compact_plan_string(self, plan: list, start_hour: int) -> str:
+        """Build compact plan string that fits in 255 chars."""
+        import json
+        from datetime import date as _date
+
+        actions = "".join(hp.action for hp in plan)
+        payload = {
+            "d": _date.today().isoformat(),
+            "sh": start_hour,
+            "hz": len(plan),
+            "h": actions,
+        }
+        return json.dumps(payload, separators=(",", ":"))
+
+    def _write_plan_display(self, plan: list, start_hour: int) -> None:
+        """Write human-readable plan split by day (today/tomorrow/day3)."""
+        # Split plan hours into days
+        days: dict[str, list[str]] = {"today": [], "tomorrow": [], "day3": []}
+        for i, hp in enumerate(plan):
+            hour = (start_hour + i) % 24
+            # Determine which day this hour belongs to
+            hours_from_now = i
+            if hours_from_now < (24 - start_hour):
+                day_key = "today"
+            elif hours_from_now < (24 - start_hour) + 24:
+                day_key = "tomorrow"
+            else:
+                day_key = "day3"
+
+            label = {"c": "⚡Ladda", "d": "🔋Urladda", "g": "🔌Nät"}.get(hp.action)
+            if label:
+                days[day_key].append(f"{hour:02d}:{label} {int(hp.price)}öre")
+
+        # Write each day to its own input_text
+        entities = {
+            "today": "input_text.v6_battery_plan_today",
+            "tomorrow": "input_text.v6_battery_plan_tomorrow",
+            "day3": "input_text.v6_battery_plan_day3",
+        }
+        for day_key, entity_id in entities.items():
+            entries = days.get(day_key, [])
+            display = " | ".join(entries) if entries else "Idle"
+            with contextlib.suppress(Exception):
+                self.hass.async_create_task(
+                    self.hass.services.async_call(
+                        "input_text",
+                        "set_value",
+                        {"entity_id": entity_id, "value": display[:255]},
+                    )
+                )
 
     async def _execute(self, state: CarmaboxState) -> None:
         """Execute current action based on state.
