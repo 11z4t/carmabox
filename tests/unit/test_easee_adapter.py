@@ -234,6 +234,82 @@ class TestChargerIdFallback:
 SHELLY_PREFIX = "shellypro3em_8813bffea620"
 
 
+class TestReasonForNoCurrentRecovery:
+    """EXP-05: Reason-for-no-current monitoring + auto-recovery."""
+
+    def test_needs_recovery_waiting_in_fully(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", "51"),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.needs_recovery is True
+
+    def test_needs_recovery_max_limit_low(self) -> None:
+        """max_charger_limit < 10A indicates reboot/corruption."""
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+            (f"sensor.{PREFIX}_max_charger_limit", "6"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.needs_recovery is True
+
+    def test_no_recovery_needed_normal(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.needs_recovery is False
+
+    @pytest.mark.asyncio
+    async def test_try_recover_waiting_in_fully(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", "51"),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        result = await adapter.try_recover()
+        assert result == "waiting_in_fully_fix"
+        # Should have called ensure_initialized
+        assert hass.services.async_call.call_count > 0
+
+    @pytest.mark.asyncio
+    async def test_try_recover_reboot(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+            (f"sensor.{PREFIX}_max_charger_limit", "6"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        result = await adapter.try_recover()
+        assert result == "reboot_reinit"
+
+    @pytest.mark.asyncio
+    async def test_try_recover_none_when_ok(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", ""),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        result = await adapter.try_recover()
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_try_recover_circuit_low(self) -> None:
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", "6"),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        result = await adapter.try_recover()
+        assert result == "circuit_low_fix"
+
+    def test_max_charger_limit_reading(self) -> None:
+        hass = _make_hass((f"sensor.{PREFIX}_max_charger_limit", "16"))
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        assert adapter.max_charger_limit_a == 16.0
+
+
 class TestShellyPro3EMIntegration:
     """EXP-01: Shelly Pro 3EM as primary EV power sensor."""
 

@@ -229,6 +229,62 @@ class EaseeAdapter(EVAdapter):
         return self._str_state(f"sensor.{self.prefix}_reason_for_no_current")
 
     @property
+    def max_charger_limit_a(self) -> float:
+        """Current max_charger_limit (hard ceiling). Should be >= 10A."""
+        return self._state("max_charger_limit")
+
+    @property
+    def needs_recovery(self) -> bool:
+        """True if Easee is in a blocked state that requires recovery.
+
+        EXP-05: Detects common block reasons and reboot-induced limit resets.
+        """
+        # Reason codes that indicate recoverable block
+        reason = self.reason_for_no_current
+        if reason in ("51", "WaitingInFully", "6", "MaxCircuitCurrentTooLow"):
+            return True
+        # EXP-09: Detect reboot (max_charger_limit drops below safe floor)
+        return self.max_charger_limit_a > 0 and self.max_charger_limit_a < _MAX_LIMIT_FLOOR
+
+    async def try_recover(self) -> str | None:
+        """Attempt to recover from a blocked state.
+
+        Returns recovery action taken, or None if no recovery needed.
+        EXP-05 + EXP-09: Handles waiting_in_fully, reboot, max_limit reset.
+        """
+        reason = self.reason_for_no_current
+
+        # Case 1: max_charger_limit too low (reboot or corruption)
+        if self.max_charger_limit_a > 0 and self.max_charger_limit_a < _MAX_LIMIT_FLOOR:
+            _LOGGER.warning(
+                "Easee: max_charger_limit=%dA < %dA — reboot detected, re-initializing",
+                int(self.max_charger_limit_a),
+                _MAX_LIMIT_FLOOR,
+            )
+            await self.ensure_initialized(force=True)
+            return "reboot_reinit"
+
+        # Case 2: WaitingInFully (reason 51) — max_limit too low
+        if reason in ("51", "WaitingInFully"):
+            _LOGGER.warning("Easee: WaitingInFully — raising max_limit to %dA", _MAX_LIMIT_FLOOR)
+            await self.ensure_initialized(force=True)
+            return "waiting_in_fully_fix"
+
+        # Case 3: MaxCircuitCurrentTooLow (reason 6)
+        if reason in ("6", "MaxCircuitCurrentTooLow"):
+            _LOGGER.warning("Easee: MaxCircuitCurrentTooLow — re-init + override")
+            await self.ensure_initialized(force=True)
+            if self.charger_id:
+                await self._safe_call(
+                    "easee",
+                    "action_command",
+                    {"charger_id": self.charger_id, "action_command": "resume"},
+                )
+            return "circuit_low_fix"
+
+        return None
+
+    @property
     def phase_count(self) -> int:
         mode = self._str_state(f"sensor.{self.prefix}_phase_mode")
         return 3 if mode == "three" else 1
