@@ -162,6 +162,48 @@ class TestGoodWeBMSLimits:
         assert adapter.soh_pct == 100.0
 
 
+class TestGoodWePeakShavingLimit:
+    """EXP-03: set_peak_shaving_limit writes to correct entity with clamp."""
+
+    @pytest.mark.asyncio
+    async def test_set_peak_shaving_limit(self) -> None:
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_peak_shaving_limit(500)
+        hass.services.async_call.assert_called_once_with(
+            "number",
+            "set_value",
+            {"entity_id": "number.goodwe_kontor_peak_shaving_power_limit", "value": 500},
+        )
+
+    @pytest.mark.asyncio
+    async def test_set_peak_shaving_limit_clamp_max(self) -> None:
+        """Values > 10000W clamped to 10000W."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_peak_shaving_limit(15000)
+        call = hass.services.async_call.call_args
+        assert call[0][2]["value"] == 10000
+
+    @pytest.mark.asyncio
+    async def test_set_peak_shaving_limit_clamp_min(self) -> None:
+        """Negative values clamped to 0W."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_peak_shaving_limit(-100)
+        call = hass.services.async_call.call_args
+        assert call[0][2]["value"] == 0
+
+    @pytest.mark.asyncio
+    async def test_set_peak_shaving_limit_zero(self) -> None:
+        """0W = battery covers ALL grid import."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_peak_shaving_limit(0)
+        call = hass.services.async_call.call_args
+        assert call[0][2]["value"] == 0
+
+
 class TestEaseeAdapter:
     def test_read_status(self) -> None:
         hass = _make_hass(("sensor.easee_home_12840_status", "charging"))

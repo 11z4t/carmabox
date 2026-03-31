@@ -25,6 +25,7 @@ _LOGGER = logging.getLogger(__name__)
 _RETRY_DELAY_S = 5
 _MODBUS_MIN_INTERVAL_S = 0.1  # Min 100ms between Modbus calls
 _ADAPTER_RATE_LIMIT_S = 2.0  # MANIFEST 10.2: max 1 call per 2s per adapter
+_MAX_PEAK_SHAVING_W = 10000  # Safety clamp: inverter rated power
 
 
 class GoodWeAdapter(InverterAdapter):
@@ -307,13 +308,39 @@ class GoodWeAdapter(InverterAdapter):
         return True
 
     async def set_discharge_limit(self, watts: int) -> bool:
-        """Set peak shaving power limit (discharge rate)."""
-        _LOGGER.info("GoodWe %s: discharge limit → %dW", self.prefix, watts)
+        """Set EMS power limit (discharge rate in discharge_pv mode)."""
+        _LOGGER.info("GoodWe %s: discharge limit -> %dW", self.prefix, watts)
         return await self._safe_call(
             "number",
             "set_value",
             {
                 "entity_id": f"number.goodwe_{self.prefix}_ems_power_limit",
+                "value": watts,
+            },
+        )
+
+    async def set_peak_shaving_limit(self, watts: int) -> bool:
+        """Set peak shaving power limit (register 47542).
+
+        EXP-03: In peak_shaving operation mode, this controls the grid import
+        target. Battery compensates everything ABOVE this limit.
+
+        GoodWe support recommends peak_shaving mode + Modbus control for
+        optimal reactive discharge. The firmware automatically adjusts
+        discharge rate based on actual grid power vs this target.
+
+        Args:
+            watts: Max grid import allowed (W). Battery covers the rest.
+                   0 = battery covers ALL grid import.
+                   Clamped to 0-10000W for safety.
+        """
+        watts = max(0, min(watts, _MAX_PEAK_SHAVING_W))
+        _LOGGER.info("GoodWe %s: peak_shaving_power_limit -> %dW", self.prefix, watts)
+        return await self._safe_call(
+            "number",
+            "set_value",
+            {
+                "entity_id": f"number.goodwe_{self.prefix}_peak_shaving_power_limit",
                 "value": watts,
             },
         )
