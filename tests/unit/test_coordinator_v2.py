@@ -171,6 +171,18 @@ class TestNightEV:
         c.cycle(_state(hour=2, ev_soc=76))
         assert not c.night_ev_active
 
+    def test_night_ev_keep_alive(self):
+        """Subsequent cycles with night_ev_active emit keep-alive start command."""
+        c = CoordinatorV2()
+        c._startup_confirmed = True
+        c.night_ev_active = True
+        r = c.cycle(_state(hour=2, ev_soc=60))
+        assert c.night_ev_active
+        assert r.ev_command is not None
+        assert r.ev_command["action"] == "start"
+        assert r.ev_command["amps"] == 6
+        assert "night_ev_keep" in r.reason
+
     def test_no_night_ev_daytime(self):
         c = CoordinatorV2()
         c._startup_confirmed = True

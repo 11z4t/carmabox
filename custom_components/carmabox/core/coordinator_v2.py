@@ -379,8 +379,13 @@ class CoordinatorV2:
                 ev_cmd = {"action": "stop", "amps": 0, "override_schedule": False}
                 reason_parts.append("night_ev_stop")
             elif ev_cmd is None:
-                # Keep night EV running — don't let plan executor override
-                pass
+                # Keep night EV running — re-assert charge command each cycle
+                ev_cmd = {
+                    "action": "start",
+                    "amps": cfg.ev_min_amps,
+                    "override_schedule": False,
+                }
+                reason_parts.append("night_ev_keep")
 
         # ── 8. SURPLUS CHAIN ────────────────────────────────────
         consumers = [
