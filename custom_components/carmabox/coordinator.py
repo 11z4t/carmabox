@@ -1692,7 +1692,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     for adapter in self.inverter_adapters:
                         await adapter.set_fast_charging(on=False)
             except Exception as err:
-                _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err)
+                _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err, exc_info=True)
 
     # ── PLAT-1099: EMS Mode Enforcement — runs EVERY 30s cycle ──────
     # Extracted from _execute_v2() so it runs even when Grid Guard acts.
@@ -1908,6 +1908,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "GRID GUARD: Kommando %s misslyckades: %s",
                     action,
                     err,
+                    exc_info=True,
                 )
 
     def _evaluate_grid_guard(self, state: CarmaboxState) -> GridGuardResult:
@@ -2058,6 +2059,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _LOGGER.error(
                 "CARMA Box: update cycle TIMEOUT after 120s (%d consecutive) — Modbus/service hung",
                 self._consecutive_errors,
+                exc_info=True,
             )
             return getattr(self, "data", None) or CarmaboxState()
         except Exception as err:
@@ -2120,7 +2122,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         elif fc_state is None:
                             all_off = False  # Sensor inte redo ännu
                     except Exception:
-                        _LOGGER.error("STARTUP SAFETY: %s — adapter ej redo", adapter.prefix)
+                        _LOGGER.error(
+                            "STARTUP SAFETY: %s — adapter ej redo",
+                            adapter.prefix,
+                            exc_info=True,
+                        )
                         all_off = False
                 self._fast_charge_authorized = False
                 if all_off:
@@ -2143,7 +2149,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             # PLAT-1032: max_limit removed
                             # adapter handles via ensure_initialized()
                         except Exception:
-                            _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades")
+                            _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades", exc_info=True)
 
             # Restore persistent state on first run
             if not self._savings_loaded:
@@ -6552,6 +6558,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     service,
                     entity_id,
                     attempt + 1,
+                    exc_info=True,
                 )
                 break  # No point retrying a missing service
             except HomeAssistantError as err:
@@ -6562,6 +6569,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     entity_id,
                     err,
                     attempt + 1,
+                    exc_info=True,
                 )
                 if attempt == 0:
                     await asyncio.sleep(5)
