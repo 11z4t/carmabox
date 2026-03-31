@@ -1042,7 +1042,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
         exec_state = ExecutorState(
-            grid_import_w=max(0, state.grid_power_w),
+            grid_import_w=state.grid_power_w,  # PLAT-1134: raw value, negative=export
             pv_power_w=state.pv_power_w,
             battery_soc_1=state.battery_soc_1,
             battery_soc_2=state.battery_soc_2,
@@ -1168,6 +1168,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # PLAT-1099: EMS enforcement moved to _enforce_ems_modes() — runs
         # from main update loop EVERY cycle, even when Grid Guard acts.
         await self._enforce_ems_modes()
+
+        # P0-FIX: Record decision so sensor.carma_box_decision updates
+        await self._record_decision(
+            state,
+            action=cmd.battery_action,
+            reason=cmd.reason,
+            discharge_w=cmd.battery_discharge_w,
+        )
 
         # ── Natt-EV-workflow: starta EV + urladdning automatiskt ──
         is_night = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
@@ -1594,7 +1602,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 min_w=DEFAULT_BAT_MIN_CHARGE_W,
                 max_w=DEFAULT_BAT_MAX_CHARGE_W,
                 current_w=bat_power,
-                is_running=bat_power > 100 and not bat_full,
+                # PLAT-1134: ready if charging OR not full
+                is_running=bat_power > 100 or not bat_full,
             )
         )
         # Miner
@@ -1645,8 +1654,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     elif alloc.action == "stop":
                         await self._cmd_ev_stop()
                 elif alloc.id == "battery" and alloc.action in ("start", "increase"):
+                    # PLAT-1134: fast_charging ON to FORCE PV absorption
+                    charge_w = int(alloc.target_w) if alloc.target_w else 3000
+                    charge_pct = min(100, max(10, int(charge_w / 60)))
                     for adapter in self.inverter_adapters:
                         await adapter.set_ems_mode("charge_pv")
+                        await adapter.set_fast_charging(
+                            on=True,
+                            power_pct=charge_pct,
+                            soc_target=100,
+                            authorized=True,
+                        )
+                elif alloc.id == "battery" and alloc.action in ("stop", "decrease"):
+                    # PLAT-1134: Turn OFF fast_charging when surplus gone
+                    for adapter in self.inverter_adapters:
                         await adapter.set_fast_charging(on=False)
             except Exception as err:
                 _LOGGER.error("Surplus allocation %s failed: %s", alloc.id, err)

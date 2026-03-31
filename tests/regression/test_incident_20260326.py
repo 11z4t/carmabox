@@ -10,6 +10,7 @@ enforcement) prevents recurrence.
 from __future__ import annotations
 
 import asyncio
+import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -124,7 +125,18 @@ class TestExecutorFollowsPlan:
             result = await adapter.set_ems_mode("discharge_pv")
 
         assert result is True
-        hass.services.async_call.assert_called_once_with(
+        # set_ems_mode now writes BOTH legacy input_select (desired_mode)
+        # AND select (ems_mode) — 2 calls expected (PLAT-1134 dual-write)
+        calls = hass.services.async_call.call_args_list
+        assert len(calls) == 2
+        # First: legacy desired_mode
+        assert calls[0] == unittest.mock.call(
+            "input_select",
+            "select_option",
+            {"entity_id": "input_select.goodwe_kontor_desired_mode", "option": "discharge"},
+        )
+        # Second: actual EMS mode
+        assert calls[1] == unittest.mock.call(
             "select",
             "select_option",
             {"entity_id": "select.goodwe_kontor_ems_mode", "option": "discharge_pv"},
@@ -332,4 +344,5 @@ class TestModbusSerializationRegression:
             result = await adapter.set_ems_mode("charge_pv")
 
         assert result is False
-        assert hass.services.async_call.call_count == 2  # 1 + 1 retry
+        # 1 legacy input_select (best-effort, suppressed) + 2 select retries = 3
+        assert hass.services.async_call.call_count == 3

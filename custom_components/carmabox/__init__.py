@@ -7,8 +7,6 @@ electricity costs and peak power charges.
 
 from __future__ import annotations
 
-import contextlib
-import importlib
 import logging
 import sys
 from pathlib import Path
@@ -25,16 +23,8 @@ from .const import DOMAIN, PLATFORMS
 if TYPE_CHECKING:
     from homeassistant.config_entries import ConfigEntry
 
-# IT-2466: Invalidate module cache on reload to pick up hotfixes
-for _mod in [
-    "custom_components.carmabox.coordinator",
-    "custom_components.carmabox.optimizer.scheduler",
-    "custom_components.carmabox.optimizer.models",
-    "custom_components.carmabox.optimizer.predictor",
-]:
-    if _mod in sys.modules:
-        with contextlib.suppress(Exception):
-            importlib.reload(sys.modules[_mod])
+# IT-2466: Module reload REMOVED — caused silent failures that left
+# coordinator in broken state (P0 2026-03-31). HA native reload handles this.
 
 # NC-12: Feature flag — use bridge (V2) or legacy coordinator
 # Shadow mode: bridge runs V2 cycle + logs decisions, but does NOT execute commands
