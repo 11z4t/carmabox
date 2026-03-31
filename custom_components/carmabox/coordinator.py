@@ -2190,6 +2190,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "target_kw": round(self.target_kw, 2),
                     "ev_enabled": self._ev_enabled,
                     "version": "4.6.0",
+                    "plan_hours": len(self.plan),
+                    "plan_step": getattr(self, "_last_plan_step", ""),
+                    "errors": getattr(self, "_consecutive_errors", 0),
                 }
                 with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
@@ -2967,10 +2970,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._write_plan_to_sensor_single(start_hour)
 
             self._daily_plans += 1
+            self._last_plan_step = f"OK:{len(self.plan)}h"
             # CARMA-P0-FIXES Task 4: Mark runtime as dirty — will be saved in next async_update_data
             self._runtime_dirty = True
 
         except Exception as err:
+            self._last_plan_step = f"CRASH@{_step}"
             _LOGGER.exception("PLANNER CRASH at step '%s': %s", _step, err)
             # Write error state so dashboard shows WHY plan failed
             with contextlib.suppress(Exception):
