@@ -105,3 +105,56 @@ async def test_invalid_mode_rejected(mock_adapter):
     result = await mock_adapter.set_ems_mode("invalid_mode", verify=True)
     assert result is False
     mock_adapter._safe_call.assert_not_called()
+
+
+# ── EXP-EPIC-SWEEP edge cases ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_safe_call_fails_skips_verify(mock_adapter):
+    """EXP-08 edge: _safe_call returns False → return False without verifying.
+
+    If the write itself failed, reading back the mode is pointless.
+    Verify sleep should NOT be called.
+    """
+    mock_adapter._safe_call = AsyncMock(return_value=False)
+
+    with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
+        result = await mock_adapter.set_ems_mode("charge_pv", verify=True)
+
+    assert result is False
+    mock_sleep.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_verify_with_discharge_pv_mode(mock_adapter):
+    """EXP-08 edge: verify works for all valid modes, not just charge_pv."""
+    mock_adapter._safe_call = AsyncMock(return_value=True)
+
+    from unittest.mock import PropertyMock, patch
+
+    with patch.object(type(mock_adapter), "ems_mode", new_callable=PropertyMock) as mock_ems:
+        mock_ems.return_value = "discharge_pv"
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await mock_adapter.set_ems_mode("discharge_pv", verify=True)
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_verify_retry_write_succeeds_but_second_verify_fails(mock_adapter):
+    """EXP-08 edge: both writes succeed but second verify still fails → return False.
+
+    Write OK → verify fails → retry write OK → second verify still fails → False.
+    This is the permanent failure path (e.g., Modbus register not accepting value).
+    """
+    from unittest.mock import PropertyMock, patch
+
+    mock_adapter._safe_call = AsyncMock(return_value=True)
+
+    with patch.object(type(mock_adapter), "ems_mode", new_callable=PropertyMock) as mock_ems:
+        mock_ems.return_value = "battery_standby"  # Both verifications fail
+        with patch("asyncio.sleep", new_callable=AsyncMock):
+            result = await mock_adapter.set_ems_mode("charge_pv", verify=True)
+
+    assert result is False  # Both verifications failed → permanent failure

@@ -54,3 +54,36 @@ class TestRampStepLogic:
     def test_ramp_steps_constant(self) -> None:
         """EV_RAMP_STEPS must be [6, 8, 10]."""
         assert EV_RAMP_STEPS == [6, 8, 10]
+
+    # ── EXP-EPIC-SWEEP edge cases ────────────────────────────────
+
+    def test_ramp_up_from_non_standard_current(self) -> None:
+        """EXP-04 edge: current=7 (not in steps) → next step = 8.
+
+        Handles manual or external changes that leave current between steps.
+        """
+        assert self._next_ramp_step(7, 10) == 8
+
+    def test_ramp_up_from_zero(self) -> None:
+        """EXP-04 edge: current=0 (charger just enabled) → first step = 6."""
+        assert self._next_ramp_step(0, 6) == 6
+        assert self._next_ramp_step(0, 10) == 6  # 6 is first step above 0
+
+    def test_ramp_up_from_above_max_step(self) -> None:
+        """EXP-04 edge: current=11 (above all steps) → same as target (ramp down)."""
+        # When current > target, it's a ramp-down → direct
+        assert self._next_ramp_step(11, 10) == 10
+
+    def test_ramp_to_target_same_as_next_step(self) -> None:
+        """EXP-04 edge: target == next step → single step, no overshoot."""
+        # From 6, target=8 = exactly the next step
+        assert self._next_ramp_step(6, 8) == 8
+        # From 8, target=10 = exactly the next step
+        assert self._next_ramp_step(8, 10) == 10
+
+    def test_ramp_up_target_between_steps(self) -> None:
+        """EXP-04 edge: target=7 (between steps) — first step = 6 (no overshoot).
+
+        Step 6 is first step > current=5, and min(6, 7)=6 so we go to 6 not 7.
+        """
+        assert self._next_ramp_step(5, 7) == 6

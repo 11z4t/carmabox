@@ -462,3 +462,57 @@ class TestShellyPro3EMIntegration:
             hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
         )
         assert abs(adapter.power_kw - 1.495) < 0.01  # 6.5A x 230V / 1000
+
+    # ── EXP-EPIC-SWEEP edge cases ─────────────────────────────────
+
+    def test_power_w_shelly_below_threshold_falls_back(self) -> None:
+        """EXP-01 edge: Shelly = 9.2W (below 10W threshold) → falls back to Easee.
+
+        The threshold is `shelly > 10` (strict greater-than).
+        Readings ≤ 10W are treated as noise and trigger Easee fallback.
+        """
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "0.04"),  # 0.04A * 230V = 9.2W ≤ 10
+            (f"sensor.{PREFIX}_power", "2.0"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        # shelly_power_w = 9.2W → NOT > 10 → falls back to Easee (2000W)
+        assert adapter.power_w == 2000.0
+
+    def test_power_w_shelly_just_above_threshold_wins(self) -> None:
+        """EXP-01 edge: Shelly = 10.5W (just above threshold) → Shelly wins."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "0.0457"),  # ~10.5W
+            (f"sensor.{PREFIX}_power", "2.0"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        shelly_w = 0.0457 * 230  # ≈ 10.511W > 10 → Shelly wins
+        assert abs(adapter.power_w - shelly_w) < 0.1
+
+    def test_shelly_phase_powers_with_unavailable_voltage_defaults_to_230(self) -> None:
+        """EXP-01 edge: phase voltage unavailable → defaults to 230V."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_c_current", "10.0"),
+            # No c_voltage entity → state_by_id returns default=230.0
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        phases = adapter.shelly_phase_powers_w
+        # Missing voltage → default 230V * 10A = 2300W
+        assert phases["c"] == 2300.0
+
+    def test_power_w_both_shelly_and_easee_zero(self) -> None:
+        """EXP-01 edge: both Shelly and Easee show 0W → returns 0."""
+        hass = _make_hass(
+            (f"sensor.{SHELLY_PREFIX}_current", "0.0"),
+            (f"sensor.{PREFIX}_power", "0.0"),
+        )
+        adapter = EaseeAdapter(
+            hass, "dev1", PREFIX, charger_id=CHARGER_ID, shelly_3em_prefix=SHELLY_PREFIX
+        )
+        assert adapter.power_w == 0.0
