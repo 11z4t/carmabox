@@ -1,5 +1,8 @@
 __pycache__/
 *.pyc
+*.pyo
+*.retired
+*.tmp
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -7,3 +10,6 @@ __pycache__/
 dist/
 build/
 .venv/
+.coverage
+htmlcov/
+coverage.xml
