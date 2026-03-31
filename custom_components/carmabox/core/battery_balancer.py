@@ -23,6 +23,12 @@ from dataclasses import dataclass
 COLD_DISCHARGE_BLOCK_C = 0.0  # Below 0°C: block discharge entirely
 COLD_DISCHARGE_DERATING_C = 4.0  # 0-4°C: reduce discharge by 50%
 
+# EXP-06: SoH derating thresholds
+SOH_SEVERE_THRESHOLD_PCT = 70.0  # Below → heavy derating
+SOH_MODERATE_THRESHOLD_PCT = 80.0  # Below → moderate derating
+SOH_SEVERE_DERATING_PCT = 10.0  # Add to min_soc when SoH < severe
+SOH_MODERATE_DERATING_PCT = 5.0  # Add to min_soc when SoH < moderate
+
 
 @dataclass
 class BatteryInfo:
@@ -71,11 +77,11 @@ def effective_min_soc(bat: BatteryInfo) -> float:
     """
     base = bat.min_soc_cold if bat.cell_temp_c < bat.cold_temp_c else bat.min_soc
 
-    # SoH derating — aged cells need higher floor
-    if bat.soh_pct < 70:
-        base += 10.0
-    elif bat.soh_pct < 80:
-        base += 5.0
+    # EXP-06: SoH derating — aged cells need higher floor
+    if bat.soh_pct < SOH_SEVERE_THRESHOLD_PCT:
+        base += SOH_SEVERE_DERATING_PCT
+    elif bat.soh_pct < SOH_MODERATE_THRESHOLD_PCT:
+        base += SOH_MODERATE_DERATING_PCT
 
     return base
 
