@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 import contextlib
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
+from .core.commands import _cmd_grid_charge
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -3367,8 +3368,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )
             if charge_result.ok:
-                await self._cmd_grid_charge(
-                    state
+                await _cmd_grid_charge(
+                    self, state
                 )  # CARMA-P0-FIXES Task 2: Use dedicated grid charge
                 self._track_rule("RULE_1_5", "grid_charge")
                 await self._record_decision(
@@ -6504,10 +6505,6 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     async def _cmd_charge_pv(self, state: CarmaboxState) -> None:
         """Command battery to charge from PV."""
         await self._execution_engine.cmd_charge_pv(state)
-
-    async def _cmd_grid_charge(self, state: CarmaboxState) -> None:
-        """Command battery to charge from grid."""
-        await self._execution_engine.cmd_grid_charge(state)
 
     async def _cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:
         """Command battery to standby mode."""
