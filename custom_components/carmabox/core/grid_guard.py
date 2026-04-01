@@ -21,6 +21,8 @@ from typing import Any
 
 ACTION_LADDER_HYSTERESIS_S: float = 60.0  # PLAT-1164: min seconds between escalations
 
+_EV_ACTIVE_MIN_W = 100  # W — minimum EV power to consider it actually charging
+
 
 @dataclass
 class GridGuardConfig:
@@ -441,7 +443,7 @@ class GridGuard:
             self._actions_taken.append(consumer.id)
 
         # Step 5: Reduce EV amps (WARN level and above)
-        if remaining > 0 and ev_power_w > 100 and ev_amps > 0:
+        if remaining > 0 and ev_power_w > _EV_ACTIVE_MIN_W and ev_amps > 0:
             w_per_amp = 230 * ev_phase_count
             amps_to_reduce = math.ceil(remaining / w_per_amp)
             new_amps = max(self.config.ev_min_amps, ev_amps - amps_to_reduce)
@@ -459,7 +461,7 @@ class GridGuard:
                 self._actions_taken.append("ev_reduced")
 
         # Step 6: Pause EV completely (STOP level and above)
-        if level in ("STOP", "EMERGENCY") and remaining > 0 and ev_power_w > 100:
+        if level in ("STOP", "EMERGENCY") and remaining > 0 and ev_power_w > _EV_ACTIVE_MIN_W:
             commands.append({"action": "pause_ev"})
             remaining -= ev_power_w
             reasons.append(f"EV pausad ({ev_power_w:.0f}W)")
