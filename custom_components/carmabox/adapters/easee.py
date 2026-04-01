@@ -13,6 +13,7 @@ KEY INSIGHT (2026-03-23):
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from typing import TYPE_CHECKING
 
@@ -325,8 +326,16 @@ class EaseeAdapter(EVAdapter):
     # ── Write ─────────────────────────────────────────────────
 
     async def enable(self) -> bool:
+        """Enable charger: override schedule + turn on + resume."""
         await self.ensure_initialized()
         _LOGGER.info("Easee: enable charger")
+        # Override Easee internal schedule FIRST (blocks charging otherwise)
+        with contextlib.suppress(Exception):
+            await self.hass.services.async_call(
+                "button",
+                "press",
+                {"entity_id": f"button.{self.prefix}_override_schedule"},
+            )
         ok = await self._safe_call(
             "switch",
             "turn_on",
@@ -339,6 +348,13 @@ class EaseeAdapter(EVAdapter):
                 "action_command",
                 {"charger_id": self.charger_id, "action_command": "resume"},
             )
+        # Verify enabled after 1s (detect cloud interference)
+        if ok:
+            await asyncio.sleep(1.0)
+            actual = self._str_state(f"switch.{self.prefix}_is_enabled")
+            if actual != "on":
+                _LOGGER.error("Easee: enable FAILED — is_enabled=%s after 1s", actual)
+                return False
         return ok
 
     async def disable(self) -> bool:
