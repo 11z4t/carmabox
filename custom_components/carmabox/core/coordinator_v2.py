@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from ..const import (
     DEFAULT_EV_MAX_AMPS,
@@ -102,14 +103,14 @@ class SystemState:
 class CycleResult:
     """Result of one coordinator cycle."""
 
-    battery_commands: list[dict]  # Per adapter: {id, mode, power_limit, fast_charging}
-    ev_command: dict | None  # {action, amps, override_schedule}
-    surplus_actions: list[dict]
+    battery_commands: list[dict[str, Any]]  # Per adapter: {id, mode, power_limit, fast_charging}
+    ev_command: dict[str, Any] | None  # {action, amps, override_schedule}
+    surplus_actions: list[dict[str, Any]]
     grid_guard_status: str
     plan_action: str
     reason: str
-    breaches: list[dict]
-    notifications: list[dict]
+    breaches: list[dict[str, Any]]
+    notifications: list[dict[str, Any]]
 
 
 class CoordinatorV2:
@@ -289,11 +290,11 @@ class CoordinatorV2:
                 ev_min_amps=cfg.ev_min_amps,
                 ev_max_amps=cfg.ev_max_amps,
             )
-            cmd = execute_plan_hour(planned, exec_state, exec_cfg)
-            reason_parts.append(f"exec:{cmd.battery_action}")
+            exec_cmd = execute_plan_hour(planned, exec_state, exec_cfg)
+            reason_parts.append(f"exec:{exec_cmd.battery_action}")
 
             # ── 6. BATTERY BALANCER ─────────────────────────────
-            if cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
+            if exec_cmd.battery_action == "discharge" and exec_cmd.battery_discharge_w > 0:
                 bats = [
                     BatteryInfo(
                         "kontor",
@@ -310,7 +311,7 @@ class CoordinatorV2:
                         min_soc=cfg.battery_min_soc,
                     ),
                 ]
-                bal = calculate_proportional_discharge(bats, cmd.battery_discharge_w)
+                bal = calculate_proportional_discharge(bats, exec_cmd.battery_discharge_w)
                 for j, alloc in enumerate(bal.allocations):
                     bat_commands.append(
                         {
@@ -320,7 +321,7 @@ class CoordinatorV2:
                             "fast_charging": False,
                         }
                     )
-            elif cmd.battery_action == "charge_pv":
+            elif exec_cmd.battery_action == "charge_pv":
                 for j in range(2):
                     bat_commands.append(
                         {
@@ -330,7 +331,7 @@ class CoordinatorV2:
                             "fast_charging": False,
                         }
                     )
-            elif cmd.battery_action == "standby":
+            elif exec_cmd.battery_action == "standby":
                 for j in range(2):
                     bat_commands.append(
                         {
@@ -461,7 +462,7 @@ class CoordinatorV2:
             notifications=guardian_report.notifications,
         )
 
-    def get_persistent_state(self) -> dict:
+    def get_persistent_state(self) -> dict[str, Any]:
         """State to persist for restart survival."""
         return {
             "night_ev_active": self.night_ev_active,

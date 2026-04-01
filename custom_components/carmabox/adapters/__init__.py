@@ -43,9 +43,36 @@ class InverterAdapter(ABC):
     async def set_discharge_limit(self, watts: int) -> bool:
         """Set discharge power limit. Returns True on success."""
 
+    @property
+    def max_discharge_w(self) -> int:
+        """Max discharge power (W) from BMS limits. Override per adapter."""
+        return 0
+
+    @property
+    def max_charge_w(self) -> int:
+        """Max charge power (W) from BMS limits. Override per adapter."""
+        return 0
+
+    async def set_fast_charging(
+        self,
+        on: bool,
+        power_pct: int = 100,
+        soc_target: int = 100,
+        authorized: bool = False,
+    ) -> bool:
+        """Set fast charging. Override per adapter. Default: no-op."""
+        return True
+
+    @property
+    def fast_charging_on(self) -> bool:
+        """True if fast charging is currently enabled. Override per adapter."""
+        return False
+
 
 class EVAdapter(ABC):
     """Contract for EV charger adapters (Easee, Zaptec, Wallbox)."""
+
+    prefix: str = ""
 
     @property
     @abstractmethod
@@ -87,6 +114,32 @@ class EVAdapter(ABC):
     async def reset_to_default(self) -> bool:
         """Reset charger to safe default. Override per adapter."""
         return await self.set_current(6)
+
+    async def ensure_initialized(self, force: bool = False) -> None:  # noqa: B027
+        """Ensure charger is initialized. Override per adapter."""
+
+    @property
+    def charging_power_at_amps(self) -> float:
+        """Charging power at current amps setting (W). Override per adapter."""
+        return 0.0
+
+    @property
+    def plug_connected(self) -> bool:
+        """True if plug is physically connected. Override per adapter."""
+        return False
+
+    def check_unexpected_disconnect(self, was_charging: bool) -> str | None:
+        """Check for unexpected disconnect. Override per adapter."""
+        return None
+
+    @property
+    def needs_recovery(self) -> bool:
+        """True if charger needs recovery. Override per adapter."""
+        return False
+
+    async def try_recover(self) -> str | None:
+        """Try to recover from blocked state. Override per adapter."""
+        return None
 
 
 class PriceAdapter(ABC):
@@ -159,3 +212,13 @@ class WeatherAdapter(ABC):
     @abstractmethod
     def wind_gust_ms(self) -> float:
         """Maximum wind gust speed (m/s)."""
+
+    @property
+    def pressure_mbar(self) -> float:
+        """Barometric pressure (mbar). Override per adapter."""
+        return 1013.25
+
+    @property
+    def solar_radiation_wm2(self) -> float:
+        """Solar radiation (W/m²). Override per adapter."""
+        return 0.0

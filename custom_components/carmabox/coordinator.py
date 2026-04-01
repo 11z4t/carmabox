@@ -1607,7 +1607,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _execute_grid_guard_commands(
         self,
-        commands: list[dict],
+        commands: list[dict[str, Any]],
         state: CarmaboxState,
     ) -> None:
         """Execute Grid Guard commands — actually control hardware."""
@@ -2317,7 +2317,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                                     "pv_estimate10", _entry.get("pv_estimate", 0)
                                 )
                             except (ValueError, KeyError, TypeError):
-                                pass
+                                _LOGGER.debug("Solcast raw parse skip", exc_info=True)
                         pv_tomorrow = solcast.tomorrow_hourly_kw
                         pv_forecast = pv_today[start_hour:] + pv_tomorrow
                         _LOGGER.info(

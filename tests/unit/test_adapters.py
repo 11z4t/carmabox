@@ -187,8 +187,8 @@ class TestGoodWeWriteVerification:
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         result = await adapter.set_ems_mode("charge_pv", verify=False)
         assert result is True
-        # 2 calls: legacy desired_mode + EMS mode select (no retry)
-        assert hass.services.async_call.call_count == 2
+        # 3 calls: legacy desired_mode + EMS mode select + ems_power_limit reset (charge_pv)
+        assert hass.services.async_call.call_count == 3
 
     @pytest.mark.asyncio
     async def test_set_ems_mode_verify_mismatch_retries(self) -> None:
