@@ -4025,6 +4025,18 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             )
             await self._cmd_ev_stop()
 
+        # W4b: EMERGENCY — battery depleted + EV still charging = STOP NOW
+        if self._ev_enabled and state.ev_power_w > 100 and state.total_battery_soc <= self.min_soc:
+            _LOGGER.error(
+                "WATCHDOG W4b: Battery %.0f%% ≤ min %.0f%% + EV %.0fW → EMERGENCY STOP",
+                state.total_battery_soc,
+                self.min_soc,
+                state.ev_power_w,
+            )
+            await self._cmd_ev_stop()
+            self._night_ev_active = False
+            self._nev_state = "BATTERY_DEPLETED"
+
         # W5: High price + battery capacity + idle
         if (
             state.current_price > price_expensive
@@ -5955,6 +5967,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     # Auto-calibrate seasonal factor from actual vs predicted
                     if ph.grid_kw > 0.1 and self.predictor.is_trained:
                         from datetime import datetime as _dt
+
                         self.predictor.update_seasonal_factor(
                             _dt.now().month,
                             actual_grid,

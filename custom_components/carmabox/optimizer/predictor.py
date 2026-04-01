@@ -179,9 +179,7 @@ class ConsumptionPredictor:
             correction = self.get_correction_factor(h)
             # Temperature-aware adjustment (cold winter → higher consumption)
             temp_adj = (
-                self.get_temp_adjustment(h, outdoor_temp_c)
-                if outdoor_temp_c is not None
-                else 1.0
+                self.get_temp_adjustment(h, outdoor_temp_c) if outdoor_temp_c is not None else 1.0
             )
             predicted = (base + appl) * correction * temp_adj
             result.append(round(max(0.3, predicted), 2))
@@ -545,13 +543,18 @@ class ConsumptionPredictor:
         More informative than total_samples for understanding temporal coverage.
         """
         _non_consumption_prefixes = (
-            "plan_fb_", "temp_", "appl_", "cycle_", "idle_", "ev_", "breach_"
+            "plan_fb_",
+            "temp_",
+            "appl_",
+            "cycle_",
+            "idle_",
+            "ev_",
+            "breach_",
         )
         filled = sum(
             1
             for key, vals in self.history.items()
-            if not any(key.startswith(p) for p in _non_consumption_prefixes)
-            and len(vals) >= 3
+            if not any(key.startswith(p) for p in _non_consumption_prefixes) and len(vals) >= 3
         )
         return round(filled / 168 * 100, 1)
 
