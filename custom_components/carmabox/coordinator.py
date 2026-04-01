@@ -1845,14 +1845,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 return await self._async_update_data_inner()
         except TimeoutError:
             self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            self._last_error_msg = "TIMEOUT 120s"
             _LOGGER.error(
-                "CARMA Box: update cycle TIMEOUT after 120s (%d consecutive) — Modbus/service hung",
+                "CARMA Box: update cycle TIMEOUT after 120s (%d consecutive)",
                 self._consecutive_errors,
                 exc_info=True,
             )
             return getattr(self, "data", None) or CarmaboxState()
         except Exception as err:
             self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            self._last_error_msg = f"{type(err).__name__}: {str(err)[:100]}"
             _LOGGER.error(
                 "CARMA Box update failed (%d consecutive): %s",
                 self._consecutive_errors,
@@ -2006,6 +2008,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "plan_hours": len(self.plan),
                     "plan_step": getattr(self, "_last_plan_step", ""),
                     "errors": getattr(self, "_consecutive_errors", 0),
+                    "last_error": getattr(self, "_last_error_msg", ""),
                     "disabled": list(self._disabled_methods.keys()),
                     "predictor_samples": self.predictor.total_samples,
                     "predictor_trained": self.predictor.is_trained,
