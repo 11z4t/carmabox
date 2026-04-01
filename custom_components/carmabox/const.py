@@ -298,3 +298,9 @@ DEFAULT_EV_SOC_DERATING = 10.0  # Subtract from last known SoC (conservative)
 
 # Ellevio grid import cap — default used when not configured via opts
 GRID_LIMIT_DEFAULT_KW = 2.0  # kW; typical Ellevio daytime tak (LAG 1)
+
+# Night EV state machine (PLAN-03 runtime)
+APPLIANCE_PAUSE_THRESHOLD_W = 500  # Pause EV when appliance > this
+APPLIANCE_RESUME_THRESHOLD_W = 100  # Resume EV when appliance < this
+NEV_DISCHARGE_RAMP_S = 5.0  # Seconds to wait for battery stabilization
+NEV_GRID_OVERSHOOT_FACTOR = 1.05  # Increase discharge if grid > target * this
