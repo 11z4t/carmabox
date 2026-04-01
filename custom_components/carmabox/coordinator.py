@@ -44,6 +44,8 @@ from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
 from .const import (
+    APPLIANCE_HEAVY_THRESHOLD_W,
+    APPLIANCE_IDLE_THRESHOLD_W,
     DEFAULT_BAT_MAX_CHARGE_W,
     DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_BATTERY_1_KWH,
@@ -1208,6 +1210,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if not hasattr(self, "_night_ev_active"):
             self._night_ev_active = False
+        if not hasattr(self, "_ev_paused_for_appliance"):
+            self._ev_paused_for_appliance = False
 
         # ── Price-aware discharge: should we discharge NOW? ──
         try:
@@ -1408,6 +1412,36 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _LOGGER.info("NATT-EV: Stoppar EV (SoC=%.0f%%, hour=%d)", ev_soc, now.hour)
             await self._cmd_ev_stop()
             self._night_ev_active = False
+            self._ev_paused_for_appliance = False
+
+        # ── PLAN-03: EV-paus vid storförbrukare (disk/tvätt/tork) ──
+        if self._night_ev_active:
+            _appliance_w = 0.0
+            for _app_entity in (
+                "sensor.98_shelly_plug_s_power",   # disk
+                "sensor.102_shelly_plug_g3_power", # tvätt
+                "sensor.103_shelly_plug_g3_power", # tork
+            ):
+                _app_st = self.hass.states.get(_app_entity)
+                if _app_st and _app_st.state not in ("unavailable", "unknown", ""):
+                    with contextlib.suppress(ValueError, TypeError):
+                        _appliance_w += float(_app_st.state)
+
+            if _appliance_w > APPLIANCE_HEAVY_THRESHOLD_W and not self._ev_paused_for_appliance:
+                _LOGGER.info(
+                    "PLAN-03: Storförbrukare %.0fW — pausar natt-EV",
+                    _appliance_w,
+                )
+                await self._cmd_ev_stop()
+                self._ev_paused_for_appliance = True
+            elif _appliance_w < APPLIANCE_IDLE_THRESHOLD_W and self._ev_paused_for_appliance:
+                _LOGGER.info(
+                    "PLAN-03: Storförbrukare klar (%.0fW) — återstartar natt-EV %dA",
+                    _appliance_w,
+                    DEFAULT_EV_MIN_AMPS,
+                )
+                await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
+                self._ev_paused_for_appliance = False
 
         # ── Execute EV command (from plan) — SKIP if night EV active ──
         if self._night_ev_active:
