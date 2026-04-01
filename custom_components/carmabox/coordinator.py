@@ -2252,11 +2252,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 len(today_prices),
             )
 
-            # If primary returns all-fallback, try secondary
-            if price_entity_fallback and all(p == fallback_price for p in today_prices):
-                _LOGGER.info("Primary price source offline, trying fallback")
-                price_adapter = NordpoolAdapter(self.hass, price_entity_fallback, fallback_price)
-                today_prices = price_adapter.today_prices
+            # If primary returns all-fallback, try secondary or skip plan
+            if all(p == fallback_price for p in today_prices):
+                if price_entity_fallback:
+                    _LOGGER.info("Primary price source offline, trying fallback")
+                    price_adapter = NordpoolAdapter(
+                        self.hass, price_entity_fallback, fallback_price
+                    )
+                    today_prices = price_adapter.today_prices
+                if all(p == fallback_price for p in today_prices):
+                    _LOGGER.warning(
+                        "PLANNER: All prices are fallback (%.0f öre) — skipping plan generation",
+                        fallback_price,
+                    )
+                    return  # Don't generate useless all-idle plan
 
             tomorrow_prices = price_adapter.tomorrow_prices
             prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
