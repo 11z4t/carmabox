@@ -2303,9 +2303,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 len(pv_tomorrow),
                 sum(pv_today),
             )
-            # Skip plan if daytime but Solcast returns all zeros (not loaded yet)
+            # Fallback: if adapter returns zeros, try reading raw from HA state
+            if sum(pv_today) < 0.1:
+                _sc = self.hass.states.get("sensor.solcast_pv_forecast_forecast_today")
+                if _sc and _sc.state not in ("unavailable", "unknown", ""):
+                    _hourly = _sc.attributes.get("detailedHourly", [])
+                    if _hourly:
+                        pv_today = [0.0] * 24
+                        for _entry in _hourly:
+                            try:
+                                _h = datetime.fromisoformat(_entry["period_start"]).hour
+                                pv_today[_h] = _entry.get(
+                                    "pv_estimate10", _entry.get("pv_estimate", 0)
+                                )
+                            except (ValueError, KeyError, TypeError):
+                                pass
+                        pv_tomorrow = solcast.tomorrow_hourly_kw
+                        pv_forecast = pv_today[start_hour:] + pv_tomorrow
+                        _LOGGER.info(
+                            "PLANNER: Solcast adapter=0, raw fallback=%.1fkW", sum(pv_today)
+                        )
+
             if 6 <= start_hour <= 18 and sum(pv_today) < 0.1:
-                _LOGGER.warning("PLANNER: Daytime but Solcast=0 — skipping (not loaded)")
+                _LOGGER.warning("PLANNER: Daytime but Solcast=0 — skipping")
                 self._last_plan_step = "skip:pv=0"
                 return
 
