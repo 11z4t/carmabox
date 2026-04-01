@@ -36,6 +36,13 @@ from ..const import (
 
 _LOGGER = logging.getLogger(__name__)
 
+# Named constants — replaces magic numbers in if-statements
+_PV_SURPLUS_MIN_W = 200       # W — minimum PV power to attempt real-time surplus allocation
+_GRID_NOISE_W = 100           # W — minimum grid import/export to act (noise floor)
+_EVSE_3P_6A_W = 4140          # W — 6A × 230V × 3 phases (minimum 3-phase EV start)
+_BATTERY_FULL_SOC = 100       # % — used to detect battery not yet at full SoC
+_DISCHARGE_HYSTERESIS_W = 100  # W — skip redundant discharge if within ±100W
+
 
 class ExecutionEngine:
     """Kör batteri-, EV- och surplus-kommandon på uppdrag av koordinatorn.
@@ -477,7 +484,11 @@ class ExecutionEngine:
             await self.cmd_ev_stop()
 
         # ── EXP-12: Real-time PV Surplus Allocation ──────────────────
-        if not is_night and not self._coord._night_ev_active and state.pv_power_w > 200:
+        if (
+            not is_night
+            and not self._coord._night_ev_active
+            and state.pv_power_w > _PV_SURPLUS_MIN_W
+        ):
             try:
                 from .planner import allocate_pv_surplus, calculate_pv_confidence
 
@@ -595,7 +606,7 @@ class ExecutionEngine:
         consumers = self._coord._build_surplus_consumers(state)
         surplus_cfg = SurplusConfig(start_delay_s=60, stop_delay_s=180)
 
-        if state.grid_power_w < -100:
+        if state.grid_power_w < -_GRID_NOISE_W:
             surplus_w = abs(state.grid_power_w)
             result = allocate_surplus(
                 surplus_w,
@@ -604,7 +615,7 @@ class ExecutionEngine:
                 surplus_cfg,
             )
             await self.execute_surplus_allocations(result.allocations)
-        elif state.grid_power_w > 100:
+        elif state.grid_power_w > _GRID_NOISE_W:
             is_night_now = now.hour >= DEFAULT_NIGHT_START or now.hour < DEFAULT_NIGHT_END
             weight_now = DEFAULT_NIGHT_WEIGHT if is_night_now else 1.0
             viktat_kw = max(0, state.grid_power_w) / 1000 * weight_now
@@ -659,7 +670,7 @@ class ExecutionEngine:
                             {"entity_id": "switch.shelly1pmg4_a085e3bd1e60"},
                         )
                 elif alloc.id == "ev":
-                    if alloc.action == "start" and alloc.target_w >= 4140:
+                    if alloc.action == "start" and alloc.target_w >= _EVSE_3P_6A_W:
                         amps = int(alloc.target_w / (230 * 3))
                         clamped = max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps))
                         await self.cmd_ev_start(clamped)
@@ -1040,8 +1051,12 @@ class ExecutionEngine:
         if self._coord._last_command == BatteryCommand.CHARGE_PV:
             if self._coord.inverter_adapters:
                 for adapter in self._coord.inverter_adapters:
-                    if isinstance(adapter, GoodWeAdapter) and adapter.soc < 100:
-                        await adapter.set_fast_charging(on=True, power_pct=100, soc_target=100)
+                    if isinstance(adapter, GoodWeAdapter) and adapter.soc < _BATTERY_FULL_SOC:
+                        await adapter.set_fast_charging(
+                            on=True,
+                            power_pct=_BATTERY_FULL_SOC,
+                            soc_target=_BATTERY_FULL_SOC,
+                        )
             return
 
         heartbeat = self._coord.safety.check_heartbeat()
@@ -1208,7 +1223,7 @@ class ExecutionEngine:
         # K1: Hoppa om redan urladdas med liknande effekt (±100W)
         if (
             self._coord._last_command == BatteryCommand.DISCHARGE
-            and abs(watts - self._coord._last_discharge_w) < 100
+            and abs(watts - self._coord._last_discharge_w) < _DISCHARGE_HYSTERESIS_W
         ):
             _LOGGER.debug(
                 "K1: skip redundant discharge (%dW ≈ %dW)",
