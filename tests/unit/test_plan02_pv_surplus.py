@@ -60,6 +60,6 @@ class TestPlanChargesWhenPvSurplus:
     def test_multiple_hours_charges_only_when_surplus(self) -> None:
         """Mixed hours: surplus at h0, no surplus at h1."""
         plan = _plan(pv_kw=[5.0, 0.5], load_kw=[2.0, 2.0])
-        assert plan[0].action == "c"   # Surplus
+        assert plan[0].action == "c"  # Surplus
         # h1: no surplus (pv=0.5, load=2.0, net=+1.5) → idle or discharge or grid
         assert plan[1].action in ("i", "d", "g")

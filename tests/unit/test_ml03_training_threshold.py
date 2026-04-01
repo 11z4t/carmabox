@@ -13,9 +13,7 @@ from custom_components.carmabox.optimizer.predictor import (
 def _add_n_samples(pred: ConsumptionPredictor, n: int) -> None:
     """Add n distinct hourly samples (cycling through 24 hours)."""
     for i in range(n):
-        pred.add_sample(
-            HourSample(weekday=0, hour=i % 24, month=6, consumption_kw=2.0 + i * 0.01)
-        )
+        pred.add_sample(HourSample(weekday=0, hour=i % 24, month=6, consumption_kw=2.0 + i * 0.01))
 
 
 class TestTrainingThreshold:

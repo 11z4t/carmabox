@@ -34,9 +34,9 @@ class TestPlanUsesML:
             fallback_profile=static_low,
         )
         # Confirm ML profile is higher than static fallback
-        assert sum(ml_profile) > sum(static_low), (
-            "ML profile should reflect trained 4kW, not static 1kW"
-        )
+        assert sum(ml_profile) > sum(
+            static_low
+        ), "ML profile should reflect trained 4kW, not static 1kW"
 
     def test_plan_uses_static_when_not_trained(self) -> None:
         """Untrained predictor falls back to static profile."""
@@ -56,7 +56,7 @@ class TestPlanUsesML:
     def test_generate_plan_with_ml_profile_charges_on_surplus(self) -> None:
         """With high PV (5kW) and low ML consumption (2kW): action=charge at that hour."""
         pv = [5.0] + [0.0] * 23  # Surplus only at hour 0
-        loads = [2.0] * 24       # Static 2kW consumption
+        loads = [2.0] * 24  # Static 2kW consumption
 
         plan = generate_plan(
             num_hours=24,

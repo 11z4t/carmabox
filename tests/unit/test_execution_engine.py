@@ -991,6 +991,7 @@ async def test_execute_v2_smoke_no_plan() -> None:
 
     # Provide _surplus_hysteresis as pre-set to avoid __new__ issues
     from custom_components.carmabox.core.surplus_chain import HysteresisState
+
     coord._surplus_hysteresis = HysteresisState()
 
     engine = ExecutionEngine(coord)

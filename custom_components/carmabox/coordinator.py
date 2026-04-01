@@ -1418,9 +1418,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if self._night_ev_active:
             _appliance_w = 0.0
             for _app_entity in (
-                "sensor.98_shelly_plug_s_power",   # disk
-                "sensor.102_shelly_plug_g3_power", # tvätt
-                "sensor.103_shelly_plug_g3_power", # tork
+                "sensor.98_shelly_plug_s_power",  # disk
+                "sensor.102_shelly_plug_g3_power",  # tvätt
+                "sensor.103_shelly_plug_g3_power",  # tork
             ):
                 _app_st = self.hass.states.get(_app_entity)
                 if _app_st and _app_st.state not in ("unavailable", "unknown", ""):
