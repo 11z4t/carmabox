@@ -28,6 +28,8 @@ from ..const import (
     DEFAULT_EV_NIGHT_TARGET_SOC,
 )
 
+_BATTERY_SOC_DRIFT_THRESHOLD = 15  # % — trigger replan if SoC differs by more than this
+
 
 @dataclass
 class PlanAction:
@@ -408,7 +410,7 @@ def check_replan_needed(
     avg_soc = state.battery_soc_1
     if state.battery_soc_2 >= 0:
         avg_soc = (state.battery_soc_1 + state.battery_soc_2) / 2
-    if abs(avg_soc - plan_action.battery_soc) > 15:
+    if abs(avg_soc - plan_action.battery_soc) > _BATTERY_SOC_DRIFT_THRESHOLD:
         deviated = True
 
     new_count = deviation_count + 1 if deviated else 0
