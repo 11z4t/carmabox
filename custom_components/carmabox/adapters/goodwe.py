@@ -319,6 +319,19 @@ class GoodWeAdapter(InverterAdapter):
                             mode,
                         )
                         return False
+
+        # Reset ems_power_limit when switching to non-discharge modes
+        # Prevents stale limits from previous discharge session
+        if mode in ("charge_pv", "battery_standby"):
+            with contextlib.suppress(Exception):
+                await self.hass.services.async_call(
+                    "number",
+                    "set_value",
+                    {
+                        "entity_id": f"number.goodwe_{self.prefix}_ems_power_limit",
+                        "value": 0,
+                    },
+                )
         return True
 
     async def set_fast_charging(
