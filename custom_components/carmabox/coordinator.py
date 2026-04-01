@@ -2325,9 +2325,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         )
 
             if 6 <= start_hour <= 18 and sum(pv_today) < 0.1:
-                _LOGGER.warning("PLANNER: Daytime but Solcast=0 — skipping")
-                self._last_plan_step = "skip:pv=0"
-                return
+                _LOGGER.warning("PLANNER: Daytime Solcast=0 — continuing (price arbitrage)")
+                # Don't skip — price arbitrage works without PV data
 
             # PLAT-965: Use predictor if trained, else fallback to profile
             _step = "consumption"
