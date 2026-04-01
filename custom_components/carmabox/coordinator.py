@@ -2298,8 +2298,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             pv_tomorrow = solcast.tomorrow_hourly_kw
             pv_forecast = pv_today[start_hour:] + pv_tomorrow
             _LOGGER.info(
-                "PLANNER [solcast]: today=%d entries, tomorrow=%d", len(pv_today), len(pv_tomorrow)
+                "PLANNER [solcast]: today=%d entries, tomorrow=%d, today_sum=%.1fkW",
+                len(pv_today),
+                len(pv_tomorrow),
+                sum(pv_today),
             )
+            # Skip plan if daytime but Solcast returns all zeros (not loaded yet)
+            if 6 <= start_hour <= 18 and sum(pv_today) < 0.1:
+                _LOGGER.warning("PLANNER: Daytime but Solcast=0 — skipping (not loaded)")
+                self._last_plan_step = "skip:pv=0"
+                return
 
             # PLAT-965: Use predictor if trained, else fallback to profile
             _step = "consumption"
