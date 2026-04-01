@@ -2236,7 +2236,11 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             now = datetime.now()
             start_hour = now.hour
             _LOGGER.info("PLANNER START: hour=%d, soc=%.0f%%", start_hour, state.total_battery_soc)
-            self._last_plan_step = f"start:soc={state.total_battery_soc:.0f}"
+            # Skip plan if battery SoC not yet loaded (GoodWe startup lag)
+            if state.total_battery_soc <= 0:
+                _LOGGER.warning("PLANNER: SoC=0 — GoodWe not loaded, skipping")
+                self._last_plan_step = "skip:soc=0"
+                return
 
             # Collect prices — try primary, fallback to secondary
             _step = "prices"
