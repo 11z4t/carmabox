@@ -39,6 +39,15 @@ MIN_BATTERY_CHARGE_SURPLUS_W = 300  # Min surplus watts to start battery charge
 MIN_CONSUMER_SURPLUS_W = 200  # Min surplus watts to activate consumers
 MIN_EXPORT_THRESHOLD_W = 50  # Below this → not considered export
 
+# Named constants — replaces magic numbers in if-statements
+_SOLAR_INACTIVE_START_HOUR = 6   # Hours before this = no solar production
+_SOLAR_INACTIVE_END_HOUR = 20    # Hours after this = no solar production
+_BATTERY_MAX_SOC_PCT = 100       # % — battery SoC ceiling
+_PRESSURE_EXCELLENT_HPA = 1025   # hPa — very clear skies (high pressure)
+_PRESSURE_GOOD_HPA = 1015        # hPa — normal pressure
+_PRESSURE_FAIR_HPA = 1005        # hPa — low pressure (clouds/rain likely)
+_LOW_BATTERY_DISCHARGE_SOC = 30  # % — avoid discharge below this SoC
+
 
 @dataclass
 class SolarAllocationResult:
@@ -274,7 +283,7 @@ def calculate_pv_confidence(
         hour: Current hour (0-23). Night hours = always 1.0.
     """
     # Night: no PV, confidence irrelevant
-    if hour < 6 or hour > 20:
+    if hour < _SOLAR_INACTIVE_START_HOUR or hour > _SOLAR_INACTIVE_END_HOUR:
         return 1.0
 
     confidence = 1.0
@@ -434,7 +443,7 @@ def allocate_pv_surplus(
     battery_action = "hold"
     battery_target_w: float = 0.0
 
-    if battery_soc_pct < 100 and remaining_w > MIN_BATTERY_CHARGE_SURPLUS_W:
+    if battery_soc_pct < _BATTERY_MAX_SOC_PCT and remaining_w > MIN_BATTERY_CHARGE_SURPLUS_W:
         # Charge battery from remaining surplus
         charge_w = min(int(remaining_w), battery_max_charge_w)
         battery_action = "charge"
@@ -703,7 +712,7 @@ def calculate_ellevio_peak_cost(
         - new_avg_kw: average if new_peak included
         - monthly_cost_increase: SEK/month
         - annual_cost_increase: SEK/year
-        - should_avoid: bool (True if cost increase > 10 SEK/month)
+        - should_avoid: bool (True if cost increase exceeds threshold SEK/month)
     """
     # Current top-N average
     sorted_current = sorted(current_peaks_kw, reverse=True)
@@ -813,15 +822,15 @@ def pressure_pv_adjustment(
         - reason: str
         - pressure_category: str ("high"/"normal"/"low"/"storm")
     """
-    if pressure_hpa > 1025:
+    if pressure_hpa > _PRESSURE_EXCELLENT_HPA:
         factor = 1.1
         category = "high"
         reason = f"High pressure {pressure_hpa:.0f} hPa — clear skies likely"
-    elif pressure_hpa > 1015:
+    elif pressure_hpa > _PRESSURE_GOOD_HPA:
         factor = 1.0
         category = "normal"
         reason = f"Normal pressure {pressure_hpa:.0f} hPa"
-    elif pressure_hpa > 1005:
+    elif pressure_hpa > _PRESSURE_FAIR_HPA:
         factor = 0.8
         category = "low"
         reason = f"Low pressure {pressure_hpa:.0f} hPa — clouds/rain likely"
@@ -877,8 +886,11 @@ def should_discharge_now(
     }
 
     # Guard: low battery
-    if battery_soc_pct < 30.0:
-        result["reason"] = f"Battery too low ({battery_soc_pct:.0f}% < 30%) — preserving reserve"
+    if battery_soc_pct < _LOW_BATTERY_DISCHARGE_SOC:
+        result["reason"] = (
+            f"Battery too low ({battery_soc_pct:.0f}% < {_LOW_BATTERY_DISCHARGE_SOC}%)"
+            " — preserving reserve"
+        )
         return result
 
     # Guard: no upcoming prices
