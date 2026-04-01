@@ -1283,6 +1283,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         if not hasattr(self, "_nev_state"):
             self._nev_state = "IDLE"
+        if not hasattr(self, "_nev_ramp_start"):
             self._nev_ramp_start = 0.0
 
         # Use last_known_soc if current unavailable
