@@ -2087,6 +2087,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     "errors": getattr(self, "_consecutive_errors", 0),
                     "disabled": list(self._disabled_methods.keys()),
                     "predictor_samples": self.predictor.total_samples,
+                    "predictor_trained": self.predictor.is_trained,
+                    "predictor_coverage_pct": self.predictor.data_coverage_pct,
+                    "predictor_mae": self.predictor.mean_absolute_error,
                 }
                 with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
@@ -2436,8 +2439,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             _step = "ev_calculate"
             if ev_enabled and ev_soc_for_plan >= 0:
+                # ML: Log predicted EV usage for tomorrow to aid scheduling visibility
+                tomorrow_weekday = (now.weekday() + 1) % 7
+                ev_kwh_predicted = self.predictor.predict_ev_usage(tomorrow_weekday)
                 _LOGGER.info(
-                    "PLANNER [ev]: soc=%.0f%%, target=%.0f%%", ev_soc_for_plan, ev_morning_target
+                    "PLANNER [ev]: soc=%.0f%%, target=%.0f%%, ml_predicted_usage=%.1f kWh",
+                    ev_soc_for_plan,
+                    ev_morning_target,
+                    ev_kwh_predicted,
                 )
                 ev_demand = calculate_ev_schedule(
                     start_hour=start_hour,
