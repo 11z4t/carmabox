@@ -44,8 +44,6 @@ from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
 from .const import (
-    APPLIANCE_PAUSE_THRESHOLD_W,
-    APPLIANCE_RESUME_THRESHOLD_W,
     DEFAULT_BAT_MAX_CHARGE_W,
     DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_BATTERY_1_KWH,
@@ -1204,9 +1202,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             (self.ev_adapter and self.ev_adapter.cable_locked) if self.ev_adapter else False
         )
         ev_soc = state.ev_soc if state.ev_soc >= 0 else -1
-        ev_target = float(opts.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
         ev_phase = int(opts.get("ev_phase_count", 3))
-        ev_departure = int(opts.get("ev_departure_hour", DEFAULT_NIGHT_END))
 
         if not hasattr(self, "_night_ev_active"):
             self._night_ev_active = False
@@ -1280,168 +1276,91 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except Exception:
             _LOGGER.debug("Price-discharge check failed", exc_info=True)
 
-        # ── EV timing: charge tonight or wait? ──
-        _ev_charge_tonight = True  # Default: charge
-        if is_night and ev_connected and 0 <= ev_soc < ev_target and not self._night_ev_active:
-            try:
-                from .core.planner import should_charge_ev_tonight
+        # ── Night EV State Machine ──────────────────────────────
+        from .core.night_ev import NevState, decide_nev
 
-                nordpool = self.hass.states.get(
-                    opts.get("price_entity", "sensor.nordpool_kwh_se3_sek_3_10_025")
-                )
-                if nordpool:
-                    today_p = nordpool.attributes.get("today", [])
-                    tomorrow_p = nordpool.attributes.get("tomorrow", [])
-                    tonight = [float(p) for p in today_p[22:] + today_p[:6] if p]
-                    tmr_night = (
-                        [float(p) for p in tomorrow_p[22:] + tomorrow_p[:6] if p]
-                        if tomorrow_p
-                        else []
-                    )
-                    pv_tmr = float(
-                        self.hass.states.get(
-                            "sensor.solcast_pv_forecast_forecast_tomorrow",
-                            type("", (), {"state": "0"})(),
-                        ).state
-                    )
-                    from datetime import datetime as _dt
+        if not hasattr(self, "_nev_state"):
+            self._nev_state = "IDLE"
+            self._nev_ramp_start = 0.0
 
-                    _tomorrow_weekday = (_dt.now().weekday() + 1) % 7
-                    _is_workday = _tomorrow_weekday < 5  # Mon=0..Fri=4
+        # Use last_known_soc if current unavailable
+        effective_ev_soc = ev_soc if ev_soc >= 0 else self._last_known_ev_soc
 
-                    ev_timing = should_charge_ev_tonight(
-                        ev_soc_pct=ev_soc,
-                        ev_target_pct=ev_target,
-                        ev_cap_kwh=float(opts.get("ev_capacity_kwh", 92)),
-                        tonight_prices_ore=tonight,
-                        tomorrow_night_prices_ore=tmr_night,
-                        pv_tomorrow_kwh=pv_tmr,
-                        is_workday_tomorrow=_is_workday,
-                    )
-                    _ev_charge_tonight = ev_timing.get("charge", True)
-                    if not _ev_charge_tonight:
-                        _LOGGER.info(
-                            "EV-TIMING: Skip tonight — %s",
-                            ev_timing.get("reason", "")[:60],
-                        )
-            except Exception:
-                _LOGGER.debug("EV timing check failed", exc_info=True)
-
-        if (
-            is_night
-            and ev_connected
-            and 0 <= ev_soc < ev_target
-            and not self._night_ev_active
-            and _ev_charge_tonight
+        # Read appliance power
+        _appliance_w = 0.0
+        for _eid in (
+            self._cfg.get("appliance_disk", "sensor.98_shelly_plug_s_power"),
+            self._cfg.get("appliance_tvatt", "sensor.102_shelly_plug_g3_power"),
+            self._cfg.get("appliance_tork", "sensor.103_shelly_plug_g3_power"),
         ):
-            # EV needs charging — start with battery support
-            ev_kw = 230 * ev_phase * DEFAULT_EV_MIN_AMPS / 1000  # Min 6A
-            house_kw = max(0, state.grid_power_w) / 1000
-            grid_max = float(opts.get("ellevio_tak_kw", 2.0)) / 0.5  # Night actual
-            bat_support_needed = max(0, ev_kw + house_kw - grid_max)
+            _appliance_w += self._read_float(_eid, 0.0)
 
-            _LOGGER.info(
-                "NATT-EV: SoC %.0f%% < target %.0f%%, starting EV 6A + urladdning %.0fW",
-                ev_soc,
-                ev_target,
-                bat_support_needed * 1000,
-            )
-            # Override Easee internal schedule (blocks charging otherwise)
-            try:
+        nev_input = NevState(
+            is_night=is_night,
+            ev_connected=ev_connected,
+            ev_soc=effective_ev_soc,
+            ev_target=float(opts.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC)),
+            battery_soc=state.total_battery_soc,
+            min_soc=self.min_soc,
+            grid_w=max(0, state.grid_power_w),
+            target_kw=self.target_kw,
+            night_weight=float(opts.get("night_weight", DEFAULT_NIGHT_WEIGHT)),
+            appliance_w=_appliance_w,
+            hour=now.hour,
+        )
+
+        new_nev_state, nev_cmd = decide_nev(nev_input, self._nev_state, self._nev_ramp_start)
+
+        if new_nev_state != self._nev_state:
+            _LOGGER.info("NEV: %s → %s (%s)", self._nev_state, new_nev_state, nev_cmd.reason)
+        self._nev_state = new_nev_state
+        self._night_ev_active = new_nev_state in (
+            "DISCHARGE_RAMP",
+            "EV_CHARGING",
+            "APPLIANCE_PAUSE",
+        )
+
+        # Execute command
+        if nev_cmd.action == "start_discharge":
+            self._nev_ramp_start = time.monotonic()
+            _nw = float(opts.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+            actual_target_w = int(self.target_kw * 1000 / max(0.1, _nw))
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("discharge_pv")
+                await adapter.set_fast_charging(on=False)
+                with contextlib.suppress(Exception):
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {
+                            "entity_id": f"number.goodwe_{adapter.prefix}_ems_power_limit",
+                            "value": actual_target_w,
+                        },
+                    )
+        elif nev_cmd.action == "start_ev":
+            with contextlib.suppress(Exception):
                 await self.hass.services.async_call(
                     "button",
                     "press",
                     {"entity_id": "button.easee_home_12840_override_schedule"},
                 )
-            except Exception:
-                _LOGGER.warning("NATT-EV: override_schedule misslyckades", exc_info=True)
-            await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
-            self._night_ev_active = True
-
-            # Start proportional battery discharge for EV support
-            if bat_support_needed > 0.1:
-                bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
-                bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
-                min_soc_val = float(opts.get("battery_min_soc", 15.0))
-                temp1 = getattr(state, "battery_min_cell_temp_1", 15.0) or 15.0
-                temp2 = getattr(state, "battery_min_cell_temp_2", 15.0) or 15.0
-                # EXP-02: BMS discharge current limits
-                _adapters = self.inverter_adapters
-                _max_d1 = _adapters[0].max_discharge_w if len(_adapters) > 0 else 5000
-                _max_d2 = _adapters[1].max_discharge_w if len(_adapters) > 1 else 5000
-                bats = [
-                    BatteryInfo(
-                        "kontor",
-                        state.battery_soc_1,
-                        bat1_kwh,
-                        temp1,
-                        min_soc=min_soc_val,
-                        max_discharge_w=_max_d1 or 5000,
-                    ),
-                    BatteryInfo(
-                        "forrad",
-                        state.battery_soc_2,
-                        bat2_kwh,
-                        temp2,
-                        min_soc=min_soc_val,
-                        max_discharge_w=_max_d2 or 5000,
-                    ),
-                ]
-                bal = calculate_proportional_discharge(
-                    bats,
-                    int(bat_support_needed * 1000),
-                )
-                adapters = self.inverter_adapters
-                for i, alloc in enumerate(bal.allocations):
-                    if i < len(adapters) and alloc.watts > 50:
-                        await adapters[i].set_ems_mode("discharge_pv")
-                        await adapters[i].set_fast_charging(on=False)
-                        await self.hass.services.async_call(
-                            "number",
-                            "set_value",
-                            {
-                                "entity_id": f"number.goodwe_{adapters[i].prefix}_ems_power_limit",
-                                "value": alloc.watts,
-                            },
-                        )
-
-        # Stopp EV vid departure hour eller target nådd
-        if self._night_ev_active and (
-            now.hour == ev_departure or (ev_soc >= 0 and ev_soc >= ev_target) or not is_night
-        ):
-            _LOGGER.info("NATT-EV: Stoppar EV (SoC=%.0f%%, hour=%d)", ev_soc, now.hour)
+            await self._cmd_ev_start(nev_cmd.ev_amps)
+        elif nev_cmd.action == "stop_ev":
             await self._cmd_ev_stop()
-            self._night_ev_active = False
-            self._ev_paused_for_appliance = False
-
-        # ── PLAN-03: EV-paus vid storförbrukare (disk/tvätt/tork) ──
-        if self._night_ev_active:
-            _appliance_w = 0.0
-            for _app_entity in (
-                "sensor.98_shelly_plug_s_power",  # disk
-                "sensor.102_shelly_plug_g3_power",  # tvätt
-                "sensor.103_shelly_plug_g3_power",  # tork
-            ):
-                _app_st = self.hass.states.get(_app_entity)
-                if _app_st and _app_st.state not in ("unavailable", "unknown", ""):
-                    with contextlib.suppress(ValueError, TypeError):
-                        _appliance_w += float(_app_st.state)
-
-            if _appliance_w > APPLIANCE_PAUSE_THRESHOLD_W and not self._ev_paused_for_appliance:
-                _LOGGER.info(
-                    "PLAN-03: Storförbrukare %.0fW — pausar natt-EV",
-                    _appliance_w,
-                )
-                await self._cmd_ev_stop()
-                self._ev_paused_for_appliance = True
-            elif _appliance_w < APPLIANCE_RESUME_THRESHOLD_W and self._ev_paused_for_appliance:
-                _LOGGER.info(
-                    "PLAN-03: Storförbrukare klar (%.0fW) — återstartar natt-EV %dA",
-                    _appliance_w,
-                    DEFAULT_EV_MIN_AMPS,
-                )
-                await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
-                self._ev_paused_for_appliance = False
+        elif nev_cmd.action == "increase_discharge":
+            _nw = float(opts.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+            actual_target_w = int(self.target_kw * 1000 / max(0.1, _nw))
+            for adapter in self.inverter_adapters:
+                await adapter.set_ems_mode("discharge_pv")
+                with contextlib.suppress(Exception):
+                    await self.hass.services.async_call(
+                        "number",
+                        "set_value",
+                        {
+                            "entity_id": f"number.goodwe_{adapter.prefix}_ems_power_limit",
+                            "value": actual_target_w,
+                        },
+                    )
 
         # ── Execute EV command (from plan) — SKIP if night EV active ──
         if self._night_ev_active:
