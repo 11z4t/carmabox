@@ -39,7 +39,7 @@ _LOGGER = logging.getLogger(__name__)
 # Named constants — replaces magic numbers in if-statements
 _PV_SURPLUS_MIN_W = 200       # W — minimum PV power to attempt real-time surplus allocation
 _GRID_NOISE_W = 100           # W — minimum grid import/export to act (noise floor)
-_EVSE_3P_6A_W = 4140          # W — 6A × 230V × 3 phases (minimum 3-phase EV start)
+_EVSE_3P_6A_W = 4140          # W — 6A x 230V x 3 phases (minimum 3-phase EV start)
 _BATTERY_FULL_SOC = 100       # % — used to detect battery not yet at full SoC
 _DISCHARGE_HYSTERESIS_W = 100  # W — skip redundant discharge if within ±100W
 

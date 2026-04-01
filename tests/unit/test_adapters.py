@@ -614,7 +614,9 @@ class TestEaseeSafeCall:
 
     @pytest.mark.asyncio
     async def test_enable_returns_bool(self) -> None:
-        hass = _make_hass()
+        # enable() verifies switch state is "on" after 1s — pre-seed the mock
+        hass = _make_hass(("switch.easee_home_12840_is_enabled", "on"))
         adapter = EaseeAdapter(hass, "dev1", "easee_home_12840")
-        result = await adapter.enable()
+        with patch("asyncio.sleep"):
+            result = await adapter.enable()
         assert result is True
