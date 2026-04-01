@@ -4420,30 +4420,62 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             return
 
         # ── EV-4: Day → PV surplus ONLY (never cause grid import) ──
-        # EV dagtid laddar ENBART från export — aldrig nätimport.
-        # Grid < 0 = vi exporterar = EV kan ta den effekten.
-        # Grid ≥ 0 = vi importerar redan = EV får INTE starta/öka.
+        # With hysteresis to prevent flapping at cloud edges.
+        from .const import (
+            EV_PV_AMPS_INTERVAL_S,
+            EV_PV_START_DELAY_S,
+            EV_PV_START_THRESHOLD_KW,
+            EV_PV_STOP_DELAY_S,
+        )
+
+        if not hasattr(self, "_ev_pv_export_since"):
+            self._ev_pv_export_since = 0.0  # monotonic time when export started
+            self._ev_pv_import_since = 0.0
+            self._ev_pv_last_amps_change = 0.0
+
+        _now_mono = time.monotonic()
+
         if state.is_exporting:
             export_kw = abs(state.grid_power_w) / 1000
-            # If EV already charging, available = export + current EV load
-            # (stopping EV would increase export by that amount)
             if self._ev_enabled:
                 export_kw += state.ev_power_w / 1000
-            solar_amps = max(0, int(export_kw * 1000 / DEFAULT_VOLTAGE))
-            solar_amps = min(solar_amps, DEFAULT_EV_MAX_AMPS)
-            if solar_amps >= DEFAULT_EV_MIN_AMPS:
-                if not self._ev_enabled:
-                    await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
+            self._ev_pv_import_since = 0.0  # Reset import timer
+
+            solar_amps = min(
+                max(0, int(export_kw * 1000 / DEFAULT_VOLTAGE)),
+                DEFAULT_EV_MAX_AMPS,
+            )
+
+            if not self._ev_enabled:
+                # Start hysteresis: export > threshold for START_DELAY
+                if export_kw >= EV_PV_START_THRESHOLD_KW:
+                    if self._ev_pv_export_since == 0.0:
+                        self._ev_pv_export_since = _now_mono
+                    elif _now_mono - self._ev_pv_export_since >= EV_PV_START_DELAY_S:
+                        await self._cmd_ev_start(DEFAULT_EV_MIN_AMPS)
+                        self._ev_pv_export_since = 0.0
+                        self._ev_pv_last_amps_change = _now_mono
                 else:
+                    self._ev_pv_export_since = 0.0  # Not enough export
+            else:
+                # Amps adjustment hysteresis
+                if (
+                    solar_amps != self._ev_current_amps
+                    and _now_mono - self._ev_pv_last_amps_change >= EV_PV_AMPS_INTERVAL_S
+                ):
                     await self._cmd_ev_adjust(solar_amps)
-                return
-            # Export < 6A worth → stop EV to avoid grid import
-            if self._ev_enabled and export_kw < 1.0:
+                    self._ev_pv_last_amps_change = _now_mono
+            return
+
+        # Grid importing
+        self._ev_pv_export_since = 0.0  # Reset export timer
+        if self._ev_enabled:
+            # Stop hysteresis: import for STOP_DELAY before stopping
+            if self._ev_pv_import_since == 0.0:
+                self._ev_pv_import_since = _now_mono
+            elif _now_mono - self._ev_pv_import_since >= EV_PV_STOP_DELAY_S:
                 await self._cmd_ev_stop()
-                return
-        elif self._ev_enabled:
-            # Grid ≥ 0 (importing) + EV charging → EV causes grid import → stop
-            await self._cmd_ev_stop()
+                self._ev_pv_import_since = 0.0
             return
 
         # Default: not charging → ensure disabled

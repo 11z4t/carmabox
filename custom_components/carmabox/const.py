@@ -304,3 +304,9 @@ APPLIANCE_PAUSE_THRESHOLD_W = 500  # Pause EV when appliance > this
 APPLIANCE_RESUME_THRESHOLD_W = 100  # Resume EV when appliance < this
 NEV_DISCHARGE_RAMP_S = 5.0  # Seconds to wait for battery stabilization
 NEV_GRID_OVERSHOOT_FACTOR = 1.05  # Increase discharge if grid > target * this
+
+# EV PV surplus charging hysteresis
+EV_PV_START_THRESHOLD_KW = 1.5  # Must export > this before starting EV
+EV_PV_START_DELAY_S = 120.0  # Export must be stable for 2 min
+EV_PV_STOP_DELAY_S = 120.0  # Import must persist 2 min before stopping
+EV_PV_AMPS_INTERVAL_S = 60.0  # Min interval between amp changes
