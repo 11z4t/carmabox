@@ -11,6 +11,7 @@ EXP-EPIC-SWEEP — targets coordinator.py EV control clusters:
 
 from __future__ import annotations
 
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -462,15 +463,19 @@ class TestEvSolarCharging:
 
     @pytest.mark.asyncio
     async def test_solar_stop_when_sustained_low_surplus(self) -> None:
-        """Day + importing (grid > 0) + ev_enabled → EV-4 stops EV (no export available)."""
+        """Day + importing for > STOP_DELAY → EV-4 stops EV."""
         coord = _make_ev_coord(
             cable_locked=True,
             ev_enabled=True,
             ev_power_w=200.0,
         )
         coord._ev_solar_active = True
+        # Pre-init hysteresis attrs (normally done by hasattr check in _execute_ev)
+        coord._ev_pv_export_since = 0.0
+        coord._ev_pv_last_amps_change = 0.0
+        # Simulate import started 3 min ago (past STOP_DELAY)
+        coord._ev_pv_import_since = time.monotonic() - 200
 
-        # grid = +50 (importing), daytime → EV-4: importing + ev_enabled → stop
         state = _ev_state(ev_soc=50.0, grid_w=50.0, pv_power_w=200.0, battery_soc_1=50.0)
 
         with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
@@ -480,7 +485,6 @@ class TestEvSolarCharging:
             mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
             await coord._execute_ev(state)
 
-        # Importing during day + ev_enabled → EV-4 stops charging
         coord._cmd_ev_stop.assert_called_once()
 
     @pytest.mark.asyncio
@@ -513,11 +517,13 @@ class TestEvSolarCharging:
 
     @pytest.mark.asyncio
     async def test_solar_start_when_battery_full_and_surplus(self) -> None:
-        """Day + exporting 2kW + ev_enabled=False → EV-4 starts EV from PV surplus."""
+        """Day + exporting 2kW for > START_DELAY → EV-4 starts EV from PV surplus."""
         coord = _make_ev_coord(
             cable_locked=True,
             ev_enabled=False,
         )
+        # Simulate export started 3 min ago (past START_DELAY)
+        coord._ev_pv_export_since = time.monotonic() - 200
 
         # grid=-2000 (exporting 2kW) → solar_amps = int(2000/230) = 8 >= 6 → start
         state = _ev_state(
