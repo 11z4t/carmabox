@@ -2125,15 +2125,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         except Exception as err:
             self._consecutive_errors = getattr(self, "_consecutive_errors", 0) + 1
+            self._last_error_msg = f"{type(err).__name__}: {str(err)[:150]}"
             _LOGGER.error(
                 "CARMA Box update failed (%d consecutive): %s",
                 self._consecutive_errors,
                 err,
                 exc_info=True,
             )
+            # Write error heartbeat immediately
+            with contextlib.suppress(Exception):
+                import json as _ej2
+
+                with open("/config/carmabox-heartbeat.json", "w") as _ef2:
+                    _ej2.dump(
+                        {
+                            "timestamp": datetime.now().isoformat(),
+                            "state": "ERROR",
+                            "errors": self._consecutive_errors,
+                            "last_error": self._last_error_msg,
+                        },
+                        _ef2,
+                    )
             # Degraded mode: return last known state instead of crashing
-            # ALDRIG raise UpdateFailed — det stoppar coordinatorn PERMANENT.
-            # Returnera alltid last known state och försök igen nästa cykel.
+            # ALDRIG raise UpdateFailed.
             if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
                 _LOGGER.error(
                     "CARMA Box: %d consecutive failures — DEGRADED but CONTINUING",
