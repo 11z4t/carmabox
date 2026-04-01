@@ -20,6 +20,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 
+# Noise-floor thresholds
+_EXPORT_WARNING_W = 500  # W — LAG_4 export guard threshold
+_CROSSCHARGE_NOISE_W = 50  # W — minimum |power| to detect crosscharge or idle
+
 
 class LawId(Enum):
     LAG_1_GRID = "LAG_1"
@@ -364,7 +368,7 @@ class LawGuardian:
         return CheckResult(LawId.LAG_3_EV, True, Severity.INFO, state.ev_soc, state.ev_target_soc)
 
     def _check_lag4(self, state: GuardianState) -> CheckResult:
-        if state.export_w > 500:
+        if state.export_w > _EXPORT_WARNING_W:
             return CheckResult(
                 LawId.LAG_4_EXPORT,
                 False,
@@ -394,7 +398,8 @@ class LawGuardian:
                 results.append(CheckResult(LawId.INV_1_EMS_AUTO, True))
 
         # INV-2: Crosscharge
-        if state.battery_power_1 < -50 and state.battery_power_2 > 50:
+        _n = _CROSSCHARGE_NOISE_W
+        if state.battery_power_1 < -_n and state.battery_power_2 > _n:
             results.append(
                 CheckResult(
                     LawId.INV_2_CROSSCHARGE,
@@ -405,7 +410,7 @@ class LawGuardian:
                     "Bat1 laddar, Bat2 urladdar",
                 )
             )
-        elif state.battery_power_1 > 50 and state.battery_power_2 < -50:
+        elif state.battery_power_1 > _n and state.battery_power_2 < -_n:
             results.append(
                 CheckResult(
                     LawId.INV_2_CROSSCHARGE,
@@ -467,7 +472,8 @@ class LawGuardian:
             return "fast_charging ON → nätimport"
         if state.ems_mode_1 == "auto" or state.ems_mode_2 == "auto":
             return "EMS auto → okontrollerad"
-        if abs(state.battery_power_1) < 50 and abs(state.battery_power_2) < 50:
+        _noise = _CROSSCHARGE_NOISE_W
+        if abs(state.battery_power_1) < _noise and abs(state.battery_power_2) < _noise:
             return "Batterier idle → inget stöd"
         if state.battery_power_1 < -100 or state.battery_power_2 < -100:
             return "Batterier LADDAR → ökad import"

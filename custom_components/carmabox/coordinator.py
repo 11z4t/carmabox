@@ -2259,14 +2259,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             _step = "consumption"
             base = self.consumption_profile.get_profile_for_date(now)
             # Pass outdoor temperature for temperature-aware prediction
-            _outdoor_temp_c: float | None = None
-            _tempest = self.hass.states.get("sensor.tempest_temperature")
-            if _tempest and _tempest.state not in ("unavailable", "unknown", ""):
-                _LOGGER.debug("Suppressed error", exc_info=False)
-                try:
-                    _outdoor_temp_c = float(_tempest.state)
-                except (ValueError, TypeError):
-                    _LOGGER.debug("Suppressed error", exc_info=True)
+            # Use last known value (updated by IT-2080 each cycle) — avoids
+            # a duplicate sensor read with a hardcoded entity ID here.
+            _outdoor_temp_c: float | None = getattr(self, "_last_known_outdoor_temp_c", None)
             if self.predictor.is_trained:
                 consumption = self.predictor.predict_24h(
                     start_hour=start_hour,
@@ -2503,6 +2498,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     # House needs more power when cold: 1.5 kW base + 0.1 kW per degree below 15°C
                     dynamic_base_kw = 1.5 + max(0, (15.0 - outdoor_c) * 0.1)
                     self._estimated_house_base_kw = round(min(4.0, dynamic_base_kw), 2)
+                    self._last_known_outdoor_temp_c: float | None = outdoor_c
                 except (ValueError, TypeError):
                     _LOGGER.debug("Suppressed error", exc_info=True)
 

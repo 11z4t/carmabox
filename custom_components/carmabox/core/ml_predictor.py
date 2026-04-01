@@ -17,6 +17,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+# Pressure thresholds for PV forecast correction
+_PRESSURE_HIGH_HPA = 1015  # High-pressure → typically better PV than forecast
+_PRESSURE_LOW_HPA = 1005   # Low-pressure → typically worse PV than forecast
+
 
 @dataclass
 class ConsumptionSample:
@@ -226,11 +230,11 @@ class MLPredictor:
             return 1.0
         # Simple: high pressure → PV usually better than forecast
         # Low pressure → PV usually worse
-        high = [r for p, r in self._pressure_pv if p > 1015]
-        low = [r for p, r in self._pressure_pv if p < 1005]
-        if pressure_hpa > 1015 and high:
+        high = [r for p, r in self._pressure_pv if p > _PRESSURE_HIGH_HPA]
+        low = [r for p, r in self._pressure_pv if p < _PRESSURE_LOW_HPA]
+        if pressure_hpa > _PRESSURE_HIGH_HPA and high:
             return sum(high) / len(high)
-        if pressure_hpa < 1005 and low:
+        if pressure_hpa < _PRESSURE_LOW_HPA and low:
             return sum(low) / len(low)
         return 1.0
 
