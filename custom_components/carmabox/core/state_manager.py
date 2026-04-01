@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+_SENSOR_SANITY_MAX_W = 100_000  # W — values above this are sensor errors (>100 kW)
+
 
 class StateManager:
     """Reads HA entity state and assembles CarmaboxState snapshots.
@@ -63,7 +65,7 @@ class StateManager:
             return default
         try:
             val = float(state.state)
-            if abs(val) > 100000:  # >100 kW = sensor error
+            if abs(val) > _SENSOR_SANITY_MAX_W:  # >100 kW = sensor error
                 _LOGGER.warning("Unreasonable value %s from %s", val, entity_id)
                 return default
             return val
@@ -86,7 +88,7 @@ class StateManager:
             return None
         try:
             val = float(state.state)
-            if abs(val) > 100000:
+            if abs(val) > _SENSOR_SANITY_MAX_W:
                 return None
             return val
         except (ValueError, TypeError):
