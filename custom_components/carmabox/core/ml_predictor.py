@@ -19,7 +19,7 @@ from typing import Any
 
 # Pressure thresholds for PV forecast correction
 _PRESSURE_HIGH_HPA = 1015  # High-pressure → typically better PV than forecast
-_PRESSURE_LOW_HPA = 1005   # Low-pressure → typically worse PV than forecast
+_PRESSURE_LOW_HPA = 1005  # Low-pressure → typically worse PV than forecast
 
 
 @dataclass

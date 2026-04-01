@@ -40,12 +40,12 @@ MIN_CONSUMER_SURPLUS_W = 200  # Min surplus watts to activate consumers
 MIN_EXPORT_THRESHOLD_W = 50  # Below this → not considered export
 
 # Named constants — replaces magic numbers in if-statements
-_SOLAR_INACTIVE_START_HOUR = 6   # Hours before this = no solar production
-_SOLAR_INACTIVE_END_HOUR = 20    # Hours after this = no solar production
-_BATTERY_MAX_SOC_PCT = 100       # % — battery SoC ceiling
-_PRESSURE_EXCELLENT_HPA = 1025   # hPa — very clear skies (high pressure)
-_PRESSURE_GOOD_HPA = 1015        # hPa — normal pressure
-_PRESSURE_FAIR_HPA = 1005        # hPa — low pressure (clouds/rain likely)
+_SOLAR_INACTIVE_START_HOUR = 6  # Hours before this = no solar production
+_SOLAR_INACTIVE_END_HOUR = 20  # Hours after this = no solar production
+_BATTERY_MAX_SOC_PCT = 100  # % — battery SoC ceiling
+_PRESSURE_EXCELLENT_HPA = 1025  # hPa — very clear skies (high pressure)
+_PRESSURE_GOOD_HPA = 1015  # hPa — normal pressure
+_PRESSURE_FAIR_HPA = 1005  # hPa — low pressure (clouds/rain likely)
 _LOW_BATTERY_DISCHARGE_SOC = 30  # % — avoid discharge below this SoC
 
 

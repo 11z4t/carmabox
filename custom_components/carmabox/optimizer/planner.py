@@ -92,8 +92,17 @@ def generate_plan(
     available_kwh = max(0, soc_kwh - min_soc_kwh)
     max_day_discharge_kwh = max(0, available_kwh - night_reserve_kwh)
     # If daytime and no room for discharge → cap max_discharge_kw
-    if max_day_discharge_kwh <= 0.5 and start_hour >= 6 and start_hour < 22:
-        max_discharge_kw = 0.0  # Save everything for night
+    # BUT: if tomorrow has good solar (>20kWh), allow discharge today
+    tomorrow_pv_kwh = (
+        sum(hourly_pv[24 - start_hour : 48 - start_hour]) if len(hourly_pv) > 24 else 0
+    )
+    if (
+        max_day_discharge_kwh <= 0.5
+        and start_hour >= 6
+        and start_hour < 22
+        and tomorrow_pv_kwh < 20
+    ):
+        max_discharge_kw = 0.0  # Save everything for night (no solar tomorrow)
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
@@ -210,6 +219,20 @@ def generate_plan(
             if idle_discharge > 0.2:
                 battery_kw = -idle_discharge
                 soc_kwh -= idle_discharge
+                action = "d"
+
+        # POST-FIX: Force price arbitrage if idle + expensive + has capacity
+        if (
+            not ev_charging_night
+            and action == "i"
+            and net > 0.3
+            and price >= discharge_price_threshold
+            and soc_kwh - min_soc_kwh > 0.3
+        ):
+            arb_discharge = min(net * 0.7, soc_kwh - min_soc_kwh, max_discharge_kw * 0.6)
+            if arb_discharge > 0.2:
+                battery_kw = -arb_discharge
+                soc_kwh -= arb_discharge
                 action = "d"
 
         # Clamp SoC to valid range
