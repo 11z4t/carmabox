@@ -310,3 +310,6 @@ EV_PV_START_THRESHOLD_KW = 1.5  # Must export > this before starting EV
 EV_PV_START_DELAY_S = 120.0  # Export must be stable for 2 min
 EV_PV_STOP_DELAY_S = 120.0  # Import must persist 2 min before stopping
 EV_PV_AMPS_INTERVAL_S = 60.0  # Min interval between amp changes
+
+# EV stuck detection
+EV_STUCK_MAX_HOURS = 6.0  # Stop EV if SoC unchanged for this many hours

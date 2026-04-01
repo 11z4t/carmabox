@@ -4053,6 +4053,29 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 for _adp in self.inverter_adapters:
                     await _adp.set_ems_mode("discharge_pv")
 
+        # W7: EV stuck — charging for hours without SoC change
+        from .const import EV_STUCK_MAX_HOURS
+
+        if self._ev_enabled and state.ev_power_w > 100:
+            if not hasattr(self, "_ev_stuck_last_soc"):
+                self._ev_stuck_last_soc = state.ev_soc
+                self._ev_stuck_since = time.monotonic()
+            if abs(state.ev_soc - self._ev_stuck_last_soc) > 1.0:
+                # SoC changed — reset
+                self._ev_stuck_last_soc = state.ev_soc
+                self._ev_stuck_since = time.monotonic()
+            elif time.monotonic() - self._ev_stuck_since > EV_STUCK_MAX_HOURS * 3600:
+                _LOGGER.error(
+                    "WATCHDOG W7: EV stuck — %.0fh charging, SoC unchanged (%.0f%%)",
+                    EV_STUCK_MAX_HOURS,
+                    state.ev_soc,
+                )
+                await self._cmd_ev_stop()
+        else:
+            if hasattr(self, "_ev_stuck_since"):
+                del self._ev_stuck_since
+                del self._ev_stuck_last_soc
+
         # W5: High price + battery capacity + idle
         if (
             state.current_price > price_expensive
