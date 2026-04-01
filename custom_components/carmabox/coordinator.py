@@ -1861,6 +1861,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 err,
                 exc_info=True,
             )
+            # Write heartbeat with error info (inner didn't get to write it)
+            with contextlib.suppress(Exception):
+                import json as _ej
+
+                _ehb = {
+                    "timestamp": datetime.now().isoformat(),
+                    "state": "ERROR",
+                    "errors": self._consecutive_errors,
+                    "last_error": getattr(self, "_last_error_msg", ""),
+                    "plan_step": getattr(self, "_last_plan_step", ""),
+                }
+                with open("/config/carmabox-heartbeat.json", "w") as _ef:
+                    _ej.dump(_ehb, _ef)
             # ALDRIG raise UpdateFailed — returnera degraded state, retry nästa cykel
             if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
                 _LOGGER.error(
