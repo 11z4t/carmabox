@@ -30,6 +30,8 @@ from ..const import (
     DEFAULT_VOLTAGE,
 )
 
+_INCREASE_NOISE_W = 50  # W — minimum increase to bother sending a new command
+
 
 class ConsumerType(Enum):
     VARIABLE = "variable"  # Can adjust power (EV amps, battery charge rate)
@@ -251,7 +253,7 @@ def allocate_surplus(
             increase = min(remaining, headroom)
 
         increase = min(increase, headroom)
-        if increase > 50:
+        if increase > _INCREASE_NOISE_W:
             allocations.append(
                 SurplusAllocation(
                     c.id,
