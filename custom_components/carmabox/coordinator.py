@@ -2236,6 +2236,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             now = datetime.now()
             start_hour = now.hour
             _LOGGER.info("PLANNER START: hour=%d, soc=%.0f%%", start_hour, state.total_battery_soc)
+            self._last_plan_step = f"start:soc={state.total_battery_soc:.0f}"
 
             # Collect prices — try primary, fallback to secondary
             _step = "prices"
@@ -2269,6 +2270,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             tomorrow_prices = price_adapter.tomorrow_prices
             prices = today_prices[start_hour:] + (tomorrow_prices or today_prices)
+            self._last_plan_step = f"prices:{today_prices[start_hour]:.0f}ö"
 
             # Collect PV forecast — today remaining + tomorrow hourly
             _step = "solcast"
