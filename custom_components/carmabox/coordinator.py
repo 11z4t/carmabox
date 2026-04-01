@@ -4037,6 +4037,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._night_ev_active = False
             self._nev_state = "BATTERY_DEPLETED"
 
+        # W6: ABSOLUTE GRID GUARD — ALDRIG över target
+        # Sista säkerhetsnät: om grid > target trots alla andra lager → nödstoppa EV
+        _w6_nw = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
+        _w6_weight = _w6_nw if is_night else 1.0
+        _w6_weighted = max(0, state.grid_power_w) / 1000 * _w6_weight
+        if _w6_weighted > target_w / 1000 * 1.15 and self._ev_enabled:
+            _LOGGER.error(
+                "WATCHDOG W6 ABSOLUTE: grid %.1f kW (weighted) >> target %.1f kW"
+                " — NÖDSTOPP EV (LAG 1 trumfar allt)",
+                _w6_weighted,
+                target_w / 1000,
+            )
+            await self._cmd_ev_stop()
+            # Om natt-EV active, öka discharge istf att bara stoppa
+            if self._night_ev_active and state.total_battery_soc > self.min_soc:
+                for _adp in self.inverter_adapters:
+                    await _adp.set_ems_mode("discharge_pv")
+
         # W5: High price + battery capacity + idle
         if (
             state.current_price > price_expensive
