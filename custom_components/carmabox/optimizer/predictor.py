@@ -144,8 +144,18 @@ class ConsumptionPredictor:
         weekday: int,
         month: int,
         fallback_profile: list[float] | None = None,
+        outdoor_temp_c: float | None = None,
     ) -> list[float]:
         """Predict 24 hours of consumption starting from start_hour.
+
+        Args:
+            start_hour: Current hour (0-23).
+            weekday: Current weekday (0=Monday).
+            month: Current month (1-12).
+            fallback_profile: Static 24h profile used when untrained.
+            outdoor_temp_c: Current outdoor temperature for adjustment.
+                When provided, applies per-hour temperature correction
+                using learned temp→consumption correlation.
 
         Returns list of 24 predicted kW values.
         """
@@ -167,7 +177,13 @@ class ConsumptionPredictor:
             appl = self._estimate_appliance_kw(h, d)
             # ML-04: Apply plan feedback correction factor
             correction = self.get_correction_factor(h)
-            predicted = (base + appl) * correction
+            # Temperature-aware adjustment (cold winter → higher consumption)
+            temp_adj = (
+                self.get_temp_adjustment(h, outdoor_temp_c)
+                if outdoor_temp_c is not None
+                else 1.0
+            )
+            predicted = (base + appl) * correction * temp_adj
             result.append(round(max(0.3, predicted), 2))
         return result
 
@@ -471,16 +487,80 @@ class ConsumptionPredictor:
         qualified = {h: c for h, c in hour_counts.items() if c >= 3}
         return sorted(qualified.keys(), key=lambda h: qualified[h], reverse=True)
 
+    def update_seasonal_factor(
+        self,
+        month: int,
+        actual_avg_kw: float,
+        predicted_avg_kw: float,
+    ) -> None:
+        """Auto-calibrate seasonal factor from actual vs predicted consumption.
+
+        Uses EMA (alpha=0.05) for slow, stable seasonal learning.
+        Only updates if the ratio is outside a ±5% window to avoid noise.
+
+        Called from coordinator after each hour with plan_feedback.
+        """
+        if predicted_avg_kw < 0.1:
+            return
+        ratio = actual_avg_kw / predicted_avg_kw
+        ratio = max(0.5, min(2.0, ratio))  # Clamp to sane range
+        # Skip update if ratio is within 5% of 1.0 — noise floor
+        if abs(ratio - 1.0) < 0.05:
+            return
+        current = self.seasonal_factor.get(month, 1.0)
+        alpha = 0.05  # Very slow learning — seasonal patterns change gradually
+        new_factor = (1 - alpha) * current + alpha * (current * ratio)
+        self.seasonal_factor[month] = round(max(0.4, min(2.5, new_factor)), 3)
+
     @property
     def is_trained(self) -> bool:
         """True if enough data for reliable predictions."""
         return self.total_samples >= MIN_TRAINING_SAMPLES
 
     @property
+    def mean_absolute_error(self) -> float:
+        """Mean absolute error as fraction of actual consumption.
+
+        Computed from plan feedback ratios (actual / planned).
+        - 0.0 = perfect predictions
+        - 0.2 = 20% average error
+        - -1.0 = insufficient data (< 5 feedback samples)
+
+        More meaningful than accuracy_estimate for quantifying prediction quality.
+        """
+        all_ratios: list[float] = []
+        for key, vals in self.history.items():
+            if key.startswith("plan_fb_"):
+                all_ratios.extend(vals[-10:])
+        if len(all_ratios) < 5:
+            return -1.0
+        mae = sum(abs(r - 1.0) for r in all_ratios) / len(all_ratios)
+        return round(mae, 3)
+
+    @property
+    def data_coverage_pct(self) -> float:
+        """Percentage of all 168 weekday x hour slots with >=3 consumption samples.
+
+        100% = full weekly coverage — reliable predictions for every hour.
+        More informative than total_samples for understanding temporal coverage.
+        """
+        _non_consumption_prefixes = (
+            "plan_fb_", "temp_", "appl_", "cycle_", "idle_", "ev_", "breach_"
+        )
+        filled = sum(
+            1
+            for key, vals in self.history.items()
+            if not any(key.startswith(p) for p in _non_consumption_prefixes)
+            and len(vals) >= 3
+        )
+        return round(filled / 168 * 100, 1)
+
+    @property
     def accuracy_estimate(self) -> float:
         """Rough accuracy estimate based on data coverage.
 
         Returns 0-100%. 100% = all 168 weekdayxhour slots have data.
+        Prefer data_coverage_pct for more accurate reporting.
         """
         filled = sum(1 for v in self.history.values() if len(v) >= 3)
         total_slots = 7 * 24  # 168

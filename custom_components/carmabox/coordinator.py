@@ -2334,18 +2334,30 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # PLAT-965: Use predictor if trained, else fallback to profile
             _step = "consumption"
             base = self.consumption_profile.get_profile_for_date(now)
+            # Pass outdoor temperature for temperature-aware prediction
+            _outdoor_temp_c: float | None = None
+            _tempest = self.hass.states.get("sensor.tempest_temperature")
+            if _tempest and _tempest.state not in ("unavailable", "unknown", ""):
+                _LOGGER.debug("Suppressed error", exc_info=False)
+                try:
+                    _outdoor_temp_c = float(_tempest.state)
+                except (ValueError, TypeError):
+                    _LOGGER.debug("Suppressed error", exc_info=True)
             if self.predictor.is_trained:
                 consumption = self.predictor.predict_24h(
                     start_hour=start_hour,
                     weekday=now.weekday(),
                     month=now.month,
                     fallback_profile=base,
+                    outdoor_temp_c=_outdoor_temp_c,
                 )
                 # Pad to match prices length (predict_24h returns exactly 24)
                 consumption = (consumption or base[start_hour:]) + base
                 _LOGGER.info(
-                    "Plan: using ML consumption profile (trained, %d samples)",
+                    "Plan: ML profile (trained, %d samples, MAE=%.2f, cov=%.0f%%)",
                     self.predictor.total_samples,
+                    self.predictor.mean_absolute_error,
+                    self.predictor.data_coverage_pct,
                 )
             else:
                 consumption = base[start_hour:] + base
@@ -6012,6 +6024,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if ph.hour == hour:
                     actual_grid = max(0, state.grid_power_w) / 1000
                     self.predictor.add_plan_feedback(hour, ph.grid_kw, actual_grid)
+                    # Auto-calibrate seasonal factor from actual vs predicted
+                    if ph.grid_kw > 0.1 and self.predictor.is_trained:
+                        from datetime import datetime as _dt
+                        self.predictor.update_seasonal_factor(
+                            _dt.now().month,
+                            actual_grid,
+                            ph.grid_kw,
+                        )
                     break
 
         # EV usage (once per day at 22:00)
