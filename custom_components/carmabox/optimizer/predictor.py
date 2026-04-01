@@ -162,8 +162,31 @@ class ConsumptionPredictor:
         for i in range(24):
             h = (start_hour + i) % 24
             d = (weekday + (1 if start_hour + i >= 24 else 0)) % 7
-            result.append(self.predict_hour(d, h, month, fallback_kw))
+            base = self.predict_hour(d, h, month, fallback_kw)
+            # ML-04: Add appliance contribution from historical patterns
+            appl = self._estimate_appliance_kw(h, d)
+            # ML-04: Apply plan feedback correction factor
+            correction = self.get_correction_factor(h)
+            predicted = (base + appl) * correction
+            result.append(round(max(0.3, predicted), 2))
         return result
+
+    def _estimate_appliance_kw(self, hour: int, weekday: int) -> float:
+        """Estimate appliance load contribution at this hour/weekday.
+
+        Returns average kW from dishwasher/washer/dryer history if
+        at least 3 events recorded. Used by predict_24h (ML-04).
+        """
+        total_kw = 0.0
+        found = 0
+        for cat in ("disk", "tvatt", "tork"):
+            key = f"appl_{cat}_{weekday}_{hour}"
+            samples = self.history.get(key, [])
+            if len(samples) >= 3:
+                recent = samples[-10:]
+                total_kw += sum(recent) / len(recent)
+                found += 1
+        return round(total_kw, 2) if found > 0 else 0.0
 
     # ── Battery Economics (IT-2378) ──────────────────────────────
 

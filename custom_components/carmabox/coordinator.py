@@ -5987,8 +5987,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             st = self.hass.states.get(eid)
             if st and st.state not in ("unavailable", "unknown", ""):
                 try:
-                    if float(st.state) > 500:
-                        self.predictor.add_appliance_event(hour, weekday, name)
+                    power_w = float(st.state)
+                    if power_w > 500:
+                        self.predictor.add_appliance_event(name, power_w / 1000, hour, weekday)
                 except (ValueError, TypeError):
                     _LOGGER.debug("Suppressed error", exc_info=True)
 
@@ -5998,7 +5999,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             try:
                 temp_c = float(temp_state.state)
                 house_kw = getattr(self, "_estimated_house_base_kw", 2.0)
-                self.predictor.add_temperature_sample(temp_c, house_kw, hour)
+                self.predictor.add_temperature_sample(hour, temp_c, house_kw)
             except (ValueError, TypeError):
                 _LOGGER.debug("Suppressed error", exc_info=True)
 
