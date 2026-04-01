@@ -44,8 +44,8 @@ from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
 from .const import (
-    APPLIANCE_HEAVY_THRESHOLD_W,
-    APPLIANCE_IDLE_THRESHOLD_W,
+    APPLIANCE_PAUSE_THRESHOLD_W,
+    APPLIANCE_RESUME_THRESHOLD_W,
     DEFAULT_BAT_MAX_CHARGE_W,
     DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_BATTERY_1_KWH,
@@ -1427,14 +1427,14 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     with contextlib.suppress(ValueError, TypeError):
                         _appliance_w += float(_app_st.state)
 
-            if _appliance_w > APPLIANCE_HEAVY_THRESHOLD_W and not self._ev_paused_for_appliance:
+            if _appliance_w > APPLIANCE_PAUSE_THRESHOLD_W and not self._ev_paused_for_appliance:
                 _LOGGER.info(
                     "PLAN-03: Storförbrukare %.0fW — pausar natt-EV",
                     _appliance_w,
                 )
                 await self._cmd_ev_stop()
                 self._ev_paused_for_appliance = True
-            elif _appliance_w < APPLIANCE_IDLE_THRESHOLD_W and self._ev_paused_for_appliance:
+            elif _appliance_w < APPLIANCE_RESUME_THRESHOLD_W and self._ev_paused_for_appliance:
                 _LOGGER.info(
                     "PLAN-03: Storförbrukare klar (%.0fW) — återstartar natt-EV %dA",
                     _appliance_w,

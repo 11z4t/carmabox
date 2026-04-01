@@ -160,9 +160,6 @@ DISCHARGE_NIGHT_FACTOR = 2.0  # Night: x2 (Ellevio weights x0.5)
 COLD_TEMP_THRESHOLD_C = 4.0  # Below this = cold condition
 COLD_MIN_SOC_PCT = 20.0  # Min SoC when cold (vs 15% normal)
 
-APPLIANCE_HEAVY_THRESHOLD_W: int = 500  # W — active appliance pauses night-EV
-APPLIANCE_IDLE_THRESHOLD_W: int = 100   # W — appliance done, resume night-EV
-
 # Appliance categories
 APPLIANCE_CATEGORIES = {
     "laundry": "Vitvaror",
