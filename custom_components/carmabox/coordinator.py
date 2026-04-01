@@ -842,6 +842,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._miner_on = bool(data.get("miner_on", False))
                 # Restore night EV state (survives HA restart)
                 self._night_ev_active = bool(data.get("night_ev_active", False))
+                self._nev_state = str(data.get("nev_state", "IDLE"))
                 # Restore Ellevio timmedel samples (PLAT-927 persistence)
                 raw_samples = data.get("ellevio_hour_samples", [])
                 self._ellevio_hour_samples = [
@@ -923,6 +924,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 "ev_soc_unix_time": getattr(self, "_last_known_ev_soc_unix", 0.0),
                 "miner_on": self._miner_on,
                 "night_ev_active": getattr(self, "_night_ev_active", False),
+                "nev_state": getattr(self, "_nev_state", "IDLE"),
                 "ellevio_hour_samples": [
                     [ts, val] for ts, val in getattr(self, "_ellevio_hour_samples", [])
                 ],
