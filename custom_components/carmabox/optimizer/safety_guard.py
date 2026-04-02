@@ -127,14 +127,14 @@ class SafetyGuard:
         # IT-2075: Reserve-aware gating (always enforce 1.0 kWh minimum margin)
         if available_kwh < reserve_kwh + 1.0:
             reason = f"available {available_kwh:.1f} kWh < reserve {reserve_kwh:.1f} + 1.0"
-            _LOGGER.info("SafetyGuard BLOCK discharge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("discharge", r)
             return r
         # Never discharge during export
         if grid_power_w < 0:
             reason = f"grid exporting ({grid_power_w:.0f}W)"
-            _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("discharge", r)
             return r
@@ -142,7 +142,7 @@ class SafetyGuard:
         # Min SoC check
         if soc_1 < min_soc:
             reason = f"battery_1 SoC {soc_1:.0f}% < min {min_soc:.0f}%"
-            _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("discharge", r)
             return r
@@ -150,7 +150,7 @@ class SafetyGuard:
         if soc_2 > 0 and soc_2 < min_soc:
             # soc_2==0 likely means unavailable — don't block on that
             reason = f"battery_2 SoC {soc_2:.0f}% < min {min_soc:.0f}%"
-            _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("discharge", r)
             return r
@@ -159,13 +159,13 @@ class SafetyGuard:
         if temp_c is not None:
             if temp_c < self.temp_min_discharge:
                 reason = f"temperature {temp_c:.1f}°C < min {self.temp_min_discharge}°C"
-                _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
+                _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
                 r = SafetyResult(ok=False, reason=reason)
                 self._log("discharge", r)
                 return r
             if temp_c > self.temp_max:
                 reason = f"temperature {temp_c:.1f}°C > max {self.temp_max}°C"
-                _LOGGER.debug("SafetyGuard BLOCK discharge: %s", reason)
+                _LOGGER.error("SafetyGuard BLOCK discharge: %s", reason)
                 r = SafetyResult(ok=False, reason=reason)
                 self._log("discharge", r)
                 return r

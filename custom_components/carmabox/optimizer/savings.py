@@ -14,6 +14,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..const import DEFAULT_PEAK_COST_PER_KW
+
 if TYPE_CHECKING:
     from datetime import datetime
 
@@ -149,7 +151,7 @@ def record_grid_charge(
 
 def calculate_peak_savings(
     state: SavingsState,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
 ) -> float:
     """Calculate peak reduction savings (kr/month).
@@ -181,7 +183,7 @@ def calculate_peak_savings(
 def ellevio_peak_penalty(
     peak_samples: list[float],
     target_kw: float = 2.0,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
 ) -> dict[str, Any]:
     """Calculate the extra Ellevio cost from exceeding target.
@@ -228,7 +230,7 @@ def ellevio_peak_penalty(
 
 def total_savings(
     state: SavingsState,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
 ) -> float:
     """Total estimated savings this month (kr).
@@ -242,7 +244,7 @@ def total_savings(
 def record_daily_snapshot(
     state: SavingsState,
     date_str: str,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
 ) -> None:
     """Snapshot today's savings into the daily trend list.
@@ -320,7 +322,7 @@ def peak_comparison(
 
 def savings_breakdown(
     state: SavingsState,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
     target_kw: float = 2.0,
 ) -> dict[str, float]:
@@ -340,7 +342,7 @@ def savings_breakdown(
 
 def savings_whatif(
     state: SavingsState,
-    cost_per_kw: float = 80.0,
+    cost_per_kw: float = DEFAULT_PEAK_COST_PER_KW,
     top_n: int = 3,
 ) -> dict[str, float]:
     """What-if comparison: cost with vs without CARMA Box.

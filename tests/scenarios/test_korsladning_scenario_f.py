@@ -295,4 +295,6 @@ class TestModbusLockPreventsRace:
             result = await adapter.set_ems_mode("charge_pv")
 
         assert result is True
-        assert call_count == 2  # First failed, retry succeeded
+        # 3 calls: legacy input_select (best-effort) + select (fail) + select (retry)
+        # Plus ems_power_limit reset (charge_pv triggers reset)
+        assert call_count >= 3  # Legacy + fail + retry (+ optional ems_power_limit)
