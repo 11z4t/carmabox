@@ -197,9 +197,9 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         self.ev_soc_at_06: int | None = None
 
         # Legacy compatibility stubs
-        self.breaches: list = []
+        self.breaches: list[Any] = []
         self.breach_count_month: int = 0
-        self.learnings: list = []
+        self.learnings: list[Any] = []
         self.idle_analysis = None
         self.ev_next_full_charge_date = None
 
@@ -233,7 +233,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         self._plan_generated: bool = False
 
         # ── Persistent state store ────────────────────────────
-        self._store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self._store: Store[dict[str, Any]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._state_restored: bool = False
         self._last_save_time: float = 0.0
 

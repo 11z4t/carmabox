@@ -240,7 +240,7 @@ class HubSyncClient:
         Non-blocking — runs in HA event loop.
         """
         try:
-            import paho.mqtt.client as mqtt  # type: ignore[import-untyped,unused-ignore]
+            import paho.mqtt.client as mqtt  # type: ignore[import-untyped,import-not-found]
         except ImportError:
             _LOGGER.warning("paho-mqtt not installed — using HTTPS fallback only")
             return False

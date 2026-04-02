@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from .coordinator import BatteryCommand  # noqa: F401 — re-exported for mixin methods
+from .optimizer.models import BatteryCommand  # noqa: F401 — needed by mixin methods
 
 if TYPE_CHECKING:
     from .optimizer.models import CarmaboxState  # noqa: F401 — needed by mixin methods
