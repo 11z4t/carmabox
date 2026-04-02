@@ -341,7 +341,7 @@ class HubSyncClient:
 
             return True
 
-        except (OSError, ValueError, RuntimeError, TypeError, Exception):
+        except (OSError, ValueError, RuntimeError, TypeError):
             _LOGGER.debug("MQTT connect failed — will use HTTPS fallback", exc_info=True)
             return False
 
