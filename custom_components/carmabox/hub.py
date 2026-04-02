@@ -341,7 +341,7 @@ class HubSyncClient:
 
             return True
 
-        except Exception:
+        except (OSError, ValueError):
             _LOGGER.debug("MQTT connect failed — will use HTTPS fallback", exc_info=True)
             return False
 
@@ -369,7 +369,7 @@ class HubSyncClient:
                 payload = json.dumps(data)
             self._mqtt_client.publish(topic, payload, qos=qos, retain=retain)
             return True
-        except Exception:
+        except (OSError, TypeError, ValueError):
             _LOGGER.debug("MQTT publish failed", exc_info=True)
             return False
 
@@ -433,7 +433,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub HTTPS sync failed: HTTP %s", resp.status)
                 return False
 
-        except Exception:
+        except (aiohttp.ClientError, TimeoutError):
             _LOGGER.debug("Hub HTTPS sync failed", exc_info=True)
             return False
 
@@ -480,7 +480,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub registration failed: HTTP %s", resp.status)
                 return None
 
-        except Exception:
+        except (aiohttp.ClientError, TimeoutError):
             _LOGGER.debug("Hub registration failed", exc_info=True)
             return None
 
@@ -515,7 +515,7 @@ class HubSyncClient:
                     )
                     return data
                 return None
-        except Exception:
+        except (aiohttp.ClientError, TimeoutError, RuntimeError):
             _LOGGER.debug("Hub benchmarking fetch failed", exc_info=True)
             return None
 

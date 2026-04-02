@@ -278,7 +278,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         "CARMA EV: seeded last_known_soc=%.0f%%",
                         self._last_known_ev_soc,
                     )
-        except Exception:
+        except (AttributeError, ValueError, TypeError, RuntimeError):
             _LOGGER.debug("EV SoC seed failed", exc_info=True)
         self._ev_current_amps: int = 0
         self._ev_last_ramp_time: float = 0.0
@@ -584,7 +584,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                 else:
                     _LOGGER.warning("License check failed: HTTP %d", resp.status)
-        except Exception:
+        except (aiohttp.ClientError, TimeoutError, RuntimeError, OSError):
             _LOGGER.debug("License check failed — using cached license", exc_info=True)
 
     @property
@@ -733,7 +733,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     len(restored.daily_savings),
                     restored.discharge_savings_kr + restored.grid_charge_savings_kr,
                 )
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore savings, starting fresh", exc_info=True)
 
     async def _async_save_savings(self) -> None:
@@ -747,7 +747,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             save_data["_last_save_ts"] = datetime.now().isoformat()
             save_data["_executor_enabled"] = getattr(self, "executor_enabled", False)
             await self._savings_store.async_save(save_data)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save savings", exc_info=True)
 
     async def _async_restore_consumption(self) -> None:
@@ -767,7 +767,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if isinstance(stored, dict) and stored:
                     self.consumption_profile = ConsumptionProfile.from_dict(stored)
                     _LOGGER.info("Migrated consumption profile from config entry options")
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore consumption profile, starting fresh", exc_info=True)
 
     async def _async_save_consumption(self) -> None:
@@ -778,7 +778,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._consumption_last_save = now
         try:
             await self._consumption_store.async_save(self.consumption_profile.to_dict())
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save consumption profile", exc_info=True)
 
     async def _async_restore_predictor(self) -> None:
@@ -792,7 +792,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self.predictor.total_samples,
                     self.predictor.is_trained,
                 )
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore predictor, starting fresh", exc_info=True)
 
     async def _async_restore_runtime(self) -> None:
@@ -904,7 +904,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     len(self._ellevio_hour_samples),
                     len(self._ellevio_monthly_hourly_peaks),
                 )
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore runtime, starting fresh", exc_info=True)
 
     async def _async_save_runtime(self) -> None:
@@ -954,7 +954,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if hasattr(self, "_grid_guard") and self._grid_guard is not None:
                 data["grid_guard"] = self._grid_guard.get_persistent_state()
             await self._runtime_store.async_save(data)
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save runtime", exc_info=True)
 
     async def _async_restore_ledger(self) -> None:
@@ -968,7 +968,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     len(self.ledger.entries),
                     self.ledger.entries[-1].date if self.ledger.entries else "none",
                 )
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore ledger, starting fresh", exc_info=True)
 
     async def _async_save_ledger(self) -> None:
@@ -979,7 +979,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._ledger_last_save = now
         try:
             await self._ledger_store.async_save(self.ledger.to_dict())
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save ledger", exc_info=True)
 
     async def _async_save_predictor(self) -> None:
@@ -990,7 +990,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._predictor_last_save = now
         try:
             await self._predictor_store.async_save(self.predictor.to_dict())
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save predictor", exc_info=True)
 
     async def _async_fetch_benchmarking(self) -> None:
@@ -1010,7 +1010,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             data = await hub.fetch_benchmarking(cfg)
             if data is not None:
                 self.benchmark_data = data
-        except Exception:
+        except (TimeoutError, AttributeError, OSError):
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
 
     async def _execute_v2(self, state: CarmaboxState) -> None:
@@ -1300,7 +1300,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         await adapter.set_ems_mode("charge_pv")
                     self._price_discharge_active = False
                     self._last_battery_action = "charge_pv"
-        except Exception:
+        except (AttributeError, ValueError, HomeAssistantError):
             _LOGGER.debug("Price-discharge check failed", exc_info=True)
 
         # ── Night EV State Machine ──────────────────────────────
@@ -1431,7 +1431,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             solcast_estimate_kw=solcast_current,
                             hour=hour,
                         )
-                    except Exception:
+                    except (AttributeError, ValueError, ZeroDivisionError):
                         _LOGGER.debug("Suppressed error", exc_info=True)
 
                 # Weekend/workday detection
@@ -1508,7 +1508,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     if recovery:
                         _LOGGER.warning("EV-RECOVERY: %s", recovery)
 
-            except Exception:
+            except (HomeAssistantError, AttributeError, ValueError):
                 _LOGGER.debug("SOLAR-EV: allocation failed", exc_info=True)
 
         # ── Surplus chain — ALWAYS runs ──────────────────────────
@@ -1952,7 +1952,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             all_off = False
                         elif fc_state is None:
                             all_off = False  # Sensor inte redo ännu
-                    except Exception:
+                    except HomeAssistantError:
                         _LOGGER.error(
                             "STARTUP SAFETY: %s — adapter ej redo",
                             adapter.prefix,
@@ -1979,7 +1979,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             )
                             # PLAT-1032: max_limit removed
                             # adapter handles via ensure_initialized()
-                        except Exception:
+                        except HomeAssistantError:
                             _LOGGER.error("STARTUP SAFETY: EV recovery misslyckades", exc_info=True)
 
             # Restore persistent state on first run
@@ -2057,7 +2057,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 }
                 with open("/config/carmabox-heartbeat.json", "w") as _f:
                     _json.dump(_hb, _f)
-            except Exception:
+            except (OSError, TypeError, ValueError):
                 _LOGGER.debug("Non-critical operation failed", exc_info=True)
 
             # IT-2467: MQTT heartbeat for external watchdog
@@ -2065,7 +2065,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 _hub = getattr(self, "_hub", None)
                 if _hub:
                     _hub.publish_status(version="4.6.0")
-            except Exception:
+            except (OSError, AttributeError):
                 _LOGGER.debug("Non-critical operation failed", exc_info=True)
 
             # License check (every 6h — Hub handshake)
@@ -2252,7 +2252,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         try:
             fn(*args, **kwargs)
-        except Exception:
+        except Exception:  # Safety net: rate-limiter wraps arbitrary methods
             self._disabled_methods[method_name] = (
                 time.monotonic() + 300  # 5 min cooldown
             )
@@ -3812,7 +3812,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         "set_temperature",
                         {"entity_id": entity_id, "temperature": temp},
                     )
-        except Exception:
+        except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: VP control failed for %s", entity_id, exc_info=True)
 
     async def _execute_pool(self, state: CarmaboxState) -> None:
@@ -3874,7 +3874,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         try:
             service = "turn_on" if on else "turn_off"
             await self.hass.services.async_call("switch", service, {"entity_id": entity_id})
-        except Exception:
+        except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: pool switch failed: %s", entity_id, exc_info=True)
 
     async def _execute_pool_circulation(self, state: CarmaboxState) -> None:
@@ -4266,7 +4266,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             solcast = SolcastAdapter(self.hass)
             daily = solcast.forecast_daily_3d  # [today, tomorrow, day3, day4, ...]
-        except Exception:
+        except (ImportError, AttributeError, RuntimeError):
             # Fallback if solcast unavailable
             return float(self._cfg.get("ev_night_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
 
@@ -4785,7 +4785,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._miner_on = on
             # CARMA-P0-FIXES Task 4: Save runtime after miner state change
             await self._async_save_runtime()
-        except Exception:
+        except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: miner control failed", exc_info=True)
 
     async def _cmd_ev_start(self, amps: int = DEFAULT_EV_MIN_AMPS) -> None:
@@ -5457,7 +5457,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                         raise_hub_offline_issue(self.hass, hours)
                     else:
                         clear_issue(self.hass, "hub_offline")
-        except Exception:
+        except (HomeAssistantError, AttributeError, RuntimeError):
             _LOGGER.debug("Repair issue check failed", exc_info=True)
 
     def _reset_daily_counters_if_new_day(self, now: datetime) -> None:
@@ -6481,7 +6481,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     {"entity_id": ems_entity},
                 )
                 _LOGGER.info("CARMA self-heal: triggered reload for GoodWe %s", adapter.prefix)
-            except Exception:
+            except HomeAssistantError:
                 _LOGGER.debug(
                     "CARMA self-heal: reload failed for %s",
                     adapter.prefix,

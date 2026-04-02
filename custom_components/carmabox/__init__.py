@@ -75,7 +75,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if hass.http is not None:
         try:
             hass.http.register_static_path(CARD_URL, str(CARD_JS), cache_headers=False)
-        except Exception:
+        except RuntimeError:
             _LOGGER.debug("Static path %s already registered", CARD_URL)
 
     _LOGGER.info("CARMA Box started: %s", entry.title)

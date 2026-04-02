@@ -833,7 +833,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             entry = ent_reg.async_get(soc_entity)
             if entry and entry.device_id:
                 return entry.device_id
-        except Exception:
+        except (AttributeError, LookupError, RuntimeError):
             _LOGGER.debug("Could not resolve device_id via entity registry", exc_info=True)
 
         # Strategy 2: Match suffix against detected inverter device_ids
@@ -915,7 +915,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
                 for device in dev_reg.devices.values()
                 if entry_id in device.config_entries
             ]
-        except Exception:
+        except (AttributeError, LookupError, RuntimeError):
             _LOGGER.debug("Could not resolve device IDs for entry %s", entry_id)
             return []
 

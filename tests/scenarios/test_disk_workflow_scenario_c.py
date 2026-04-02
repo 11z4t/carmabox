@@ -49,7 +49,7 @@ class TestScenarioC:
     def test_appliance_below_threshold_no_pause(self) -> None:
         """Appliance below threshold → EV continues charging."""
         state = self._make_nev_state(appliance_w=300.0)
-        new_state, cmd = decide_nev(state, "EV_CHARGING", 0.0)
+        new_state, _cmd = decide_nev(state, "EV_CHARGING", 0.0)
         assert new_state == "EV_CHARGING"
 
     def test_ev_resumes_after_appliance(self) -> None:
@@ -62,7 +62,7 @@ class TestScenarioC:
     def test_appliance_still_running_stays_paused(self) -> None:
         """Appliance still running → stay in APPLIANCE_PAUSE."""
         state = self._make_nev_state(appliance_w=1500.0)
-        new_state, cmd = decide_nev(state, "APPLIANCE_PAUSE", 0.0)
+        new_state, _cmd = decide_nev(state, "APPLIANCE_PAUSE", 0.0)
         assert new_state == "APPLIANCE_PAUSE"
 
     def test_threshold_constants_correct(self) -> None:

@@ -254,7 +254,7 @@ class TestFetchBenchmarking:
         client = _make_client()
         with patch(
             "custom_components.carmabox.hub.async_get_clientsession",
-            side_effect=Exception("offline"),
+            side_effect=RuntimeError("offline"),
         ):
             result = await client.fetch_benchmarking({})
         assert result is None

@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from ..const import (
     APPLIANCE_PAUSE_THRESHOLD_W,
@@ -31,8 +31,8 @@ from ..const import (
 _LOGGER = logging.getLogger(__name__)
 
 
-class NevPhase(str, Enum):
-    """Night EV state machine phases. str-Enum for backward compatibility."""
+class NevPhase(StrEnum):
+    """Night EV state machine phases."""
 
     IDLE = "IDLE"
     DISCHARGE_RAMP = "DISCHARGE_RAMP"

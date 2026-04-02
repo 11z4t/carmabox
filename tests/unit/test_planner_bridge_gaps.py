@@ -369,7 +369,7 @@ class TestCoordinatorBridgeGaps:
 
         bridge = _make_bridge()
         mock_store = MagicMock()
-        mock_store.async_save = AsyncMock(side_effect=Exception("disk full"))
+        mock_store.async_save = AsyncMock(side_effect=OSError("disk full"))
         bridge._store = mock_store  # type: ignore[union-attr]
         # Should not raise — exception is caught
         asyncio.get_event_loop().run_until_complete(
@@ -410,7 +410,7 @@ class TestCoordinatorBridgeGaps:
 
         bridge = _make_bridge()
         mock_store = MagicMock()
-        mock_store.async_load = AsyncMock(side_effect=Exception("corrupt storage"))
+        mock_store.async_load = AsyncMock(side_effect=OSError("corrupt storage"))
         bridge._store = mock_store  # type: ignore[union-attr]
         # Should not raise
         asyncio.get_event_loop().run_until_complete(

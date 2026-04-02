@@ -20,6 +20,7 @@ from collections import deque
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
@@ -473,7 +474,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             if phase_mode and isinstance(self.ev_adapter, EaseeAdapter):
                 await self.ev_adapter.set_charger_phase_mode(phase_mode)
                 _LOGGER.info("EV command: set phase mode → %s", phase_mode)
-        except Exception:
+        except (HomeAssistantError, RuntimeError):
             _LOGGER.exception("EV command failed: %s", ev_cmd)
 
     async def _enforce_ems_modes(self, sys_state: SystemState, result: CycleResult) -> None:
@@ -573,7 +574,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         domain, "turn_off", {"entity_id": entity_id}
                     )
                     _LOGGER.info("Surplus: turned OFF %s", entity_id)
-            except Exception:
+            except (HomeAssistantError, RuntimeError):
                 _LOGGER.exception("Surplus action failed: %s %s", action_type, entity_id)
 
     # ── Plan generation ──────────────────────────────────────
@@ -722,7 +723,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                 self.total_discharge_kwh,
             )
 
-        except Exception:
+        except (ValueError, TypeError, KeyError, AttributeError, RuntimeError):
             _LOGGER.exception("Plan generation failed, keeping previous plan")
 
     # ── PLAT-1095: Ellevio sample tracking ──────────────────
@@ -795,7 +796,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
             }
             await self._store.async_save(state)
             _LOGGER.debug("State saved to storage")
-        except Exception:
+        except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save state", exc_info=True)
 
     async def _async_restore_state(self) -> None:
@@ -876,7 +877,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                 self._last_command,
                 self._ev_enabled,
             )
-        except Exception:
+        except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore bridge state, starting fresh", exc_info=True)
 
     # ── Main update loop ───────────────────────────────────────
@@ -907,7 +908,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                             fc_state = self.hass.states.get(fc_entity)
                             if fc_state is None:
                                 all_off = False
-                    except Exception:
+                    except (HomeAssistantError, RuntimeError):
                         _LOGGER.error(
                             "STARTUP SAFETY: adapter %s not ready",
                             getattr(adapter, "prefix", "?"),
@@ -1011,7 +1012,14 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
                         len(result.battery_commands),
                         result.ev_command,
                     )
-                except Exception:
+                except (
+                    HomeAssistantError,
+                    ValueError,
+                    TypeError,
+                    AttributeError,
+                    KeyError,
+                    RuntimeError,
+                ):
                     _LOGGER.exception("V2 cycle failed, returning state without execution")
 
             # ── Plan generation (every PLAN_INTERVAL_SECONDS) ──

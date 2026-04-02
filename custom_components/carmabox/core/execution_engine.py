@@ -19,6 +19,8 @@ if TYPE_CHECKING:
     from ..optimizer.models import CarmaboxState
     from .surplus_chain import SurplusAllocation
 
+from homeassistant.exceptions import HomeAssistantError
+
 from ..adapters.goodwe import GoodWeAdapter
 from ..const import (
     DEFAULT_BATTERY_1_KWH,
@@ -333,7 +335,7 @@ class ExecutionEngine:
                         await adapter.set_ems_mode("charge_pv")
                     self._coord._price_discharge_active = False
                     self._coord._last_battery_action = "charge_pv"
-        except Exception:
+        except (HomeAssistantError, AttributeError, ValueError, RuntimeError):
             _LOGGER.debug("Price-discharge check failed", exc_info=True)
 
         # ── EV timing: charge tonight or wait? ──
@@ -385,7 +387,7 @@ class ExecutionEngine:
                             "EV-TIMING: Skip tonight — %s",
                             ev_timing.get("reason", "")[:60],
                         )
-            except Exception:
+            except (KeyError, ValueError, AttributeError):
                 _LOGGER.debug("EV timing check failed", exc_info=True)
 
         if (
@@ -412,7 +414,7 @@ class ExecutionEngine:
                     "press",
                     {"entity_id": "button.easee_home_12840_override_schedule"},
                 )
-            except Exception:
+            except (HomeAssistantError, RuntimeError):
                 _LOGGER.warning("NATT-EV: override_schedule misslyckades")
             await self.cmd_ev_start(DEFAULT_EV_MIN_AMPS)
             self._coord._night_ev_active = True
@@ -514,7 +516,7 @@ class ExecutionEngine:
                             solcast_estimate_kw=solcast_current,
                             hour=hour,
                         )
-                    except Exception:
+                    except (AttributeError, ValueError, ZeroDivisionError):
                         _LOGGER.debug("Could not add weather sample to predictor", exc_info=True)
 
                 is_workday = now.weekday() < 5
@@ -594,7 +596,7 @@ class ExecutionEngine:
                     if recovery:
                         _LOGGER.warning("EV-RECOVERY: %s", recovery)
 
-            except Exception:
+            except (HomeAssistantError, AttributeError, ValueError, RuntimeError):
                 _LOGGER.debug("SOLAR-EV: allocation failed", exc_info=True)
 
         # ── Surplus chain — ALWAYS runs ──────────────────────────
@@ -759,7 +761,7 @@ class ExecutionEngine:
                             "set_value",
                             {"entity_id": _lim_entity, "value": 0},
                         )
-                except Exception:
+                except (HomeAssistantError, RuntimeError, ValueError, AttributeError):
                     _LOGGER.warning(
                         "EMS ENFORCE: %s failed to reset ems_power_limit",
                         _adp.prefix,
@@ -830,7 +832,7 @@ class ExecutionEngine:
             )
             self._coord._miner_on = on
             await self._coord._async_save_runtime()
-        except Exception:
+        except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: miner control failed", exc_info=True)
 
     # ═══════════════════════════════════════════════════════════════════════
