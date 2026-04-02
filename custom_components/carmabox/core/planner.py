@@ -23,6 +23,10 @@ from ..const import (
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PEAK_TOP_N,
+    DEFAULT_PLANNER_APPLIANCE_MARGIN_KWH,
+    DEFAULT_PLANNER_HOUSE_BASELOAD_KW,
+    DEFAULT_PLANNER_NIGHT_HOURS,
+    DEFAULT_VOLTAGE,
     GRID_LIMIT_DEFAULT_KW,
     P10_DISCHARGE_CONSERVATIVE_KW,
     P10_DISCHARGE_MODERATE_KW,
@@ -74,7 +78,7 @@ def plan_solar_allocation(
     ev_phase_count: int = 3,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
     ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
     pv_confidence: float = 1.0,
 ) -> SolarAllocationResult:
     """Allocate remaining solar production between battery and EV.
@@ -350,7 +354,7 @@ def allocate_pv_surplus(
     pv_confidence: float = 1.0,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
     ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
-    voltage: float = 230.0,
+    voltage: float = DEFAULT_VOLTAGE,
     ellevio_tak_w: float = 2000.0,
     battery_max_charge_w: float = 5000,
 ) -> PVSurplusAllocation:
@@ -532,16 +536,16 @@ class PlannerInput:
 def calculate_night_reserve_kwh(
     ev_phase_count: int = 3,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
-    house_baseload_kw: float = 2.5,
+    house_baseload_kw: float = DEFAULT_PLANNER_HOUSE_BASELOAD_KW,
     grid_max_night_kw: float = 4.0,
-    night_hours: int = 8,
-    appliance_margin_kwh: float = 3.0,
+    night_hours: int = DEFAULT_PLANNER_NIGHT_HOURS,
+    appliance_margin_kwh: float = DEFAULT_PLANNER_APPLIANCE_MARGIN_KWH,
 ) -> float:
     """Calculate battery reserve needed for tonight.
 
     Reserve = (EV_kW + house_kW - grid_max_night) x hours + appliance_margin
     """
-    ev_kw = 230 * ev_phase_count * ev_min_amps / 1000
+    ev_kw = DEFAULT_VOLTAGE * ev_phase_count * ev_min_amps / 1000
     bat_per_hour = max(0, ev_kw + house_baseload_kw - grid_max_night_kw)
     return bat_per_hour * night_hours + appliance_margin_kwh
 
@@ -591,12 +595,12 @@ def generate_carma_plan(
 
     # ── Night reserve: don't discharge daytime if batteries needed tonight ──
     # Calculate how much battery is needed for tonight's EV support
-    ev_kw = 230 * int(getattr(cfg, "ev_phase_count", 3)) * 6 / 1000  # min 6A
-    house_kw = 2.5  # Measured night baseload 2.5-3kW
+    ev_kw = DEFAULT_VOLTAGE * int(getattr(cfg, "ev_phase_count", 3)) * DEFAULT_EV_MIN_AMPS / 1000
+    house_kw = DEFAULT_PLANNER_HOUSE_BASELOAD_KW
     grid_max_night = cfg.ellevio_tak_kw / cfg.ellevio_night_weight  # Actual kW
     bat_per_hour_night = max(0, ev_kw + house_kw - grid_max_night)
-    night_hours = 8
-    disk_margin_kwh = 3.0  # Reserve for dishwasher/appliances
+    night_hours = DEFAULT_PLANNER_NIGHT_HOURS
+    disk_margin_kwh = DEFAULT_PLANNER_APPLIANCE_MARGIN_KWH
     night_reserve_kwh = bat_per_hour_night * night_hours + disk_margin_kwh
 
     available_kwh = max(0, (input_data.battery_soc - min_soc) / 100 * input_data.battery_cap_kwh)
@@ -943,7 +947,7 @@ def optimal_discharge_hours(
     start_hour: int,
     battery_kwh_available: float,
     max_discharge_kw: float = 5.0,
-    house_load_kw: float = 2.5,
+    house_load_kw: float = DEFAULT_PLANNER_HOUSE_BASELOAD_KW,
     min_profitable_spread_ore: float = 20.0,
 ) -> list[dict[str, Any]]:
     """Find the best hours to discharge battery for maximum savings.

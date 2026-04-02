@@ -1,8 +1,10 @@
 """Tests for core/commands.py — legacy charge_pv path coverage (PLAT-1217)."""
+
 from __future__ import annotations
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, Mock
+
+import pytest
 
 from custom_components.carmabox.core.commands import cmd_charge_pv
 from custom_components.carmabox.optimizer.models import BatteryCommand
@@ -114,7 +116,7 @@ class TestChargePvLegacyLoop:
     @pytest.mark.asyncio
     async def test_service_call_failure_sets_failed(self) -> None:
         """Line 134: service call returns False → failed=True, success=False."""
-        success, delta = await cmd_charge_pv(
+        success, _delta = await cmd_charge_pv(
             hass=MagicMock(),
             adapters=[],
             safety=_safety_ok(),

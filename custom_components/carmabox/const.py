@@ -55,6 +55,11 @@ DEFAULT_SURPLUS_MIN_W: float = 50.0  # Ignore surplus below this (noise floor)
 DEFAULT_CLIMATE_BOOST_DEGREES: float = 2.0  # Max setpoint boost offset (°C)
 DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W: float = 500.0  # Min surplus to activate climate boost
 
+# Planner — night reserve calculation
+DEFAULT_PLANNER_HOUSE_BASELOAD_KW: float = 2.5  # Measured night baseload (kW)
+DEFAULT_PLANNER_NIGHT_HOURS: int = 8  # Night window hours (22:00-06:00)
+DEFAULT_PLANNER_APPLIANCE_MARGIN_KWH: float = 3.0  # Reserve for dishwasher/appliances
+
 # P10 safety discharge rates (core/planner.py apply_p10_safety)
 P10_DISCHARGE_CONSERVATIVE_KW = 0.5  # p10 < threshold → minimal urladdning
 P10_DISCHARGE_MODERATE_KW = 1.0  # low confidence → moderate urladdning
