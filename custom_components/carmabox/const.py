@@ -313,3 +313,9 @@ EV_PV_AMPS_INTERVAL_S = 60.0  # Min interval between amp changes
 
 # EV stuck detection
 EV_STUCK_MAX_HOURS = 6.0  # Stop EV if SoC unchanged for this many hours
+
+# Battery full hysteresis (PLAT-948)
+BATTERY_FULL_HYSTERESIS_PCT = 99  # all_batteries_full threshold (avoids 100% flicker)
+
+# Battery SoC imbalance alert (PLAT-1077)
+SOC_IMBALANCE_THRESHOLD_PCT = 15  # W8 alert when K/F SoC diff exceeds this

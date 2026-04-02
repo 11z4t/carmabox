@@ -539,6 +539,36 @@ class TestWatchdog:
         assert ev_stop_called, "W6 should stop EV when grid >> target and no night_ev"
 
 
+class TestW8BatteryImbalance:
+    """PLAT-1077: W8 alerts on SoC imbalance between kontor/forrad."""
+
+    @pytest.mark.asyncio
+    async def test_w8_alerts_on_large_imbalance(self) -> None:
+        """W8 logs warning when SoC diff > SOC_IMBALANCE_THRESHOLD_PCT."""
+        coord = _make_coord()
+        coord._soc_imbalance_logged = False
+        state = _state_importing(battery_soc_1=80.0, battery_soc_2=50.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=14)
+            await coord._watchdog(state)
+
+        assert coord._soc_imbalance_logged is True
+
+    @pytest.mark.asyncio
+    async def test_w8_no_alert_on_small_imbalance(self) -> None:
+        """W8 does NOT alert when SoC diff <= threshold."""
+        coord = _make_coord()
+        coord._soc_imbalance_logged = False
+        state = _state_importing(battery_soc_1=50.0, battery_soc_2=45.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=14)
+            await coord._watchdog(state)
+
+        assert getattr(coord, "_soc_imbalance_logged", False) is False
+
+
 class TestPlanExecutorNevSkip:
     """PLAT-1192 R4: Plan executor skips battery commands when NEV active."""
 

@@ -4174,16 +4174,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 del self._ev_stuck_last_soc
 
         # W8: PLAT-1077 — SoC imbalance alert (kontor vs forrad)
+        from .const import SOC_IMBALANCE_THRESHOLD_PCT
+
         if state.has_battery_2 and state.battery_soc_2 >= 0:
             soc_diff = abs(state.battery_soc_1 - state.battery_soc_2)
-            if soc_diff > 15:
+            if soc_diff > SOC_IMBALANCE_THRESHOLD_PCT:
                 if not getattr(self, "_soc_imbalance_logged", False):
                     _LOGGER.warning(
                         "WATCHDOG W8: SoC imbalance — kontor %.0f%% vs forrad %.0f%% "
-                        "(diff %.0f%% > 15%%)",
+                        "(diff %.0f%% > %d%%)",
                         state.battery_soc_1,
                         state.battery_soc_2,
                         soc_diff,
+                        SOC_IMBALANCE_THRESHOLD_PCT,
                     )
                     self._soc_imbalance_logged = True
             else:
