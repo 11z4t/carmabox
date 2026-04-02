@@ -63,9 +63,14 @@ class BatteryAllocation:
     id: str
     watts: int
     share_pct: float  # Percentage of total
-    available_kwh: float  # Energy above min_soc
+    _available_kwh: float  # Energy above min_soc (PLAT-1168: private backing field)
     effective_min_soc: float
     at_min_soc: bool  # True if already at or below min_soc
+
+    @property
+    def available_kwh(self) -> float:
+        """Energy above effective min_soc (kWh)."""
+        return self._available_kwh
 
 
 def effective_min_soc(bat: BatteryInfo) -> float:
@@ -117,7 +122,7 @@ def calculate_proportional_discharge(
                     id=b.id,
                     watts=0,
                     share_pct=0,
-                    available_kwh=available_kwh(b),
+                    _available_kwh=available_kwh(b),
                     effective_min_soc=effective_min_soc(b),
                     at_min_soc=b.soc <= effective_min_soc(b),
                 )
@@ -144,7 +149,7 @@ def calculate_proportional_discharge(
                     id=bat.id,
                     watts=0,
                     share_pct=0,
-                    available_kwh=bat_avail,
+                    _available_kwh=bat_avail,
                     effective_min_soc=eff_min,
                     at_min_soc=at_min,
                 )
@@ -169,7 +174,7 @@ def calculate_proportional_discharge(
                 id=bat.id,
                 watts=watts,
                 share_pct=round(share * 100, 1),
-                available_kwh=bat_avail,
+                _available_kwh=bat_avail,
                 effective_min_soc=eff_min,
                 at_min_soc=False,
             )
@@ -215,7 +220,7 @@ def redistribute_on_depletion(
             id=b.id,
             watts=0,
             share_pct=0,
-            available_kwh=available_kwh(b),
+            _available_kwh=available_kwh(b),
             effective_min_soc=effective_min_soc(b),
             at_min_soc=True,
         )
@@ -229,7 +234,7 @@ def redistribute_on_depletion(
                 id=b.id,
                 watts=0,
                 share_pct=0,
-                available_kwh=available_kwh(b),
+                _available_kwh=available_kwh(b),
                 effective_min_soc=effective_min_soc(b),
                 at_min_soc=b.soc <= effective_min_soc(b),
             )
@@ -252,7 +257,7 @@ def redistribute_on_depletion(
                     id=bat.id,
                     watts=0,
                     share_pct=0,
-                    available_kwh=bat_avail,
+                    _available_kwh=bat_avail,
                     effective_min_soc=eff_min,
                     at_min_soc=False,
                 )
@@ -269,7 +274,7 @@ def redistribute_on_depletion(
                 id=bat.id,
                 watts=watts,
                 share_pct=round(share * 100, 1),
-                available_kwh=bat_avail,
+                _available_kwh=bat_avail,
                 effective_min_soc=eff_min,
                 at_min_soc=False,
             )
@@ -298,7 +303,7 @@ def calculate_proportional_charge(
                     id=b.id,
                     watts=0,
                     share_pct=0,
-                    available_kwh=0,
+                    _available_kwh=0,
                     effective_min_soc=effective_min_soc(b),
                     at_min_soc=False,
                 )
@@ -333,7 +338,7 @@ def calculate_proportional_charge(
                     id=bat.id,
                     watts=0,
                     share_pct=0,
-                    available_kwh=room,
+                    _available_kwh=room,
                     effective_min_soc=eff_min,
                     at_min_soc=bat.soc <= eff_min,
                 )
@@ -350,7 +355,7 @@ def calculate_proportional_charge(
                 id=bat.id,
                 watts=watts,
                 share_pct=round(share * 100, 1),
-                available_kwh=room,
+                _available_kwh=room,
                 effective_min_soc=eff_min,
                 at_min_soc=False,
             )
