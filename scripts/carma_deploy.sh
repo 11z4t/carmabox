@@ -121,9 +121,9 @@ while IFS= read -r file; do
     # Relative path from the component dir
     relpath="${file#$COMPONENT_DIR/}"
 
-    # Create target directory on HA
+    # Create target directory on HA (-n = don't consume loop stdin)
     target_dir="$HA_DEST/$(dirname "$relpath")"
-    ssh "$HA_HOST" "sudo mkdir -p '$target_dir'" 2>/dev/null
+    ssh -n "$HA_HOST" "sudo mkdir -p '$target_dir'" 2>/dev/null
 
     # Copy file via cat pipe
     if cat "$file" | ssh "$HA_HOST" "sudo sh -c 'cat > \"$HA_DEST/$relpath\"'" 2>/dev/null; then
