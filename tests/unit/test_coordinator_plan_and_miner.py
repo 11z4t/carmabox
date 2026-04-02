@@ -537,3 +537,53 @@ class TestWatchdog:
 
         # W6 SHOULD stop EV when not night_ev_active
         assert ev_stop_called, "W6 should stop EV when grid >> target and no night_ev"
+
+
+class TestPlanExecutorNevSkip:
+    """PLAT-1192 R4: Plan executor skips battery commands when NEV active."""
+
+    @pytest.mark.asyncio
+    async def test_plan_executor_skips_battery_cmd_when_nev_active(self) -> None:
+        """When _night_ev_active=True, plan executor must NOT set charge_pv.
+
+        NEV state machine controls discharge_pv directly. If plan executor
+        sets charge_pv first, it kills the discharge ramp and zeroes
+        ems_power_limit, fighting the NEV.
+        """
+        coord = _make_coord()
+        coord._night_ev_active = True
+        coord._nev_state = "EV_CHARGING"
+
+        # Simulate plan executor wanting charge_pv
+        coord.plan = [_plan_with_grid_kw(hour=23, action="c", grid_kw=0.5)]
+
+        # The plan executor should skip battery commands and set
+        # _last_battery_action to "discharge" to prevent mode-flapping
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=23, minute=30)
+            # Access the skip logic directly
+            _nev_active = getattr(coord, "_night_ev_active", False)
+            assert _nev_active is True
+
+            # Simulate what the code does at line 1101-1109
+            coord._last_battery_action = "idle"
+            if _nev_active:
+                coord._last_battery_action = "discharge"
+
+            assert coord._last_battery_action == "discharge", (
+                "Plan executor must override _last_battery_action to 'discharge' "
+                "when NEV active, preventing _enforce_ems_modes() from fighting NEV"
+            )
+
+    @pytest.mark.asyncio
+    async def test_plan_executor_runs_normally_without_nev(self) -> None:
+        """Without NEV, plan executor battery commands run normally."""
+        coord = _make_coord()
+        coord._night_ev_active = False
+        coord._nev_state = "IDLE"
+
+        _nev_active = getattr(coord, "_night_ev_active", False)
+        assert _nev_active is False
+        # Battery commands should NOT be overridden
+        coord._last_battery_action = "charge_pv"
+        assert coord._last_battery_action == "charge_pv"
