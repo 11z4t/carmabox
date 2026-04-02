@@ -1112,17 +1112,19 @@ class TestCarmaboxStateModel:
 
     # all_batteries_full
 
-    def test_all_batteries_full_single_at_99pct(self) -> None:
-        """99% SoC is NOT full."""
-        assert CarmaboxState(battery_soc_1=99.0).all_batteries_full is False
+    def test_all_batteries_full_single_at_98pct(self) -> None:
+        """98% SoC is NOT full (hysteresis at 99%)."""
+        assert CarmaboxState(battery_soc_1=98.0).all_batteries_full is False
 
-    def test_all_batteries_full_single_at_100pct(self) -> None:
+    def test_all_batteries_full_single_at_99pct(self) -> None:
+        """PLAT-948: 99%+ is full (1% hysteresis avoids 100 flicker)."""
+        assert CarmaboxState(battery_soc_1=99.0).all_batteries_full is True
         assert CarmaboxState(battery_soc_1=100.0).all_batteries_full is True
 
     def test_all_batteries_full_dual_requires_both(self) -> None:
-        """Both batteries must reach 100% for all_batteries_full=True."""
+        """Both batteries must reach 99%+ for all_batteries_full=True."""
         assert CarmaboxState(battery_soc_1=100.0, battery_soc_2=90.0).all_batteries_full is False
-        assert CarmaboxState(battery_soc_1=100.0, battery_soc_2=100.0).all_batteries_full is True
+        assert CarmaboxState(battery_soc_1=99.0, battery_soc_2=99.0).all_batteries_full is True
 
     # total_battery_soc (capacity-weighted)
 

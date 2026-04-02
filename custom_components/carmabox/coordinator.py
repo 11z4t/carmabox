@@ -4173,6 +4173,22 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 del self._ev_stuck_since
                 del self._ev_stuck_last_soc
 
+        # W8: PLAT-1077 — SoC imbalance alert (kontor vs forrad)
+        if state.has_battery_2 and state.battery_soc_2 >= 0:
+            soc_diff = abs(state.battery_soc_1 - state.battery_soc_2)
+            if soc_diff > 15:
+                if not getattr(self, "_soc_imbalance_logged", False):
+                    _LOGGER.warning(
+                        "WATCHDOG W8: SoC imbalance — kontor %.0f%% vs forrad %.0f%% "
+                        "(diff %.0f%% > 15%%)",
+                        state.battery_soc_1,
+                        state.battery_soc_2,
+                        soc_diff,
+                    )
+                    self._soc_imbalance_logged = True
+            else:
+                self._soc_imbalance_logged = False
+
         # W5: High price + battery capacity + idle
         if (
             state.current_price > price_expensive

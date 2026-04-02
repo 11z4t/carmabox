@@ -177,10 +177,10 @@ class CarmaboxState:
 
     @property
     def all_batteries_full(self) -> bool:
-        """True if ALL batteries at 100%. Push last % with PV when available."""
+        """True if ALL batteries at 99%+. PLAT-948: 1% hysteresis avoids 100 flicker."""
         if self.has_battery_2:
-            return self.battery_soc_1 >= 100 and self.battery_soc_2 >= 100
-        return self.battery_soc_1 >= 100
+            return self.battery_soc_1 >= 99 and self.battery_soc_2 >= 99
+        return self.battery_soc_1 >= 99
 
     @property
     def total_battery_soc(self) -> float:
