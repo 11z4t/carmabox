@@ -15,6 +15,7 @@ from custom_components.carmabox.diagnostics import (
 from custom_components.carmabox.optimizer.models import CarmaboxState, HourPlan
 from custom_components.carmabox.optimizer.safety_guard import SafetyGuard
 from custom_components.carmabox.optimizer.savings import SavingsState
+from custom_components.carmabox.core.audit import AuditLog
 
 
 class TestHashEntity:
@@ -80,6 +81,7 @@ class TestAsyncGetDiagnostics:
         coord.savings = SavingsState(month=3, year=2026)
         coord.safety = SafetyGuard()
         coord.safety.update_heartbeat()
+        coord.audit_log = AuditLog()
 
         entry = MagicMock()
         entry.options = {
@@ -98,6 +100,7 @@ class TestAsyncGetDiagnostics:
         assert "plan" in result
         assert "savings" in result
         assert "safety" in result
+        assert "audit" in result
         # Entity IDs anonymized
         assert "sensor.secret" not in str(result["config"])
         # Plan included
@@ -119,6 +122,7 @@ class TestAsyncGetDiagnostics:
         coord.plan = []
         coord.savings = SavingsState(month=3, year=2026)
         coord.safety = SafetyGuard()
+        coord.audit_log = AuditLog()
 
         entry = MagicMock()
         entry.options = {"peak_cost_per_kw": 80.0}

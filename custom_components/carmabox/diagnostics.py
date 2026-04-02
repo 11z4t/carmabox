@@ -93,4 +93,8 @@ async def async_get_config_entry_diagnostics(
             "blocks_last_hour": coordinator.safety.recent_block_count(3600),
             "log": coordinator.safety.get_safety_log(),
         },
+        "audit": {
+            "total_entries": len(coordinator.audit_log),
+            "recent": coordinator.audit_log.to_dicts(50),
+        },
     }

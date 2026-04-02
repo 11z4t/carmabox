@@ -90,6 +90,7 @@ from .const import (
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .core.audit import AuditLog
 from .core.execution_engine import ExecutionEngine
 from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
@@ -236,6 +237,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_command = BatteryCommand.IDLE
         self._last_battery_action = "charge_pv"  # PLAT-1099: safe default
         self._last_discharge_w = 0
+        # PLAT-1198: Audit trail for all write commands
+        self.audit_log = AuditLog()
 
         # EV executor state (PLAT-949)
         self._ev_enabled: bool = False
