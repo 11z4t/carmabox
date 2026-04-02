@@ -233,6 +233,12 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     coord._ems_pause_until = 0.0
     coord._ev_last_known_enabled = None
 
+    # W6: EV stuck detection (PLAT-1040)
+    coord._ev_last_soc_change_t = 0.0
+    coord._ev_prev_soc_for_stuck = -1.0
+    coord._night_ev_active = False
+    coord._soc_imbalance_logged = False
+
     # Flat-line controller
     coord._grid_samples: list[float] = []
     coord._grid_sample_max = 10
