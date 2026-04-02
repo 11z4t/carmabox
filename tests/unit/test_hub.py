@@ -193,7 +193,7 @@ class TestHTTPSFallback:
         client = _make_client()
         with patch(
             "custom_components.carmabox.hub.async_get_clientsession",
-            side_effect=Exception("offline"),
+            side_effect=OSError("offline"),
         ):
             result = await client.sync_daily(
                 SavingsState(month=3, year=2026),
@@ -260,7 +260,7 @@ class TestRegistration:
         client = _make_client()
         with patch(
             "custom_components.carmabox.hub.async_get_clientsession",
-            side_effect=Exception("offline"),
+            side_effect=OSError("offline"),
         ):
             result = await client.register({})
         assert result is None
