@@ -84,25 +84,15 @@ def generate_plan(
     max_charge_kwh = grid_charge_max_soc / 100 * battery_cap_kwh
 
     # ── Night reserve: don't discharge daytime if batteries needed tonight ──
-    ev_kw_min = 230 * 3 * 6 / 1000  # 6A 3-phase = 4.14 kW
-    house_kw = 2.5  # Measured night baseload (not 1.7 as assumed)
-    grid_max_night = 4.0  # Ellevio 2kW viktat / 0.5 night weight
-    bat_per_hour_night = max(0, ev_kw_min + house_kw - grid_max_night)
-    night_reserve_kwh = bat_per_hour_night * 8 + 3.0  # 8h + disk margin
+    # Night reserve is capped to battery capacity — can't reserve more than we have.
+    # Individual discharge decisions (P3/P4/P5) already respect available capacity.
+    # This guard ONLY fires when: daytime, low capacity, no solar tomorrow.
     available_kwh = max(0, soc_kwh - min_soc_kwh)
-    max_day_discharge_kwh = max(0, available_kwh - night_reserve_kwh)
-    # If daytime and no room for discharge → cap max_discharge_kw
-    # BUT: if tomorrow has good solar (>20kWh), allow discharge today
     tomorrow_pv_kwh = (
         sum(hourly_pv[24 - start_hour : 48 - start_hour]) if len(hourly_pv) > 24 else 0
     )
-    if (
-        max_day_discharge_kwh <= 0.5
-        and start_hour >= 6
-        and start_hour < 22
-        and tomorrow_pv_kwh < 20
-    ):
-        max_discharge_kw = 0.0  # Save everything for night (no solar tomorrow)
+    if available_kwh < 3.0 and start_hour >= 6 and start_hour < 22 and tomorrow_pv_kwh < 15:
+        max_discharge_kw = 0.0  # Very low battery + no solar tomorrow → save
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
