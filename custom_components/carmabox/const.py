@@ -61,6 +61,7 @@ DEFAULT_CONSUMPTION_PROFILE: list[float] = [0.8] * 6 + [2.0] * 3 + [1.5] * 8 + [
 # EV
 DEFAULT_EV_EFFICIENCY = 0.92
 EV_RAMP_INTERVAL_S = 300  # 5 min between ramp-up steps
+EV_STUCK_TIMEOUT_S = 6 * 3600  # W6 watchdog: stop EV if SoC unchanged for this long
 EV_RAMP_STEPS = [6, 8, 10]  # Gradual: 6A → 8A → 10A
 EV_FALLBACK_AMPS = 6  # Safe fallback (not 16A!)
 

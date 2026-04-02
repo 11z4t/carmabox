@@ -182,7 +182,7 @@ class TestGoodWeWriteVerification:
 
     @pytest.mark.asyncio
     async def test_set_ems_mode_no_verify(self) -> None:
-        """verify=False skips read-back."""
+        """verify=False skips read-back; charge_pv zeros ems_power_limit."""
         hass = _make_hass()
         adapter = GoodWeAdapter(hass, "dev1", "kontor")
         result = await adapter.set_ems_mode("charge_pv", verify=False)
