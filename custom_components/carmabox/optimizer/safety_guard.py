@@ -196,7 +196,7 @@ class SafetyGuard:
         all_full = soc_1 >= 100 and (soc_2 < 0 or soc_2 >= 100)
         if all_full:
             reason = "all batteries full (100%)"
-            _LOGGER.debug("SafetyGuard BLOCK charge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK charge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("charge", r)
             return r
@@ -204,7 +204,7 @@ class SafetyGuard:
         # Temperature — PLAT-1019: never charge LFP below 2°C
         if temp_c is not None and temp_c < self.temp_min_charge:
             reason = f"temperature {temp_c:.1f}°C < min {self.temp_min_charge}°C — charge blocked"
-            _LOGGER.debug("SafetyGuard BLOCK charge: %s", reason)
+            _LOGGER.error("SafetyGuard BLOCK charge: %s", reason)
             r = SafetyResult(ok=False, reason=reason)
             self._log("charge", r)
             return r

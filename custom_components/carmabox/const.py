@@ -319,3 +319,6 @@ BATTERY_FULL_HYSTERESIS_PCT = 99  # all_batteries_full threshold (avoids 100% fl
 
 # Battery SoC imbalance alert (PLAT-1077)
 SOC_IMBALANCE_THRESHOLD_PCT = 15  # W8 alert when K/F SoC diff exceeds this
+
+# Crosscharge detection (PLAT-1213)
+CROSSCHARGE_DETECTION_THRESHOLD_W = 200  # Min battery power to detect crosscharge

@@ -203,6 +203,37 @@ class TestGoodWeWriteVerification:
         assert hass.services.async_call.call_count == 3
 
     @pytest.mark.asyncio
+    async def test_ems_power_limit_zeroed_on_charge_pv(self) -> None:
+        """PLAT-1211: ems_power_limit reset to 0 on charge_pv mode.
+
+        Prevents autonomous grid charging when in non-discharge mode.
+        """
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_ems_mode("charge_pv", verify=False)
+
+        # Verify ems_power_limit was set to 0
+        calls = hass.services.async_call.call_args_list
+        ems_limit_calls = [
+            c for c in calls if c[0][0] == "number" and "ems_power_limit" in str(c[0][2])
+        ]
+        assert len(ems_limit_calls) == 1
+        assert ems_limit_calls[0][0][2]["value"] == 0
+
+    @pytest.mark.asyncio
+    async def test_ems_power_limit_not_zeroed_on_discharge(self) -> None:
+        """PLAT-1211: ems_power_limit NOT reset on discharge_pv mode."""
+        hass = _make_hass()
+        adapter = GoodWeAdapter(hass, "dev1", "kontor")
+        await adapter.set_ems_mode("discharge_pv", verify=False)
+
+        calls = hass.services.async_call.call_args_list
+        ems_limit_calls = [
+            c for c in calls if c[0][0] == "number" and "ems_power_limit" in str(c[0][2])
+        ]
+        assert len(ems_limit_calls) == 0, "discharge_pv should not reset ems_power_limit"
+
+    @pytest.mark.asyncio
     async def test_set_ems_mode_invalid_rejected(self) -> None:
         """Invalid mode rejected before any write."""
         hass = _make_hass()

@@ -517,11 +517,12 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
         if len(self.inverter_adapters) < 2:
             return
 
-        # Threshold: >200W to avoid noise
-        bat1_discharging = sys_state.battery_power_1 < -200
-        bat1_charging = sys_state.battery_power_1 > 200
-        bat2_discharging = sys_state.battery_power_2 < -200
-        bat2_charging = sys_state.battery_power_2 > 200
+        from .const import CROSSCHARGE_DETECTION_THRESHOLD_W
+
+        bat1_discharging = sys_state.battery_power_1 < -CROSSCHARGE_DETECTION_THRESHOLD_W
+        bat1_charging = sys_state.battery_power_1 > CROSSCHARGE_DETECTION_THRESHOLD_W
+        bat2_discharging = sys_state.battery_power_2 < -CROSSCHARGE_DETECTION_THRESHOLD_W
+        bat2_charging = sys_state.battery_power_2 > CROSSCHARGE_DETECTION_THRESHOLD_W
 
         crosscharge = (bat1_discharging and bat2_charging) or (bat1_charging and bat2_discharging)
 
