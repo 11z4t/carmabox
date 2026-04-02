@@ -83,16 +83,26 @@ def generate_plan(
     min_soc_kwh = battery_min_soc / 100 * battery_cap_kwh
     max_charge_kwh = grid_charge_max_soc / 100 * battery_cap_kwh
 
-    # ── Night reserve: don't discharge daytime if batteries needed tonight ──
-    # Night reserve is capped to battery capacity — can't reserve more than we have.
-    # Individual discharge decisions (P3/P4/P5) already respect available capacity.
-    # This guard ONLY fires when: daytime, low capacity, no solar tomorrow.
-    available_kwh = max(0, soc_kwh - min_soc_kwh)
+    # ── Solar-aware discharge floor ──────────────────────────────
+    # If tomorrow has poor PV, keep more SoC today. Discharge decisions
+    # check available_kwh against this floor each hour.
     tomorrow_pv_kwh = (
         sum(hourly_pv[24 - start_hour : 48 - start_hour]) if len(hourly_pv) > 24 else 0
     )
-    if available_kwh < 3.0 and start_hour >= 6 and start_hour < 22 and tomorrow_pv_kwh < 15:
-        max_discharge_kw = 0.0  # Very low battery + no solar tomorrow → save
+    # Floor = SoC level we don't discharge below, based on tomorrow's solar.
+    # Key insight: battery should discharge during expensive hours regardless of
+    # tomorrow's forecast. The floor just prevents draining to min_soc when
+    # there's no solar to refill. A small reserve (2-4 kWh) covers morning load
+    # until whatever PV kicks in.
+    if tomorrow_pv_kwh < 5:
+        # Near-zero solar — keep 4 kWh reserve (morning buffer ~3h x 1.5kW)
+        discharge_floor_kwh = min_soc_kwh + 4.0
+    elif tomorrow_pv_kwh < 15:
+        # Poor solar — keep 2 kWh reserve
+        discharge_floor_kwh = min_soc_kwh + 2.0
+    else:
+        # Good solar tomorrow — only keep min_soc
+        discharge_floor_kwh = min_soc_kwh
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
@@ -128,7 +138,7 @@ def generate_plan(
         net = load + ev - pv
         battery_kw = 0.0
         action = "i"
-        available = soc_kwh - min_soc_kwh
+        available = soc_kwh - discharge_floor_kwh
         before_sunrise = i < sunrise_slot
         # PLAN-03: Block discharge during night when EV is actively charging
         ev_charging_night = night_ev_active and (abs_h >= 22 or abs_h < 6)
@@ -217,9 +227,9 @@ def generate_plan(
             and action == "i"
             and net > 0.3
             and price >= discharge_price_threshold
-            and soc_kwh - min_soc_kwh > 0.3
+            and soc_kwh - discharge_floor_kwh > 0.3
         ):
-            arb_discharge = min(net * 0.7, soc_kwh - min_soc_kwh, max_discharge_kw * 0.6)
+            arb_discharge = min(net * 0.7, soc_kwh - discharge_floor_kwh, max_discharge_kw * 0.6)
             if arb_discharge > 0.2:
                 battery_kw = -arb_discharge
                 soc_kwh -= arb_discharge
