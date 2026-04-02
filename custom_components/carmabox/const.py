@@ -39,6 +39,22 @@ DEFAULT_PROACTIVE_MIN_GRID_W_CLOUDY: float = 200.0  # Mulet dagtid — måttlig 
 # Surplus chain
 CONSUMER_NEAR_MAX_RATIO = 0.95  # Variable consumer at ≥95% of max_w = "near max"
 
+# Surplus chain — consumer power defaults (W)
+DEFAULT_SURPLUS_MINER_W: float = 500.0  # Miner power draw
+DEFAULT_SURPLUS_VP_KONTOR_W: float = 1500.0  # VP kontor (heat pump office) power draw
+DEFAULT_SURPLUS_VP_POOL_W: float = 3000.0  # VP pool (heat pump pool) power draw
+DEFAULT_SURPLUS_POOL_HEATER_W: float = 3000.0  # Pool heater power draw
+
+# Surplus chain — hysteresis / timing defaults
+DEFAULT_SURPLUS_START_DELAY_S: float = 60.0  # Wait before starting a new consumer
+DEFAULT_SURPLUS_STOP_DELAY_S: float = 180.0  # Wait before stopping a consumer
+DEFAULT_SURPLUS_BUMP_DELAY_S: float = 60.0  # Wait before bumping low→high priority
+DEFAULT_SURPLUS_MIN_W: float = 50.0  # Ignore surplus below this (noise floor)
+
+# Surplus chain — climate boost defaults
+DEFAULT_CLIMATE_BOOST_DEGREES: float = 2.0  # Max setpoint boost offset (°C)
+DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W: float = 500.0  # Min surplus to activate climate boost
+
 # P10 safety discharge rates (core/planner.py apply_p10_safety)
 P10_DISCHARGE_CONSERVATIVE_KW = 0.5  # p10 < threshold → minimal urladdning
 P10_DISCHARGE_MODERATE_KW = 1.0  # low confidence → moderate urladdning

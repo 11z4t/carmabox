@@ -25,8 +25,18 @@ from ..const import (
     CONSUMER_NEAR_MAX_RATIO,
     DEFAULT_BAT_MAX_CHARGE_W,
     DEFAULT_BAT_MIN_CHARGE_W,
+    DEFAULT_CLIMATE_BOOST_DEGREES,
+    DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W,
     DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
+    DEFAULT_SURPLUS_BUMP_DELAY_S,
+    DEFAULT_SURPLUS_MIN_W,
+    DEFAULT_SURPLUS_MINER_W,
+    DEFAULT_SURPLUS_POOL_HEATER_W,
+    DEFAULT_SURPLUS_START_DELAY_S,
+    DEFAULT_SURPLUS_STOP_DELAY_S,
+    DEFAULT_SURPLUS_VP_KONTOR_W,
+    DEFAULT_SURPLUS_VP_POOL_W,
     DEFAULT_VOLTAGE,
 )
 
@@ -93,20 +103,20 @@ class HysteresisState:
 class SurplusConfig:
     """Parameterstyrd konfiguration."""
 
-    start_delay_s: float = 60.0  # Wait before starting consumer
-    stop_delay_s: float = 180.0  # Wait before stopping consumer
-    bump_delay_s: float = 60.0  # Wait before bumping low→high prio
-    min_surplus_w: float = 50.0  # Ignore surplus below this
+    start_delay_s: float = DEFAULT_SURPLUS_START_DELAY_S  # Wait before starting consumer
+    stop_delay_s: float = DEFAULT_SURPLUS_STOP_DELAY_S  # Wait before stopping consumer
+    bump_delay_s: float = DEFAULT_SURPLUS_BUMP_DELAY_S  # Wait before bumping low→high prio
+    min_surplus_w: float = DEFAULT_SURPLUS_MIN_W  # Ignore surplus below this
 
 
 def build_default_consumers(
     ev_phase_count: int = 3,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
     ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
-    miner_w: float = 500.0,
-    vp_kontor_w: float = 1500.0,
-    vp_pool_w: float = 3000.0,
-    pool_heater_w: float = 3000.0,
+    miner_w: float = DEFAULT_SURPLUS_MINER_W,
+    vp_kontor_w: float = DEFAULT_SURPLUS_VP_KONTOR_W,
+    vp_pool_w: float = DEFAULT_SURPLUS_VP_POOL_W,
+    pool_heater_w: float = DEFAULT_SURPLUS_POOL_HEATER_W,
 ) -> list[SurplusConsumer]:
     """Build the default consumer list for surplus allocation.
 
@@ -244,7 +254,7 @@ def allocate_surplus(
         # For EV: check if increase is meaningful (full amp steps)
         increase: float
         if c.phase_count > 1:
-            w_per_step = 230 * c.phase_count
+            w_per_step = DEFAULT_VOLTAGE * c.phase_count
             steps = int(remaining / w_per_step)
             if steps <= 0:
                 continue
@@ -560,8 +570,8 @@ def calculate_climate_boost(
     target_temp_c: float,
     surplus_w: float,
     mode: str = "cool",
-    boost_degrees: float = 2.0,
-    min_surplus_w: float = 500.0,
+    boost_degrees: float = DEFAULT_CLIMATE_BOOST_DEGREES,
+    min_surplus_w: float = DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W,
 ) -> dict[str, Any]:
     """Calculate climate setpoint boost to absorb PV surplus.
 
