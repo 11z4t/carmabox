@@ -4006,6 +4006,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         target_w = self.target_kw * 1000
 
         # W1: Exporting + battery not full + not charging
+        # PLAT-1192: SKIP during night EV — transient export during discharge ramp-up is expected
         wd_export_w = float(self._cfg.get("watchdog_export_w", DEFAULT_WATCHDOG_EXPORT_W))
         wd_discharge_min = float(
             self._cfg.get("watchdog_discharge_min_w", DEFAULT_WATCHDOG_DISCHARGE_MIN_W)
@@ -4013,11 +4014,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         wd_ev_import_w = float(self._cfg.get("watchdog_ev_import_w", DEFAULT_WATCHDOG_EV_IMPORT_W))
         wd_min_soc = float(self._cfg.get("watchdog_min_soc_pct", DEFAULT_WATCHDOG_MIN_SOC_PCT))
         price_expensive = float(self._cfg.get("price_expensive_ore", DEFAULT_PRICE_EXPENSIVE_ORE))
+        night_ev_active = getattr(self, "_night_ev_active", False)
         if (
             state.is_exporting
             and abs(state.grid_power_w) > wd_export_w
             and not state.all_batteries_full
             and action not in ("charge_pv", "charge_pv_taper", "grid_charge")
+            and not night_ev_active
         ):
             _LOGGER.warning(
                 "WATCHDOG W1: exporting %.0fW, bat %s%%, action=%s → correcting to charge_pv",
@@ -4114,17 +4117,24 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         _w6_weight = _w6_nw if is_night else 1.0
         _w6_weighted = max(0, state.grid_power_w) / 1000 * _w6_weight
         if _w6_weighted > target_w / 1000 * 1.15 and self._ev_enabled:
-            _LOGGER.error(
-                "WATCHDOG W6 ABSOLUTE: grid %.1f kW (weighted) >> target %.1f kW"
-                " — NÖDSTOPP EV (LAG 1 trumfar allt)",
-                _w6_weighted,
-                target_w / 1000,
-            )
-            await self._cmd_ev_stop()
-            # Om natt-EV active, öka discharge istf att bara stoppa
-            if self._night_ev_active and state.total_battery_soc > self.min_soc:
+            if night_ev_active and state.total_battery_soc > self.min_soc:
+                # PLAT-1192: Night EV — increase discharge instead of stopping EV
+                _LOGGER.warning(
+                    "WATCHDOG W6: grid %.1f kW >> target %.1f kW"
+                    " — night EV active, increasing discharge (not stopping EV)",
+                    _w6_weighted,
+                    target_w / 1000,
+                )
                 for _adp in self.inverter_adapters:
                     await _adp.set_ems_mode("discharge_pv")
+            else:
+                _LOGGER.error(
+                    "WATCHDOG W6 ABSOLUTE: grid %.1f kW (weighted) >> target %.1f kW"
+                    " — NÖDSTOPP EV (LAG 1 trumfar allt)",
+                    _w6_weighted,
+                    target_w / 1000,
+                )
+                await self._cmd_ev_stop()
 
         # W7: EV stuck — charging for hours without SoC change
         from .const import EV_STUCK_MAX_HOURS
