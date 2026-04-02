@@ -206,3 +206,44 @@ def test_no_bare_except_pass():
         "Bare except:pass found — use _LOGGER.debug('...', exc_info=True):\n"
         + "\n".join(violations)
     )
+
+
+# ── PLAT-1182: Bare except:pass guard — core/ and adapters/ ────────────────
+
+
+def _bare_except_pass_violations(directory: Path) -> list[str]:
+    """Scan a directory for bare except:pass patterns."""
+    violations = []
+    for path in sorted(directory.rglob("*.py")):
+        lines = path.read_text().split("\n")
+        for i, line in enumerate(lines):
+            if "except" in line and i + 1 < len(lines) and lines[i + 1].strip() == "pass":
+                violations.append(f"  {path}:L{i + 1}: {line.strip()} / pass")
+    return violations
+
+
+def test_no_bare_except_pass_core() -> None:
+    """PLAT-1182: core/ must not contain bare except:pass."""
+    violations = _bare_except_pass_violations(Path("custom_components/carmabox/core"))
+    assert not violations, (
+        "Bare except:pass in core/ — use _LOGGER.debug('...', exc_info=True):\n"
+        + "\n".join(violations)
+    )
+
+
+def test_no_bare_except_pass_adapters() -> None:
+    """PLAT-1182: adapters/ must not contain bare except:pass."""
+    violations = _bare_except_pass_violations(Path("custom_components/carmabox/adapters"))
+    assert not violations, (
+        "Bare except:pass in adapters/ — use _LOGGER.debug('...', exc_info=True):\n"
+        + "\n".join(violations)
+    )
+
+
+def test_no_bare_except_pass_optimizer() -> None:
+    """PLAT-1190: optimizer/ must not contain bare except:pass."""
+    violations = _bare_except_pass_violations(Path("custom_components/carmabox/optimizer"))
+    assert not violations, (
+        "Bare except:pass in optimizer/ — use _LOGGER.debug('...', exc_info=True):\n"
+        + "\n".join(violations)
+    )
