@@ -15,8 +15,9 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.const import UnitOfPower
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN, UnitOfPower
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import APPLIANCE_CATEGORIES, DOMAIN
@@ -1048,8 +1049,12 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):
-    """Generic CARMA Box sensor driven by EntityDescription."""
+class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity, RestoreEntity):
+    """Generic CARMA Box sensor driven by EntityDescription.
+
+    Inherits RestoreEntity so sensors recover their last known value
+    immediately after HA restart, before the first coordinator update.
+    """
 
     entity_description: CarmaboxSensorDescription
     _attr_has_entity_name = True
@@ -1065,6 +1070,14 @@ class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"carmabox_{description.key}"
         self._entry = entry
+        self._restored_native_value: Any = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore last state on HA restart (PLAT-1208)."""
+        await super().async_added_to_hass()
+        if (last_state := await self.async_get_last_state()) is not None:
+            if last_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                self._restored_native_value = last_state.state
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -1079,7 +1092,9 @@ class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity):
 
     @property
     def native_value(self) -> Any:
-        """Return sensor value via description function."""
+        """Return live sensor value, or last restored state before first update."""
+        if self.coordinator.data is None and self._restored_native_value is not None:
+            return self._restored_native_value
         return self.entity_description.value_fn(self.coordinator)
 
     @property
