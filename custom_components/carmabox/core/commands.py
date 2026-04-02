@@ -110,9 +110,12 @@ async def cmd_charge_pv(
             return False, 1
     else:
         # Legacy: raw entity-based control
-        assert get_entity is not None
-        assert read_float is not None
-        assert safe_service_call is not None
+        if get_entity is None:
+            raise RuntimeError("get_entity required for legacy charge_pv control")
+        if read_float is None:
+            raise RuntimeError("read_float required for legacy charge_pv control")
+        if safe_service_call is None:
+            raise RuntimeError("safe_service_call required for legacy charge_pv control")
 
         for ems_key in ("battery_ems_1", "battery_ems_2"):
             entity = get_entity(ems_key)
