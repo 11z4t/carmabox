@@ -1093,7 +1093,21 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_battery_action = cmd.battery_action
 
         # ── Execute battery command ─────────────────────────────
-        if cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
+        # PLAT-1192: Skip plan executor battery commands when NEV is active.
+        # NEV state machine (below) controls discharge_pv directly — letting
+        # the plan executor set charge_pv first causes mode-flapping and
+        # zeroes ems_power_limit, fighting the NEV discharge ramp.
+        _nev_active = getattr(self, "_night_ev_active", False)
+        if _nev_active:
+            _LOGGER.debug(
+                "V2: Skipping plan battery cmd '%s' — NEV active (state=%s)",
+                cmd.battery_action,
+                getattr(self, "_nev_state", "?"),
+            )
+            # Override _last_battery_action so _enforce_ems_modes() doesn't
+            # fight NEV by enforcing the plan executor's charge_pv
+            self._last_battery_action = "discharge"
+        elif cmd.battery_action == "discharge" and cmd.battery_discharge_w > 0:
             # Proportional split
             bat1_kwh = float(opts.get("battery_1_kwh", 15.0))
             bat2_kwh = float(opts.get("battery_2_kwh", 5.0))
