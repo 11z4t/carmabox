@@ -21,6 +21,15 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
+from custom_components.carmabox.const import (
+    LAG1_CRITICAL_BREACH_THRESHOLD,
+    LAG2_IDLE_HOURS_THRESHOLD,
+    LAG2_SOC_HYSTERESIS_PCT,
+    LAW_GUARDIAN_BATTERY_IDLE_W,
+    LAW_GUARDIAN_MAX_BREACH_HISTORY,
+    LAW_GUARDIAN_TAK_MARGIN_FACTOR,
+)
+
 # Noise-floor thresholds
 _EXPORT_WARNING_W = 500  # W — LAG_4 export guard threshold
 _CROSSCHARGE_NOISE_W = 50  # W — minimum |power| to detect crosscharge or idle
@@ -117,7 +126,7 @@ class GuardianReport:
 class LawGuardian:
     """Monitors all laws and invariants every cycle."""
 
-    def __init__(self, max_breach_history: int = 500) -> None:
+    def __init__(self, max_breach_history: int = LAW_GUARDIAN_MAX_BREACH_HISTORY) -> None:
         self.breach_history: list[BreachRecord] = []
         self._max_history = max_breach_history
         self._breach_count_hour: dict[str, int] = {}
@@ -155,7 +164,7 @@ class LawGuardian:
             breaches.append(br)
             replan = True
             self._count_breach("LAG_1")
-            if self._breach_count_hour.get("LAG_1", 0) >= 3:
+            if self._breach_count_hour.get("LAG_1", 0) >= LAG1_CRITICAL_BREACH_THRESHOLD:
                 notifications.append(
                     {
                         "channel": "slack",
@@ -257,7 +266,7 @@ class LawGuardian:
     def should_notify_slack(
         self,
         law: str = "LAG_1",
-        threshold_count: int = 3,
+        threshold_count: int = LAG1_CRITICAL_BREACH_THRESHOLD,
         window_minutes: int = 60,
     ) -> tuple[bool, str]:
         """Return (True, message) if breach count in window exceeds threshold."""
@@ -310,7 +319,7 @@ class LawGuardian:
     def _check_lag1(self, state: GuardianState) -> CheckResult:
         viktat = state.grid_viktat_timmedel_kw
         tak = state.ellevio_tak_kw
-        margin = tak * 0.85
+        margin = tak * LAW_GUARDIAN_TAK_MARGIN_FACTOR
         if viktat > tak:
             return CheckResult(
                 LawId.LAG_1_GRID,
@@ -332,9 +341,13 @@ class LawGuardian:
         return CheckResult(LawId.LAG_1_GRID, True, Severity.INFO, viktat, tak)
 
     def _check_lag2(self, state: GuardianState) -> CheckResult:
-        both_idle = abs(state.battery_power_1) < 50 and abs(state.battery_power_2) < 50
+        both_idle = (
+            abs(state.battery_power_1) < LAW_GUARDIAN_BATTERY_IDLE_W
+            and abs(state.battery_power_2) < LAW_GUARDIAN_BATTERY_IDLE_W
+        )
         has_capacity = (
-            state.battery_soc_1 > state.min_soc + 5 or state.battery_soc_2 > state.min_soc + 5
+            state.battery_soc_1 > state.min_soc + LAG2_SOC_HYSTERESIS_PCT
+            or state.battery_soc_2 > state.min_soc + LAG2_SOC_HYSTERESIS_PCT
         )
 
         if both_idle and has_capacity:
@@ -343,16 +356,18 @@ class LawGuardian:
             self._consecutive_idle = 0
 
         idle_hours = self._consecutive_idle * 30 / 3600  # 30s cycles
-        if idle_hours > 4:
+        if idle_hours > LAG2_IDLE_HOURS_THRESHOLD:
             return CheckResult(
                 LawId.LAG_2_IDLE,
                 False,
                 Severity.WARNING,
                 idle_hours,
-                4,
-                f"Idle {idle_hours:.1f}h > 4h",
+                LAG2_IDLE_HOURS_THRESHOLD,
+                f"Idle {idle_hours:.1f}h > {LAG2_IDLE_HOURS_THRESHOLD}h",
             )
-        return CheckResult(LawId.LAG_2_IDLE, True, Severity.INFO, idle_hours, 4)
+        return CheckResult(
+            LawId.LAG_2_IDLE, True, Severity.INFO, idle_hours, LAG2_IDLE_HOURS_THRESHOLD
+        )
 
     def _check_lag3(self, state: GuardianState) -> CheckResult:
         if state.ev_soc < 0:
@@ -450,7 +465,7 @@ class LawGuardian:
             1,
         ):
             eff_min = 20.0 if temp < state.cold_lock_temp else state.min_soc
-            if soc <= eff_min and power > 50:
+            if soc <= eff_min and power > LAW_GUARDIAN_BATTERY_IDLE_W:
                 results.append(
                     CheckResult(
                         LawId.INV_5_MIN_SOC,

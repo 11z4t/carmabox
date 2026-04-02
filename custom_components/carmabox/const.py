@@ -375,3 +375,12 @@ LUX_DARK = 500  # Below = dark / night
 
 # Error tracking (PLAT-1086)
 CONSECUTIVE_ERROR_LOG_INTERVAL = 10  # Log degraded state every N errors
+
+
+# Law Guardian constants (PLAT-1219)
+LAW_GUARDIAN_MAX_BREACH_HISTORY = 500  # Max breach records kept in history
+LAG1_CRITICAL_BREACH_THRESHOLD = 3  # LAG 1 breaches/h before Slack critical alert
+LAW_GUARDIAN_TAK_MARGIN_FACTOR = 0.85  # Safety margin applied to Ellevio tak in LAG 1
+LAW_GUARDIAN_BATTERY_IDLE_W = 50  # Below this W = battery considered idle (LAG 2)
+LAG2_SOC_HYSTERESIS_PCT = 5  # SoC above min_soc required to count as non-idle (LAG 2)
+LAG2_IDLE_HOURS_THRESHOLD = 4  # Hours of idle before LAG 2 breach (LAG 2)
