@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from enum import Enum
 
 from ..const import (
     APPLIANCE_PAUSE_THRESHOLD_W,
@@ -28,6 +29,16 @@ from ..const import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class NevPhase(str, Enum):
+    """Night EV state machine phases. str-Enum for backward compatibility."""
+
+    IDLE = "IDLE"
+    DISCHARGE_RAMP = "DISCHARGE_RAMP"
+    EV_CHARGING = "EV_CHARGING"
+    APPLIANCE_PAUSE = "APPLIANCE_PAUSE"
+    BATTERY_DEPLETED = "BATTERY_DEPLETED"
 
 
 @dataclass
@@ -68,41 +79,41 @@ def decide_nev(
     """
     actual_target_w = state.target_kw * 1000 / max(0.1, state.night_weight)
 
-    if current_state == "IDLE":
+    if current_state == NevPhase.IDLE:
         if (
             state.is_night
             and state.ev_connected
             and 0 <= state.ev_soc < state.ev_target
             and state.battery_soc > state.min_soc + 5  # Enough battery to support
         ):
-            return "DISCHARGE_RAMP", NevCommand(
+            return NevPhase.DISCHARGE_RAMP, NevCommand(
                 action="start_discharge",
                 discharge_w=2000,
                 reason=f"NEV: SoC {state.ev_soc:.0f}%<{state.ev_target:.0f}% → discharge ramp",
             )
-        return "IDLE", NevCommand(action="none")
+        return NevPhase.IDLE, NevCommand(action="none")
 
-    elif current_state == "DISCHARGE_RAMP":
+    elif current_state == NevPhase.DISCHARGE_RAMP:
         elapsed = time.monotonic() - ramp_start
         if elapsed >= NEV_DISCHARGE_RAMP_S:
-            return "EV_CHARGING", NevCommand(
+            return NevPhase.EV_CHARGING, NevCommand(
                 action="start_ev",
                 ev_amps=DEFAULT_EV_MIN_AMPS,
                 reason=f"Discharge stable ({elapsed:.0f}s), starting EV {DEFAULT_EV_MIN_AMPS}A",
             )
-        return "DISCHARGE_RAMP", NevCommand(action="none", reason="Discharge stabilizing")
+        return NevPhase.DISCHARGE_RAMP, NevCommand(action="none", reason="Discharge stabilizing")
 
-    elif current_state == "EV_CHARGING":
+    elif current_state == NevPhase.EV_CHARGING:
         # Check 1: Battery depleted?
         if state.battery_soc <= state.min_soc:
-            return "BATTERY_DEPLETED", NevCommand(
+            return NevPhase.BATTERY_DEPLETED, NevCommand(
                 action="stop_ev",
                 reason=f"Battery depleted ({state.battery_soc:.0f}% <= min {state.min_soc:.0f}%)",
             )
 
         # Check 2: Appliance running?
         if state.appliance_w > APPLIANCE_PAUSE_THRESHOLD_W:
-            return "APPLIANCE_PAUSE", NevCommand(
+            return NevPhase.APPLIANCE_PAUSE, NevCommand(
                 action="stop_ev",
                 reason=f"Appliance {state.appliance_w:.0f}W → EV paused",
             )
@@ -110,7 +121,7 @@ def decide_nev(
         # Check 3: Grid over target? Increase discharge
         if state.grid_w > actual_target_w * NEV_GRID_OVERSHOOT_FACTOR:
             needed_w = int(state.grid_w - actual_target_w)
-            return "EV_CHARGING", NevCommand(
+            return NevPhase.EV_CHARGING, NevCommand(
                 action="increase_discharge",
                 discharge_w=needed_w,
                 reason=f"Grid {state.grid_w:.0f}W>target → +{needed_w}W discharge",
@@ -118,41 +129,41 @@ def decide_nev(
 
         # Check 4: EV target reached or departure?
         if state.ev_soc >= state.ev_target:
-            return "IDLE", NevCommand(
+            return NevPhase.IDLE, NevCommand(
                 action="stop_ev",
                 reason=f"EV target reached ({state.ev_soc:.0f}% >= {state.ev_target:.0f}%)",
             )
         if not state.is_night:
-            return "IDLE", NevCommand(
+            return NevPhase.IDLE, NevCommand(
                 action="stop_ev",
                 reason="Morning — stopping night EV",
             )
 
-        return "EV_CHARGING", NevCommand(action="none", reason="Charging stable")
+        return NevPhase.EV_CHARGING, NevCommand(action="none", reason="Charging stable")
 
-    elif current_state == "APPLIANCE_PAUSE":
+    elif current_state == NevPhase.APPLIANCE_PAUSE:
         # Battery depleted while paused?
         if state.battery_soc <= state.min_soc:
-            return "BATTERY_DEPLETED", NevCommand(
+            return NevPhase.BATTERY_DEPLETED, NevCommand(
                 action="none",
                 reason="Battery depleted during appliance pause",
             )
         # Appliance done?
         if state.appliance_w < APPLIANCE_RESUME_THRESHOLD_W:
-            return "DISCHARGE_RAMP", NevCommand(
+            return NevPhase.DISCHARGE_RAMP, NevCommand(
                 action="start_discharge",
                 discharge_w=2000,
                 reason=f"Appliance done ({state.appliance_w:.0f}W), restarting discharge ramp",
             )
         # Not night anymore?
         if not state.is_night:
-            return "IDLE", NevCommand(action="none", reason="Morning during appliance pause")
+            return NevPhase.IDLE, NevCommand(action="none", reason="Morning during appliance pause")
 
-        return "APPLIANCE_PAUSE", NevCommand(action="none", reason="Appliance running")
+        return NevPhase.APPLIANCE_PAUSE, NevCommand(action="none", reason="Appliance running")
 
-    elif current_state == "BATTERY_DEPLETED":
+    elif current_state == NevPhase.BATTERY_DEPLETED:
         if not state.is_night:
-            return "IDLE", NevCommand(action="none", reason="Morning — reset")
-        return "BATTERY_DEPLETED", NevCommand(action="none", reason="Battery depleted")
+            return NevPhase.IDLE, NevCommand(action="none", reason="Morning — reset")
+        return NevPhase.BATTERY_DEPLETED, NevCommand(action="none", reason="Battery depleted")
 
     return current_state, NevCommand(action="none")

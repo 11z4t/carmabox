@@ -2,7 +2,7 @@
 
 import time
 
-from custom_components.carmabox.core.night_ev import NevState, decide_nev
+from custom_components.carmabox.core.night_ev import NevPhase, NevState, decide_nev
 
 
 def _state(**kw) -> NevState:
@@ -132,3 +132,25 @@ class TestBatteryDepleted:
         s = _state(is_night=False, battery_soc=15.0)
         new_state, _cmd = decide_nev(s, "BATTERY_DEPLETED", 0)
         assert new_state == "IDLE"
+
+
+class TestNevPhaseEnum:
+    """PLAT-1215: NevPhase Enum values match string literals."""
+
+    def test_nev_phase_enum_values(self):
+        """All phases have correct string values for backward compatibility."""
+        assert NevPhase.IDLE == "IDLE"
+        assert NevPhase.DISCHARGE_RAMP == "DISCHARGE_RAMP"
+        assert NevPhase.EV_CHARGING == "EV_CHARGING"
+        assert NevPhase.APPLIANCE_PAUSE == "APPLIANCE_PAUSE"
+        assert NevPhase.BATTERY_DEPLETED == "BATTERY_DEPLETED"
+
+    def test_nev_phase_is_str(self):
+        """NevPhase members are strings (str-Enum)."""
+        assert isinstance(NevPhase.IDLE, str)
+
+    def test_decide_nev_returns_nev_phase(self):
+        """decide_nev returns NevPhase, not raw string."""
+        s = _state()
+        new_state, _ = decide_nev(s, NevPhase.IDLE, 0)
+        assert isinstance(new_state, NevPhase)
