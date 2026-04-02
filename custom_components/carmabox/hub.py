@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import aiohttp
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
+from .const import HUB_SYNC_TIMEOUT_S
 from .optimizer.report import (
     ReportCollector,
     generate_report,
@@ -122,8 +123,6 @@ def sign_request(
 DEFAULT_WSS_URL = "wss://hub.carmabox.se/mqtt"
 DEFAULT_MQTTS_HOST = "hub.carmabox.se"
 DEFAULT_MQTTS_PORT = 8883
-SYNC_TIMEOUT = 30
-
 # mTLS cert storage (HA config dir)
 CERT_DIR_NAME = "carmabox_certs"
 
@@ -425,7 +424,7 @@ class HubSyncClient:
             url = f"{self.hub_url}/sync"
 
             async with session.post(
-                url, json=payload, timeout=aiohttp.ClientTimeout(total=SYNC_TIMEOUT)
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=HUB_SYNC_TIMEOUT_S)
             ) as resp:
                 if resp.status == 200:
                     self._last_sync = datetime.now()
@@ -450,7 +449,7 @@ class HubSyncClient:
             url = f"{self.hub_url}/register"
 
             async with session.post(
-                url, json=payload, timeout=aiohttp.ClientTimeout(total=SYNC_TIMEOUT)
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=HUB_SYNC_TIMEOUT_S)
             ) as resp:
                 if resp.status == 200:
                     data: dict[str, Any] = await resp.json()
@@ -504,7 +503,7 @@ class HubSyncClient:
             async with session.post(
                 url,
                 json={"profile": profile},
-                timeout=aiohttp.ClientTimeout(total=SYNC_TIMEOUT),
+                timeout=aiohttp.ClientTimeout(total=HUB_SYNC_TIMEOUT_S),
             ) as resp:
                 if resp.status == 200:
                     data: dict[str, Any] = await resp.json()

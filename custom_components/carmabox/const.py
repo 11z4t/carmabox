@@ -323,3 +323,6 @@ SOC_IMBALANCE_THRESHOLD_PCT = 15  # W8 alert when K/F SoC diff exceeds this
 
 # Crosscharge detection (PLAT-1213)
 CROSSCHARGE_DETECTION_THRESHOLD_W = 200  # Min battery power to detect crosscharge
+
+# Hub API timeout (PLAT-1214)
+HUB_SYNC_TIMEOUT_S: int = 10  # Max seconds for Hub API calls (HA manifest requires ≤10s)
