@@ -231,13 +231,46 @@ class TestProjection:
         assert r.projected_kw < 2.0
 
     def test_projection_accuracy(self):
-        """Projection formula correctness."""
+        """PLAT-1159: Projection formula uses _accumulated_viktat_wh.
+
+        Formula: (accumulated_Wh + grid_viktat_W * remaining_h) / 1000
+        Cold-start seeds accumulated from viktat_timmedel_kw * elapsed_h * 1000.
+        """
         g = _guard()
-        # At minute 30, half way: projected = (timmedel*30 + now*30)/60
+        # viktat_timmedel_kw=1.0, minute=30 → cold-start seeds accumulated to 500 Wh
         r = g.evaluate(viktat_timmedel_kw=1.0, grid_import_w=2000, hour=14, minute=30)
-        # Day weight = 1.0, so grid_viktat = 2.0
-        expected = (1.0 * 30 + 2.0 * 30) / 60  # = 1.5
+        # Day weight = 1.0, remaining = 30 min = 0.5 h, grid_viktat = 2000 W
+        # Seeded accumulated = 1.0 * 0.5 * 1000 = 500 Wh
+        expected = (500.0 + 2000.0 * 0.5) / 1000.0  # = 1.5 kW
         assert abs(r.projected_kw - expected) < 0.01
+
+    def test_projection_mittimme_accumulated(self):
+        """PLAT-1159: Mittimme — tung ackumulering + lättare aktuell last."""
+        g = _guard()
+        # Pre-set hour to prevent _reset_hour() wiping accumulated
+        g._hour = 14
+        # 55 min av 1.8 kW viktat = 1800 W * 1.0 * (55/60) h * 1000 = 1650 Wh
+        g._accumulated_viktat_wh = 1650.0
+        # Aktuell last lättare: 1000 W vid minut=55
+        r = g.evaluate(viktat_timmedel_kw=1.5, grid_import_w=1000, hour=14, minute=55)
+        # remaining = max(1, 5) = 5 min = 5/60 h
+        expected = (1650.0 + 1000.0 * (5.0 / 60.0)) / 1000.0
+        assert abs(r.projected_kw - expected) < 0.01
+
+    def test_projection_slut_av_timme(self):
+        """PLAT-1159: Nära timslut — ackumulerade Wh dominerar projektionen."""
+        g = _guard()
+        # Pre-set hour to prevent _reset_hour() wiping accumulated
+        g._hour = 14
+        # 55 min av tung last: 3000 W * 1.0 * (55/60) h * 1000 = 2750 Wh
+        g._accumulated_viktat_wh = 2750.0
+        # Aktuell last = 500 W (lätt avslut)
+        r = g.evaluate(viktat_timmedel_kw=2.8, grid_import_w=500, hour=14, minute=55)
+        # remaining = max(1, 5) = 5 min = 5/60 h
+        expected = (2750.0 + 500.0 * (5.0 / 60.0)) / 1000.0  # ~2.792 kW
+        assert abs(r.projected_kw - expected) < 0.01
+        # Accumulated dominerar — projektion > 2.5 kW
+        assert r.projected_kw > 2.5
 
     def test_projection_minute_zero(self):
         """PLAT-1159: At minute=0, elapsed=0 — projection = current rate only.
@@ -313,18 +346,19 @@ class TestRecovery:
             consumers=[_consumer("miner", 500, 2, switch="s")],
             timestamp=100.0,
         )
-        # Brief OK
+        # Brief OK — use low grid so projected drops below warn_limit with accumulated data
+        # accumulated ~1000 Wh; need (1000 + grid * 29/60) / 1000 < 1.7 → grid < 1449 W
         g.evaluate(
-            viktat_timmedel_kw=1.5,
-            grid_import_w=1500,
+            viktat_timmedel_kw=1.0,
+            grid_import_w=1000,
             hour=14,
             minute=31,
             timestamp=105.0,
         )
         # Should NOT be OK yet (recovery hold)
         r = g.evaluate(
-            viktat_timmedel_kw=1.5,
-            grid_import_w=1500,
+            viktat_timmedel_kw=1.0,
+            grid_import_w=1000,
             hour=14,
             minute=32,
             timestamp=110.0,

@@ -138,6 +138,14 @@ class GridGuard:
         if hour != self._hour:
             self._reset_hour(hour)
 
+        # PLAT-1159: Cold-start seed — if no prior data this hour (first cycle after
+        # restart or hour boundary with no restore_state()), seed _accumulated_viktat_wh
+        # from the measured running average so the projection is immediately accurate.
+        # Subsequent cycles use real accumulated measurements from _accumulate().
+        # Safe: skipped when restore_state() provided non-zero accumulated data.
+        if self._last_update == 0 and self._accumulated_viktat_wh == 0 and viktat_timmedel_kw > 0:
+            self._accumulated_viktat_wh = viktat_timmedel_kw * (minute / 60.0) * 1000.0
+
         # Accumulate
         self._accumulate(grid_import_w, hour, ts)
 
@@ -369,16 +377,19 @@ class GridGuard:
     ) -> float:
         """Project where weighted hourly average will land.
 
-        PLAT-1159: elapsed must be `minute` (0-59), NOT max(1, minute).
-        At minute=0 no past data exists — projection = current rate only.
-        Using max(1, ...) caused ~1.7% underestimation at hour start,
-        masking spikes that start at XX:00.
-        """
-        elapsed = max(0, min(minute, 59))  # PLAT-1159: was max(1, minute)
-        remaining = 60 - elapsed
-        grid_viktat_kw = max(0, grid_import_w) / 1000 * vikt
+        PLAT-1159 formula fix: use _accumulated_viktat_wh (actual measured Wh
+        so far this hour) instead of viktat_timmedel_kw x elapsed_min.
+        The running-average proxy had dimensionally consistent but less accurate
+        results -- accumulated Wh tracks real energy, not a lagged average.
 
-        projected = (viktat_timmedel_kw * elapsed + grid_viktat_kw * remaining) / 60
+        Formula: (accumulated_Wh_past + current_W x vikt x remaining_h) / 1000
+        Result is kWh = kW (1-hour window), directly comparable to tak_kw.
+        """
+        remaining = max(1, 60 - minute)  # minutes remaining in this hour
+        remaining_h = remaining / 60.0
+        grid_viktat_w = max(0.0, grid_import_w) * vikt
+
+        projected = (self._accumulated_viktat_wh + grid_viktat_w * remaining_h) / 1000.0
         self._last_projected_kw = projected
         return projected
 
