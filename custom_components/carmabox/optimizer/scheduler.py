@@ -35,18 +35,36 @@ from ..const import (
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_VOLTAGE,
+    SCHEDULER_AGGRESSIVE_FLOOR_ORE,
+    SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR,
+    SCHEDULER_ANTI_IDLE_MAX_KW,
+    SCHEDULER_ANTI_IDLE_SOC_RATIO,
     SCHEDULER_APPLIANCE_WINDOW_END,
     SCHEDULER_APPLIANCE_WINDOW_START,
+    SCHEDULER_BATTERY_BUDGET_LOW_RATIO,
     SCHEDULER_BREACH_MAJOR_PCT,
     SCHEDULER_BREACH_MINOR_PCT,
     SCHEDULER_CONSTRAINT_MARGIN,
+    SCHEDULER_DISCHARGE_FLOOR_ORE,
+    SCHEDULER_DISCHARGE_MEDIAN_FACTOR,
     SCHEDULER_EV_100_INTERVAL_DAYS,
     SCHEDULER_EV_100_PV_THRESHOLD_KWH,
+    SCHEDULER_EV_BMS_OVERNIGHT_FACTOR,
     SCHEDULER_EV_DEPARTURE_HOUR,
+    SCHEDULER_EV_LEARNING_MIN_CONFIDENCE,
+    SCHEDULER_EV_MIN_ENERGY_KWH,
+    SCHEDULER_EV_SOC_UNKNOWN_DEFAULT,
     SCHEDULER_LEARNING_CONFIDENCE_STEP,
     SCHEDULER_MAX_LEARNINGS,
+    SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE,
     SCHEDULER_MINER_EXPORT_MIN_W,
     SCHEDULER_PLAN_HOURS,
+    SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH,
+    SCHEDULER_SOLAR_MODERATE_KWH,
+    SCHEDULER_SOLAR_STRONG_KWH,
+    SCHEDULER_SUNRISE_PV_DETECT_KW,
+    SCHEDULER_SUNRISE_TARGET_MODERATE_PCT,
+    SCHEDULER_SUNRISE_TARGET_WEAK_PCT,
 )
 from .evening_optimizer import (
     apply_strategy_to_battery_schedule,
@@ -131,13 +149,16 @@ def _schedule_ev_backwards(
     schedule: list[tuple[float, int]] = [(0.0, 0)] * num_hours
 
     if ev_soc_pct < 0:
-        ev_soc_pct = 50.0
+        ev_soc_pct = SCHEDULER_EV_SOC_UNKNOWN_DEFAULT
     if ev_capacity_kwh <= 0:
         return schedule
 
-    # Energy needed (account for 10% discharge overnight from BMS)
-    energy_needed_kwh = max(0, (morning_target_soc - ev_soc_pct * 0.9) / 100 * ev_capacity_kwh)
-    if energy_needed_kwh < 0.5:
+    # Energy needed (account for BMS overnight discharge)
+    energy_needed_kwh = max(
+        0,
+        (morning_target_soc - ev_soc_pct * SCHEDULER_EV_BMS_OVERNIGHT_FACTOR) / 100 * ev_capacity_kwh,
+    )
+    if energy_needed_kwh < SCHEDULER_EV_MIN_ENERGY_KWH:
         return schedule
 
     min_kw = min_amps * voltage / 1000
@@ -156,7 +177,7 @@ def _schedule_ev_backwards(
         # Check if learnings say to avoid this hour
         avoid = False
         for lr in learnings:
-            if lr.hour == abs_h and lr.action in ("pause_ev", "shift_ev") and lr.confidence > 0.5:
+            if lr.hour == abs_h and lr.action in ("pause_ev", "shift_ev") and lr.confidence > SCHEDULER_EV_LEARNING_MIN_CONFIDENCE:
                 avoid = True
                 break
 
@@ -177,12 +198,12 @@ def _schedule_ev_backwards(
 
     # Battery support budget (similar to ev_strategy.py)
     pv_surplus = max(0, pv_tomorrow_kwh - daily_consumption_kwh)
-    if pv_surplus > 10:
+    if pv_surplus > SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH:
         battery_budget_kwh = battery_kwh_available
     elif pv_surplus > 0:
         battery_budget_kwh = min(battery_kwh_available, pv_surplus)
     else:
-        battery_budget_kwh = battery_kwh_available * 0.3
+        battery_budget_kwh = battery_kwh_available * SCHEDULER_BATTERY_BUDGET_LOW_RATIO
     batt_per_hour = battery_budget_kwh / len(candidates) if candidates else 0.0
 
     # Sort candidates: cheapest first
@@ -331,14 +352,14 @@ def _schedule_battery(
 
     # Find price median for charge/discharge decisions
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
-    median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else 50.0
+    median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
     # Discharge when price is above median x factor, replacing grid import
     # Idle batteries = wasted investment — actively use them!
-    discharge_price_threshold = max(40.0, median_price * 0.9)
+    discharge_price_threshold = max(SCHEDULER_DISCHARGE_FLOOR_ORE, median_price * SCHEDULER_DISCHARGE_MEDIAN_FACTOR)
     # Aggressive discharge: price well above median
-    aggressive_discharge_threshold = max(60.0, median_price * 1.3)
+    aggressive_discharge_threshold = max(SCHEDULER_AGGRESSIVE_FLOOR_ORE, median_price * SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR)
 
     # ── Solar refill analysis ────────────────────────────────────
     # If tomorrow has strong solar, we can drain deeper tonight
@@ -348,18 +369,24 @@ def _schedule_battery(
     elif pv_forecast_daily and len(pv_forecast_daily) == 1:
         tomorrow_pv_kwh = pv_forecast_daily[0]
 
-    # Strong solar tomorrow → drain to min_soc by sunrise (08:00)
-    # Moderate solar → drain to 30% by sunrise
-    solar_confident = tomorrow_pv_kwh > 25.0
-    solar_moderate = tomorrow_pv_kwh > 15.0
-    sunrise_target_pct = battery_min_soc if solar_confident else 30.0 if solar_moderate else 50.0
+    # Strong solar tomorrow → drain to min_soc by sunrise
+    # Moderate solar → drain to SCHEDULER_SUNRISE_TARGET_MODERATE_PCT by sunrise
+    solar_confident = tomorrow_pv_kwh > SCHEDULER_SOLAR_STRONG_KWH
+    solar_moderate = tomorrow_pv_kwh > SCHEDULER_SOLAR_MODERATE_KWH
+    sunrise_target_pct = (
+        battery_min_soc
+        if solar_confident
+        else SCHEDULER_SUNRISE_TARGET_MODERATE_PCT
+        if solar_moderate
+        else SCHEDULER_SUNRISE_TARGET_WEAK_PCT
+    )
     sunrise_target_kwh = sunrise_target_pct / 100 * battery_cap_kwh
 
     # ── Find sunrise hour (first hour with PV > 1kW) ────────────
     sunrise_slot = num_hours  # default: never
     for si in range(num_hours):
         pv_si = hourly_pv[si] if si < len(hourly_pv) else 0.0
-        if pv_si > 1.0:
+        if pv_si > SCHEDULER_SUNRISE_PV_DETECT_KW:
             sunrise_slot = si
             break
 
@@ -465,10 +492,10 @@ def _schedule_battery(
                     soc_kwh -= discharge
                 action = "d"
 
-        # Priority 7: Anti-idle — if battery is >80% and no action taken,
+        # Priority 7: Anti-idle — if battery is above ratio threshold and no action taken,
         # discharge a small amount to cover house load (avoid idle waste)
-        if action == "i" and soc_kwh > battery_cap_kwh * 0.8 and net > 0.3 and available > 0.3:
-            idle_discharge = min(net * 0.5, available, 1.5)
+        if action == "i" and soc_kwh > battery_cap_kwh * SCHEDULER_ANTI_IDLE_SOC_RATIO and net > 0.3 and available > 0.3:
+            idle_discharge = min(net * 0.5, available, SCHEDULER_ANTI_IDLE_MAX_KW)
             if idle_discharge > 0.2:
                 battery_kw = -idle_discharge
                 soc_kwh -= idle_discharge

@@ -11,6 +11,22 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ..const import (
+    SCORE_ACTION_PTS,
+    SCORE_EMA_ALPHA,
+    SCORE_EMA_INITIAL,
+    SCORE_GRID_MAX_ERROR_KW,
+    SCORE_GRID_PTS,
+    SCORE_HISTORY_MAX_DAYS,
+    SCORE_SOC_MAX_ERROR_PCT,
+    SCORE_SOC_PTS,
+    SCORE_SUMMARY_WINDOW_DAYS,
+    SCORE_TREND_MIN_DAYS,
+    SCORE_TREND_THRESHOLD_PTS,
+    SCORE_TREND_WINDOW_DAYS,
+    SCORE_WORST_HOURS_WINDOW_DAYS,
+)
+
 if TYPE_CHECKING:
     from .models import HourActual
 
@@ -49,8 +65,8 @@ class ScoreHistory:
     daily_scores: list[DayScore] = field(default_factory=list)
 
     # EMA of overall score for smooth trend
-    ema_score: float = 50.0
-    ema_alpha: float = 0.1
+    ema_score: float = SCORE_EMA_INITIAL
+    ema_alpha: float = SCORE_EMA_ALPHA
 
 
 def score_hour(actual: HourActual) -> HourScore:
@@ -73,15 +89,15 @@ def score_hour(actual: HourActual) -> HourScore:
     # Grid accuracy: 40 points (penalize proportionally)
     # SoC accuracy: 30 points
 
-    action_pts = 30.0 if action_match else 0.0
+    action_pts = SCORE_ACTION_PTS if action_match else 0.0
 
-    # Grid accuracy: full points at 0 error, 0 at 3+ kW error
-    grid_penalty = min(1.0, abs(grid_err) / 3.0)
-    grid_pts = 40.0 * (1 - grid_penalty)
+    # Grid accuracy: full points at 0 error, 0 at SCORE_GRID_MAX_ERROR_KW+ error
+    grid_penalty = min(1.0, abs(grid_err) / SCORE_GRID_MAX_ERROR_KW)
+    grid_pts = SCORE_GRID_PTS * (1 - grid_penalty)
 
-    # SoC accuracy: full points at 0% error, 0 at 20%+ error
-    soc_penalty = min(1.0, abs(soc_err) / 20.0)
-    soc_pts = 30.0 * (1 - soc_penalty)
+    # SoC accuracy: full points at 0% error, 0 at SCORE_SOC_MAX_ERROR_PCT%+ error
+    soc_penalty = min(1.0, abs(soc_err) / SCORE_SOC_MAX_ERROR_PCT)
+    soc_pts = SCORE_SOC_PTS * (1 - soc_penalty)
 
     score = round(action_pts + grid_pts + soc_pts, 1)
 
@@ -149,8 +165,8 @@ def record_day_score(history: ScoreHistory, day_score: DayScore) -> None:
             return
 
     history.daily_scores.append(day_score)
-    if len(history.daily_scores) > 90:
-        history.daily_scores = history.daily_scores[-90:]
+    if len(history.daily_scores) > SCORE_HISTORY_MAX_DAYS:
+        history.daily_scores = history.daily_scores[-SCORE_HISTORY_MAX_DAYS:]
 
     # Update EMA
     history.ema_score = (
@@ -164,18 +180,18 @@ def trend(history: ScoreHistory) -> str:
     Compares last 7 days vs previous 7 days.
     """
     scores = history.daily_scores
-    if len(scores) < 14:
+    if len(scores) < SCORE_TREND_MIN_DAYS:
         return "insufficient_data"
 
-    recent = [s.overall_score for s in scores[-7:]]
-    previous = [s.overall_score for s in scores[-14:-7]]
+    recent = [s.overall_score for s in scores[-SCORE_TREND_WINDOW_DAYS:]]
+    previous = [s.overall_score for s in scores[-SCORE_TREND_MIN_DAYS:-SCORE_TREND_WINDOW_DAYS]]
 
     recent_avg = sum(recent) / len(recent)
     prev_avg = sum(previous) / len(previous)
 
-    if recent_avg > prev_avg + 3:
+    if recent_avg > prev_avg + SCORE_TREND_THRESHOLD_PTS:
         return "improving"
-    if recent_avg < prev_avg - 3:
+    if recent_avg < prev_avg - SCORE_TREND_THRESHOLD_PTS:
         return "declining"
     return "stable"
 
@@ -190,7 +206,7 @@ def worst_hours(history: ScoreHistory, top_n: int = 3) -> list[dict[str, Any]]:
 
     # Aggregate errors per hour
     hour_errors: dict[int, list[float]] = {}
-    for ds in history.daily_scores[-30:]:
+    for ds in history.daily_scores[-SCORE_WORST_HOURS_WINDOW_DAYS:]:
         for hs in ds.hour_scores:
             hour_errors.setdefault(hs.hour, []).append(abs(hs.grid_error_kw))
 
@@ -214,7 +230,7 @@ def summary(history: ScoreHistory) -> dict[str, Any]:
             "days_tracked": 0,
         }
 
-    recent = scores[-7:] if len(scores) >= 7 else scores
+    recent = scores[-SCORE_SUMMARY_WINDOW_DAYS:] if len(scores) >= SCORE_SUMMARY_WINDOW_DAYS else scores
     avg_score = sum(s.overall_score for s in recent) / len(recent)
 
     return {
@@ -243,7 +259,7 @@ def history_to_dict(history: ScoreHistory) -> dict[str, Any]:
                 "peak_error_kw": ds.peak_error_kw,
                 "hours_scored": ds.hours_scored,
             }
-            for ds in history.daily_scores[-90:]
+            for ds in history.daily_scores[-SCORE_HISTORY_MAX_DAYS:]
         ],
     }
 
@@ -269,7 +285,7 @@ def history_from_dict(data: dict[str, Any]) -> ScoreHistory:
         ]
         return ScoreHistory(
             daily_scores=daily,
-            ema_score=float(data.get("ema_score", 50.0)),
+            ema_score=float(data.get("ema_score", SCORE_EMA_INITIAL)),
         )
     except (KeyError, ValueError, TypeError):
         return ScoreHistory()
