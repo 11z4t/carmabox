@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from ..const import (
+    CHEAP_CHARGE_PRICE_ORE,
+    CHEAP_CHARGE_SOC_THRESHOLD_PCT,
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_EV_EFFICIENCY,
@@ -1000,7 +1002,7 @@ def generate_scheduler_plan(
     """
     num_hours = max(1, min(num_hours, 48))
     if hourly_prices is None:
-        hourly_prices = [50.0] * num_hours
+        hourly_prices = [SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE] * num_hours
     if hourly_pv is None:
         hourly_pv = [0.0] * num_hours
     if hourly_loads is None:
@@ -1011,7 +1013,7 @@ def generate_scheduler_plan(
         learnings = []
 
     # Pad inputs to num_hours
-    hourly_prices = _pad(hourly_prices, num_hours, 50.0)
+    hourly_prices = _pad(hourly_prices, num_hours, SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE)
     hourly_pv = _pad(hourly_pv, num_hours, 0.0)
     hourly_loads = _pad(hourly_loads, num_hours, 1.5)
 
@@ -1280,8 +1282,8 @@ def analyze_idle_time(
             surplus = min(pv_surplus, 3.0)  # Max 3kW charge rate
             missed_charge += surplus
 
-        # Missed cheap charge: price < 20 öre and battery not full
-        if price < 20 and soc < 80:
+        # Missed cheap charge: price below threshold and battery not full
+        if price < CHEAP_CHARGE_PRICE_ORE and soc < CHEAP_CHARGE_SOC_THRESHOLD_PCT:
             missed_charge += 2.0  # Could charge 2 kW
 
         # Missed discharge: price > avg*1.3 and battery has energy
@@ -1300,7 +1302,7 @@ def analyze_idle_time(
         )
 
     cheap_hours = [i for i, p in enumerate(prices) if p < avg_price * 0.6]
-    if cheap_hours and battery_soc_pct < 80:
+    if cheap_hours and battery_soc_pct < CHEAP_CHARGE_SOC_THRESHOLD_PCT:
         h_str = ", ".join(f"{h:02d}" for h in cheap_hours[:4])
         opportunities.append(f"Billiga laddningstimmar: {h_str}")
 

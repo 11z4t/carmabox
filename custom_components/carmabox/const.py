@@ -361,3 +361,5 @@ SCHEDULER_SUNRISE_TARGET_WEAK_PCT = 50.0  # Battery SoC target at sunrise: weak/
 SCHEDULER_SUNRISE_PV_DETECT_KW = 1.0  # PV output > this kW marks sunrise
 SCHEDULER_ANTI_IDLE_SOC_RATIO = 0.8  # Discharge anti-idle when SoC > cap x this
 SCHEDULER_ANTI_IDLE_MAX_KW = 1.5  # Max anti-idle discharge rate (kW)
+CHEAP_CHARGE_PRICE_ORE: float = 20.0  # Price ≤ this öre/kWh = cheap grid charge opportunity
+CHEAP_CHARGE_SOC_THRESHOLD_PCT: float = 80.0  # Battery SoC below this qualifies for cheap charge
