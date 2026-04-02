@@ -1,0 +1,66 @@
+generate_plan:
+  name: Generera plan
+  description: >
+    Tvingar CARMA Box att omedelbart generera en ny 24-timmarsplan baserat
+    på aktuella elpriser, solprognos och batteristatus. Används vid manuell
+    felsökning eller efter att konfiguration ändrats.
+
+start_ev:
+  name: Starta EV-laddning
+  description: >
+    Startar EV-laddning manuellt utanför CARMA Box automatik.
+    Strömstyrkan sätts till angivet värde (standard 6A).
+    Max 10A — överskrid aldrig 10A för att skydda 20A-säkringen.
+  fields:
+    amps:
+      name: Strömstyrka (A)
+      description: >
+        Laddström i ampere. Minsta tillåtna värde är 6A, maximalt 10A.
+        Standardvärde är 6A om fältet utelämnas.
+      required: false
+      default: 6
+      selector:
+        number:
+          min: 6
+          max: 10
+          step: 1
+          unit_of_measurement: A
+          mode: slider
+
+stop_ev:
+  name: Stoppa EV-laddning
+  description: >
+    Stoppar EV-laddning omedelbart och återställer laddströmmen till
+    minvärdet (6A). Påverkar inte CARMA Box automatik — nästa cykel
+    kan starta laddning igen om villkoren är uppfyllda.
+
+force_charge:
+  name: Tvingad batteriladdning
+  description: >
+    Tvingar batteriet att ladda från nätet fram till angivet SoC-mål.
+    Åsidosätter CARMA Box automatik tillfälligt. Används vid planerat
+    nätavbrott eller liknande behov. Återgår till automatik när
+    mål-SoC nåtts eller vid nästa plan-cykel.
+  fields:
+    target_soc:
+      name: Mål-SoC (%)
+      description: >
+        Önskat laddmål i procent (10–100). Standard är 80% om fältet
+        utelämnas. CARMA Box stoppar grid-laddning när målet nåtts.
+      required: false
+      default: 80
+      selector:
+        number:
+          min: 10
+          max: 100
+          step: 5
+          unit_of_measurement: "%"
+          mode: slider
+
+force_standby:
+  name: Tvingat vänteläge
+  description: >
+    Sätter batteriet i vänteläge (varken laddar eller laddar ur) tills
+    nästa automatiska plancykel. Används vid underhåll eller när manuell
+    kontroll tillfälligt krävs. CARMA Box återtar kontrollen automatiskt
+    vid nästa timmes plan-körning.
