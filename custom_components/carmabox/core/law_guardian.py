@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
 # Noise-floor thresholds
 _EXPORT_WARNING_W = 500  # W — LAG_4 export guard threshold
@@ -58,7 +59,7 @@ class BreachRecord:
     duration_s: int = 0
     root_cause: str = ""
     correction: str = ""
-    context: dict = field(default_factory=dict)
+    context: dict[str, Any] = field(default_factory=dict)
     _mono: float = field(default_factory=time.monotonic, repr=False)
 
 
@@ -110,7 +111,7 @@ class GuardianReport:
     checks: list[CheckResult]
     breaches: list[BreachRecord]
     replan_needed: bool
-    notifications: list[dict]  # {channel, severity, message}
+    notifications: list[dict[str, Any]]  # {channel, severity, message}
 
 
 class LawGuardian:
@@ -128,7 +129,7 @@ class LawGuardian:
         """Evaluate all laws. Returns report with breaches and notifications."""
         checks: list[CheckResult] = []
         breaches: list[BreachRecord] = []
-        notifications: list[dict] = []
+        notifications: list[dict[str, Any]] = []
         replan = False
         now_str = datetime.now().isoformat()
 
@@ -273,10 +274,10 @@ class LawGuardian:
 
     # ── Hourly/daily reports ────────────────────────────────────
 
-    def hourly_summary(self) -> dict:
+    def hourly_summary(self) -> dict[str, Any]:
         """Summary for the last hour."""
         recent = [b for b in self.breach_history if b.timestamp > datetime.now().isoformat()[:13]]
-        by_law = {}
+        by_law: dict[str, int] = {}
         for b in recent:
             key = b.law.value
             by_law[key] = by_law.get(key, 0) + 1
@@ -286,11 +287,11 @@ class LawGuardian:
             "worst": max((b.actual_value for b in recent), default=0),
         }
 
-    def daily_summary(self) -> dict:
+    def daily_summary(self) -> dict[str, Any]:
         """Summary for today."""
         today = datetime.now().strftime("%Y-%m-%d")
         today_breaches = [b for b in self.breach_history if b.timestamp.startswith(today)]
-        by_law = {}
+        by_law: dict[str, int] = {}
         for b in today_breaches:
             key = b.law.value
             by_law[key] = by_law.get(key, 0) + 1

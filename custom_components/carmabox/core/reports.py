@@ -319,19 +319,20 @@ def generate_weekly_report_html(
 
     # Pre-compute best/worst day values for template
     best_pv = best_day.get("pv_kwh", 0) if best_day else 0
-    best_date_str = (
-        best_day.get("date").strftime("%Y-%m-%d") if best_day and best_day.get("date") else "-"
-    )
+    _best_date = best_day.get("date") if best_day else None
+    best_date_str = _best_date.strftime("%Y-%m-%d") if _best_date is not None else "-"
     worst_pv = worst_day.get("pv_kwh", 0) if worst_day else 0
-    worst_date_str = (
-        worst_day.get("date").strftime("%Y-%m-%d") if worst_day and worst_day.get("date") else "-"
-    )
+    _worst_date = worst_day.get("date") if worst_day else None
+    worst_date_str = _worst_date.strftime("%Y-%m-%d") if _worst_date is not None else "-"
 
     # Get date range
     if daily_summaries:
         start_date = daily_summaries[0].get("date")
         end_date = daily_summaries[-1].get("date")
-        date_range = f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}"
+        if start_date is not None and end_date is not None:
+            date_range = f"{start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}"
+        else:
+            date_range = "Ingen data"
     else:
         date_range = "Ingen data"
 
