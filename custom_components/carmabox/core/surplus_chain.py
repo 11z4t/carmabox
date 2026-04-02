@@ -615,8 +615,7 @@ def calculate_climate_boost(
         "boost": True,
         "new_target_c": round(new_target, 1),
         "reason": (
-            f"PV-boost {mode}: {target_temp_c:.1f}→{new_target:.1f}°C"
-            f" ({surplus_w:.0f}W överskott)"
+            f"PV-boost {mode}: {target_temp_c:.1f}→{new_target:.1f}°C ({surplus_w:.0f}W överskott)"
         ),
     }
 

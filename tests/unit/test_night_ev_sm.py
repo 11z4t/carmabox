@@ -38,12 +38,12 @@ class TestIdleToDischargeRamp:
 
     def test_stays_idle_if_ev_not_connected(self):
         s = _state(ev_connected=False)
-        new_state, cmd = decide_nev(s, "IDLE", 0)
+        new_state, _cmd = decide_nev(s, "IDLE", 0)
         assert new_state == "IDLE"
 
     def test_stays_idle_if_battery_too_low(self):
         s = _state(battery_soc=18.0)  # min_soc=15 + 5 = 20
-        new_state, cmd = decide_nev(s, "IDLE", 0)
+        new_state, _cmd = decide_nev(s, "IDLE", 0)
         assert new_state == "IDLE"
 
 
@@ -118,17 +118,17 @@ class TestAppliancePause:
 
     def test_battery_depleted_during_pause(self):
         s = _state(appliance_w=1500.0, battery_soc=15.0)
-        new_state, cmd = decide_nev(s, "APPLIANCE_PAUSE", 0)
+        new_state, _cmd = decide_nev(s, "APPLIANCE_PAUSE", 0)
         assert new_state == "BATTERY_DEPLETED"
 
 
 class TestBatteryDepleted:
     def test_stays_depleted_at_night(self):
         s = _state(battery_soc=15.0)
-        new_state, cmd = decide_nev(s, "BATTERY_DEPLETED", 0)
+        new_state, _cmd = decide_nev(s, "BATTERY_DEPLETED", 0)
         assert new_state == "BATTERY_DEPLETED"
 
     def test_resets_at_morning(self):
         s = _state(is_night=False, battery_soc=15.0)
-        new_state, cmd = decide_nev(s, "BATTERY_DEPLETED", 0)
+        new_state, _cmd = decide_nev(s, "BATTERY_DEPLETED", 0)
         assert new_state == "IDLE"

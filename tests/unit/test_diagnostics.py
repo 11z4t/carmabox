@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.carmabox.coordinator import BatteryCommand, CarmaboxCoordinator
+from custom_components.carmabox.core.audit import AuditLog
 from custom_components.carmabox.diagnostics import (
     _anonymize_options,
     _hash_entity,
@@ -15,7 +16,6 @@ from custom_components.carmabox.diagnostics import (
 from custom_components.carmabox.optimizer.models import CarmaboxState, HourPlan
 from custom_components.carmabox.optimizer.safety_guard import SafetyGuard
 from custom_components.carmabox.optimizer.savings import SavingsState
-from custom_components.carmabox.core.audit import AuditLog
 
 
 class TestHashEntity:

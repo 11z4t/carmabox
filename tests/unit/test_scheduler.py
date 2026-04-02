@@ -137,7 +137,7 @@ class TestEVBackwardsScheduling:
             learnings=learnings,
         )
         # Hour 23 is index 5 (start=18, 18+5=23)
-        kw_at_23, _ = schedule[5]
+        _kw_at_23, _ = schedule[5]
         # Should prefer other hours, but may still use 23 as last resort
         # The key is that non-avoided hours are preferred
         total_non_avoided = sum(
@@ -571,7 +571,7 @@ class TestBreachCorrections:
             reason="EV för hög last kl 23",
         )
         # Hour 23 with start_hour=18 → index 5
-        ev_out, bat_out = _apply_corrections(
+        ev_out, _bat_out = _apply_corrections(
             corrections=[corr],
             ev_schedule=ev,
             battery_schedule=bat,
@@ -584,7 +584,7 @@ class TestBreachCorrections:
         )
         assert corr.applied is True
         # EV at index 5 (hour 23) should be reduced
-        kw, amps = ev_out[5]
+        _, amps = ev_out[5]
         assert amps == 6
 
     def test_add_discharge_correction(self) -> None:
@@ -600,7 +600,7 @@ class TestBreachCorrections:
             reason="Batteri idle under peak",
         )
         # Hour 19 with start_hour=18 → index 1
-        ev_out, bat_out = _apply_corrections(
+        _ev_out, bat_out = _apply_corrections(
             corrections=[corr],
             ev_schedule=ev,
             battery_schedule=bat,
@@ -629,7 +629,7 @@ class TestBreachCorrections:
             param="shift_from=23,shift_to=3",
             reason="Flytta EV",
         )
-        ev_out, bat_out = _apply_corrections(
+        ev_out, _bat_out = _apply_corrections(
             corrections=[corr],
             ev_schedule=ev,
             battery_schedule=bat,

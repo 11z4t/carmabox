@@ -240,11 +240,11 @@ class TestTrackSavings:
             grid_power_w=1000.0,
             current_price=100.0,
         )
-        _HOUR = 14  # fixed — avoids flakiness at hour boundary
-        coord._peak_last_hour = (_HOUR + 1) % 24  # different from mocked hour
+        _hour = 14  # fixed — avoids flakiness at hour boundary
+        coord._peak_last_hour = (_hour + 1) % 24  # different from mocked hour
 
         mock_now = MagicMock()
-        mock_now.hour = _HOUR
+        mock_now.hour = _hour
         mock_now.weekday.return_value = 3  # Wednesday
         mock_now.strftime.return_value = "2026-04-02"
 
@@ -342,7 +342,7 @@ class TestFeedPredictorMl:
         coord = _make_coord()
         appliance_state = MagicMock()
         appliance_state.state = "800"  # > 500W
-        coord.hass.states.get = lambda eid: (appliance_state if "shelly" in eid else None)
+        coord.hass.states.get = lambda eid: appliance_state if "shelly" in eid else None
         state = CarmaboxState()
         coord._feed_predictor_ml(state)
         coord.predictor.add_appliance_event.assert_called()
@@ -352,20 +352,20 @@ class TestFeedPredictorMl:
         coord = _make_coord()
         temp_state = MagicMock()
         temp_state.state = "15.3"
-        coord.hass.states.get = lambda eid: (temp_state if "tempest_temperature" in eid else None)
+        coord.hass.states.get = lambda eid: temp_state if "tempest_temperature" in eid else None
         state = CarmaboxState()
         coord._feed_predictor_ml(state)
         coord.predictor.add_temperature_sample.assert_called_once()
 
     def test_plan_feedback_new_hour(self) -> None:
         """New feedback hour → add_plan_feedback for matching hour (lines 5955-5957)."""
-        _HOUR = 14  # fixed — avoids flakiness at hour boundary
+        _hour = 14  # fixed — avoids flakiness at hour boundary
 
         coord = _make_coord()
-        coord._last_feedback_hour = (_HOUR + 1) % 24  # different from mocked hour
+        coord._last_feedback_hour = (_hour + 1) % 24  # different from mocked hour
 
         ph = MagicMock()
-        ph.hour = _HOUR
+        ph.hour = _hour
         ph.grid_kw = 1.5
         coord.plan = [ph]
         coord.hass.states.get = MagicMock(return_value=None)
@@ -373,7 +373,7 @@ class TestFeedPredictorMl:
 
         with patch("datetime.datetime") as mock_dt:
             now = MagicMock()
-            now.hour = _HOUR
+            now.hour = _hour
             now.weekday.return_value = 3
             mock_dt.now.return_value = now
             coord._feed_predictor_ml(state)
@@ -381,16 +381,16 @@ class TestFeedPredictorMl:
 
     def test_plan_feedback_same_hour_skipped(self) -> None:
         """Same feedback hour → plan feedback skipped (line 5951)."""
-        _HOUR = 14  # fixed — avoids flakiness at hour boundary
+        _hour = 14  # fixed — avoids flakiness at hour boundary
 
         coord = _make_coord()
-        coord._last_feedback_hour = _HOUR  # same as mocked hour
+        coord._last_feedback_hour = _hour  # same as mocked hour
         coord.hass.states.get = MagicMock(return_value=None)
         state = CarmaboxState()
 
         with patch("datetime.datetime") as mock_dt:
             now = MagicMock()
-            now.hour = _HOUR
+            now.hour = _hour
             now.weekday.return_value = 3
             mock_dt.now.return_value = now
             coord._feed_predictor_ml(state)

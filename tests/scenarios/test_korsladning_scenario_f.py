@@ -266,9 +266,9 @@ class TestModbusLockPreventsRace:
         # Legacy input_select write (best-effort, suppressed) runs outside Modbus lock,
         # so max 2 concurrent is expected: 1 legacy + 1 Modbus-locked EMS write.
         # The critical invariant is that Modbus-locked writes never exceed 1 concurrent.
-        assert (
-            max_concurrent <= 2
-        ), f"Max {max_concurrent} concurrent calls detected! Log: {execution_log}"
+        assert max_concurrent <= 2, (
+            f"Max {max_concurrent} concurrent calls detected! Log: {execution_log}"
+        )
 
     @pytest.mark.asyncio
     async def test_lock_held_during_retry(self) -> None:

@@ -268,7 +268,7 @@ class LawGuardian:
             return False, ""
 
         worst = max(b.actual_value for b in recent)
-        msg = f"{law} brott x{count} senaste {window_minutes}min" f" (worst {worst:.1f} kW)"
+        msg = f"{law} brott x{count} senaste {window_minutes}min (worst {worst:.1f} kW)"
         return True, msg
 
     # ── Hourly/daily reports ────────────────────────────────────

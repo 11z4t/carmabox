@@ -33,7 +33,7 @@ class TestSensorFallback:
         r = ResilienceManager()
         r.register_sensor("sensor.grid", default=2000)
         r.update_sensor("sensor.grid", 1500, ts=100)
-        val, fb = r.get_value("sensor.grid", float("nan"), ts=150)
+        _, fb = r.get_value("sensor.grid", float("nan"), ts=150)
         assert fb is True
 
     def test_unregistered_sensor(self):

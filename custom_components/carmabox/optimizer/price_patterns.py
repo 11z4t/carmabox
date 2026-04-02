@@ -38,15 +38,15 @@ class PriceProfile:
     )
 
     # Sample counts per month
-    weekday_samples: dict[int, int] = field(default_factory=lambda: {m: 0 for m in range(1, 13)})
-    weekend_samples: dict[int, int] = field(default_factory=lambda: {m: 0 for m in range(1, 13)})
+    weekday_samples: dict[int, int] = field(default_factory=lambda: dict.fromkeys(range(1, 13), 0))
+    weekend_samples: dict[int, int] = field(default_factory=lambda: dict.fromkeys(range(1, 13), 0))
 
     # Daily price records for volatility tracking
     daily_records: list[dict[str, Any]] = field(default_factory=list)
 
     # Learned spread pattern: [month] → avg daily spread (max-min)
     monthly_spread: dict[int, float] = field(
-        default_factory=lambda: {m: 30.0 for m in range(1, 13)}
+        default_factory=lambda: dict.fromkeys(range(1, 13), 30.0)
     )
 
     def record_day(

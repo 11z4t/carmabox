@@ -224,7 +224,7 @@ class TestShouldNotifySlack:
         # Generate 2 LAG_1 breaches (threshold default = 3)
         for _ in range(2):
             g.evaluate(_state(grid_viktat_timmedel_kw=2.5, current_hour=14))
-        notify, msg = g.should_notify_slack()
+        notify, _ = g.should_notify_slack()
         assert notify is False
 
     def test_should_notify_above_threshold(self):

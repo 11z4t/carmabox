@@ -43,7 +43,7 @@ class TestResilienceManager:
         mgr.register_sensor("sensor.test")
         # Pass a non-float to trigger TypeError in _is_unavailable
         # This covers the except clause (line 102)
-        value, is_fb = mgr.get_value("sensor.test", current=None)
+        _, is_fb = mgr.get_value("sensor.test", current=None)
         # Should return fallback (no last known → 0.0)
         assert is_fb is True
 

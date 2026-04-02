@@ -5,7 +5,6 @@ from __future__ import annotations
 import aiohttp
 
 from custom_components.carmabox.const import HUB_SYNC_TIMEOUT_S
-from custom_components.carmabox.hub import HubSyncClient
 
 
 class TestHubTimeout:
@@ -18,7 +17,8 @@ class TestHubTimeout:
         import custom_components.carmabox.hub as hub_module
 
         assert not hasattr(hub_module, "SYNC_TIMEOUT"), (
-            "SYNC_TIMEOUT should have been removed from hub.py — use HUB_SYNC_TIMEOUT_S from const.py"
+            "SYNC_TIMEOUT should have been removed from hub.py"
+            " — use HUB_SYNC_TIMEOUT_S from const.py"
         )
 
     def test_aiohttp_timeout_uses_hub_const(self) -> None:

@@ -328,36 +328,36 @@ CROSSCHARGE_DETECTION_THRESHOLD_W = 200  # Min battery power to detect crosschar
 HUB_SYNC_TIMEOUT_S: int = 10  # Max seconds for Hub API calls (HA manifest requires ≤10s)
 
 # ── PLAT-1209: Plan Scoring (plan_scoring.py) ──────────────────────
-SCORE_ACTION_PTS = 30.0          # Points awarded for correct action match (0-100 composite)
-SCORE_GRID_PTS = 40.0            # Points for grid accuracy
-SCORE_SOC_PTS = 30.0             # Points for SoC accuracy
-SCORE_GRID_MAX_ERROR_KW = 3.0    # Grid error ≥ this → 0 grid points
-SCORE_SOC_MAX_ERROR_PCT = 20.0   # SoC error ≥ this % → 0 SoC points
-SCORE_EMA_INITIAL = 50.0         # Starting EMA score (neutral midpoint)
-SCORE_EMA_ALPHA = 0.1            # EMA smoothing factor (lower = more memory)
-SCORE_HISTORY_MAX_DAYS = 90      # Keep at most this many days of history
-SCORE_TREND_MIN_DAYS = 14        # Min days of history required to compute trend
-SCORE_TREND_WINDOW_DAYS = 7      # Compare last N days vs previous N days for trend
+SCORE_ACTION_PTS = 30.0  # Points awarded for correct action match (0-100 composite)
+SCORE_GRID_PTS = 40.0  # Points for grid accuracy
+SCORE_SOC_PTS = 30.0  # Points for SoC accuracy
+SCORE_GRID_MAX_ERROR_KW = 3.0  # Grid error ≥ this → 0 grid points
+SCORE_SOC_MAX_ERROR_PCT = 20.0  # SoC error ≥ this % → 0 SoC points
+SCORE_EMA_INITIAL = 50.0  # Starting EMA score (neutral midpoint)
+SCORE_EMA_ALPHA = 0.1  # EMA smoothing factor (lower = more memory)
+SCORE_HISTORY_MAX_DAYS = 90  # Keep at most this many days of history
+SCORE_TREND_MIN_DAYS = 14  # Min days of history required to compute trend
+SCORE_TREND_WINDOW_DAYS = 7  # Compare last N days vs previous N days for trend
 SCORE_TREND_THRESHOLD_PTS = 3.0  # Score delta ≥ this → "improving" / "declining"
 SCORE_WORST_HOURS_WINDOW_DAYS = 30  # Analyse last N days when finding worst hours
-SCORE_SUMMARY_WINDOW_DAYS = 7    # Days included in summary average
+SCORE_SUMMARY_WINDOW_DAYS = 7  # Days included in summary average
 
 # ── PLAT-1209: Scheduler Battery/EV thresholds (scheduler.py) ──────
-SCHEDULER_EV_SOC_UNKNOWN_DEFAULT = 50.0    # Fallback EV SoC when unavailable/negative
-SCHEDULER_EV_BMS_OVERNIGHT_FACTOR = 0.9   # BMS discharges ~10% overnight; remaining = SoC × this
-SCHEDULER_EV_MIN_ENERGY_KWH = 0.5         # Skip EV scheduling if < this energy needed
+SCHEDULER_EV_SOC_UNKNOWN_DEFAULT = 50.0  # Fallback EV SoC when unavailable/negative
+SCHEDULER_EV_BMS_OVERNIGHT_FACTOR = 0.9  # BMS discharges ~10% overnight; remaining = SoC x this
+SCHEDULER_EV_MIN_ENERGY_KWH = 0.5  # Skip EV scheduling if < this energy needed
 SCHEDULER_EV_LEARNING_MIN_CONFIDENCE = 0.5  # Ignore breach learnings below this confidence
 SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH = 10.0  # PV surplus > this → use full battery as EV support
 SCHEDULER_BATTERY_BUDGET_LOW_RATIO = 0.3  # Battery budget fraction when no PV surplus
 SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE = 50.0  # Fallback median price when no prices available
-SCHEDULER_DISCHARGE_FLOOR_ORE = 40.0      # Min discharge price threshold (öre/kWh)
-SCHEDULER_DISCHARGE_MEDIAN_FACTOR = 0.9   # Discharge threshold = median × this
-SCHEDULER_AGGRESSIVE_FLOOR_ORE = 60.0     # Min aggressive discharge threshold (öre/kWh)
-SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR = 1.3  # Aggressive threshold = median × this
-SCHEDULER_SOLAR_STRONG_KWH = 25.0         # Tomorrow PV > this → drain battery aggressively tonight
-SCHEDULER_SOLAR_MODERATE_KWH = 15.0       # Tomorrow PV > this → drain moderately
+SCHEDULER_DISCHARGE_FLOOR_ORE = 40.0  # Min discharge price threshold (öre/kWh)
+SCHEDULER_DISCHARGE_MEDIAN_FACTOR = 0.9  # Discharge threshold = median x this
+SCHEDULER_AGGRESSIVE_FLOOR_ORE = 60.0  # Min aggressive discharge threshold (öre/kWh)
+SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR = 1.3  # Aggressive threshold = median x this
+SCHEDULER_SOLAR_STRONG_KWH = 25.0  # Tomorrow PV > this → drain battery aggressively tonight
+SCHEDULER_SOLAR_MODERATE_KWH = 15.0  # Tomorrow PV > this → drain moderately
 SCHEDULER_SUNRISE_TARGET_MODERATE_PCT = 30.0  # Battery SoC target at sunrise: moderate sun
 SCHEDULER_SUNRISE_TARGET_WEAK_PCT = 50.0  # Battery SoC target at sunrise: weak/no sun
-SCHEDULER_SUNRISE_PV_DETECT_KW = 1.0      # PV output > this kW marks sunrise
-SCHEDULER_ANTI_IDLE_SOC_RATIO = 0.8       # Discharge anti-idle when SoC > cap × this
-SCHEDULER_ANTI_IDLE_MAX_KW = 1.5          # Max anti-idle discharge rate (kW)
+SCHEDULER_SUNRISE_PV_DETECT_KW = 1.0  # PV output > this kW marks sunrise
+SCHEDULER_ANTI_IDLE_SOC_RATIO = 0.8  # Discharge anti-idle when SoC > cap x this
+SCHEDULER_ANTI_IDLE_MAX_KW = 1.5  # Max anti-idle discharge rate (kW)

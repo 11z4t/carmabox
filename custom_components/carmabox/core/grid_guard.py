@@ -315,7 +315,7 @@ class GridGuard:
                 continue  # SoC unavailable — skip check
             if bat.soc <= min_soc and bat.power_w > 50:  # discharging below min
                 violations.append(
-                    f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% " f"(min {min_soc:.0f}%)"
+                    f"INV-5: {bat.id} urladdar vid SoC {bat.soc:.0f}% (min {min_soc:.0f}%)"
                 )
                 commands.append(
                     {
@@ -331,7 +331,7 @@ class GridGuard:
             discharging = [b for b in batteries if b.power_w > 50]
             if charging and discharging:
                 violations.append(
-                    f"INV-2: Korskörning {charging[0].id} laddar, " f"{discharging[0].id} urladdar"
+                    f"INV-2: Korskörning {charging[0].id} laddar, {discharging[0].id} urladdar"
                 )
                 for bat in batteries:
                     commands.append(

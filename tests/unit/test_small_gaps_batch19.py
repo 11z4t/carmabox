@@ -434,7 +434,7 @@ class TestGridGuardBatch19:
                 entity_switch="switch.c2",
             ),
         ]
-        cmds, reasons = guard._action_ladder(  # type: ignore[union-attr]
+        cmds, _ = guard._action_ladder(  # type: ignore[union-attr]
             overshoot_w=500.0,  # First consumer (3000W) covers it → remaining<0 → break
             consumers=consumers,
             ev_power_w=0.0,

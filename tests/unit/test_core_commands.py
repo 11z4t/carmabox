@@ -108,7 +108,7 @@ async def test_adapter_path_standby_when_full():
     adapter.soc = 100
     adapter.set_ems_mode = AsyncMock(return_value=True)
 
-    success, blocks = await cmd_charge_pv(
+    success, _ = await cmd_charge_pv(
         MagicMock(), [adapter], safety, _make_state(), BatteryCommand.IDLE, 20.0
     )
     assert success is True
@@ -126,7 +126,7 @@ async def test_adapter_path_goodwe_disables_fast_charging():
     adapter.set_ems_mode = AsyncMock(return_value=True)
     adapter.set_fast_charging = AsyncMock()
 
-    success, blocks = await cmd_charge_pv(
+    success, _ = await cmd_charge_pv(
         MagicMock(), [adapter], safety, _make_state(), BatteryCommand.IDLE, 20.0
     )
     assert success is True

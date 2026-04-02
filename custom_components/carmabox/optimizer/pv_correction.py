@@ -27,10 +27,12 @@ class PVCorrectionProfile:
     """
 
     # Per-month correction factor (1-12)
-    monthly_factor: dict[int, float] = field(default_factory=lambda: {m: 1.0 for m in range(1, 13)})
+    monthly_factor: dict[int, float] = field(
+        default_factory=lambda: dict.fromkeys(range(1, 13), 1.0)
+    )
 
     # Per-month sample count
-    monthly_samples: dict[int, int] = field(default_factory=lambda: {m: 0 for m in range(1, 13)})
+    monthly_samples: dict[int, int] = field(default_factory=lambda: dict.fromkeys(range(1, 13), 0))
 
     # Per-hour correction (0-23) — for intraday bias
     hourly_factor: list[float] = field(default_factory=lambda: [1.0] * 24)

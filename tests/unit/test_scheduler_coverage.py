@@ -791,7 +791,7 @@ class TestApplyCorrections:
         )
         ev = self._make_ev_schedule(8, charge_hour=1)
         batt = self._make_batt_schedule(8)
-        new_ev, new_batt = _apply_corrections(
+        new_ev, _new_batt = _apply_corrections(
             [corr],
             ev,
             batt,
@@ -920,7 +920,7 @@ class TestApplyCorrections:
         corr.expired = True
         ev = [(2.3, 10)] + [(0.0, 0)] * 7
         batt = self._make_batt_schedule(8)
-        new_ev, _ = _apply_corrections(
+        _new_ev, _ = _apply_corrections(
             [corr],
             ev,
             batt,

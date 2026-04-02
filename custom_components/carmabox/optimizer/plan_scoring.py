@@ -230,7 +230,8 @@ def summary(history: ScoreHistory) -> dict[str, Any]:
             "days_tracked": 0,
         }
 
-    recent = scores[-SCORE_SUMMARY_WINDOW_DAYS:] if len(scores) >= SCORE_SUMMARY_WINDOW_DAYS else scores
+    n = SCORE_SUMMARY_WINDOW_DAYS
+    recent = scores[-n:] if len(scores) >= n else scores
     avg_score = sum(s.overall_score for s in recent) / len(recent)
 
     return {

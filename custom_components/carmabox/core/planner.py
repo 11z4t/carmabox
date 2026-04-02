@@ -1162,9 +1162,7 @@ def should_charge_ev_tonight(
     # No tomorrow prices available -- charge tonight as default
     return {
         "charge": True,
-        "reason": (
-            f"No tomorrow prices available — charge tonight at " f"{tonight_cost_kr:.2f} kr"
-        ),
+        "reason": (f"No tomorrow prices available — charge tonight at {tonight_cost_kr:.2f} kr"),
         "ev_need_kwh": round(ev_need_kwh, 2),
         "hours_needed": hours_needed,
         "tonight_cost_kr": round(tonight_cost_kr, 2),

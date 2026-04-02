@@ -61,7 +61,7 @@ class TestCheckDailyGoals:
         """Ellevio max ≤ target → goal_met=True."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="1.8")
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state(battery_soc_1=60.0)
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_goal_met") is True
@@ -70,7 +70,7 @@ class TestCheckDailyGoals:
         """Ellevio max > 5 → cause='EV+disk overlap' (line 5999)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="5.5")  # > 5
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_goal_met") is False
@@ -80,7 +80,7 @@ class TestCheckDailyGoals:
         """Ellevio max 4-5 → cause='EV 10A burst' (line 6002)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="4.3")  # 4-5
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "EV 10A burst"
@@ -89,7 +89,7 @@ class TestCheckDailyGoals:
         """Ellevio max 3-4 → cause='High base load' (line 6004)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="3.2")  # 3-4
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "High base load"
@@ -98,7 +98,7 @@ class TestCheckDailyGoals:
         """Ellevio max 2-3 → cause='Unknown' (line 6006)."""
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         ell_max = _make_state(state="2.5")  # 2-3
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("ellevio_root_cause") == "Unknown"
@@ -107,7 +107,7 @@ class TestCheckDailyGoals:
         """Non-numeric ellevio state → ValueError caught (line 6015)."""
         coord = _make_coordinator()
         ell_max = _make_state(state="invalid")
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         # Should not raise
         results = coord._check_daily_goals(state)
@@ -120,7 +120,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 1.5},
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_goal_met") is True
@@ -132,7 +132,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 6.0},
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_goal_met") is False
@@ -145,7 +145,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 10.0, "total_export_kwh": 3.0},
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_root_cause") == "Battery full + no EV"
@@ -157,7 +157,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_solar_kwh": 5.0, "total_export_kwh": 1.5},
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert results.get("pv_root_cause") == "Normal surplus"
@@ -168,7 +168,7 @@ class TestCheckDailyGoals:
         # Pre-fill breach history with 3 recent dates
         coord._breach_history = {"ellevio": ["2026-03-29", "2026-03-30", "2026-03-31"]}
         ell_max = _make_state(state="5.5")  # breaches ellevio goal
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         # Should set escalation to CRITICAL
@@ -184,7 +184,7 @@ class TestCheckDailyGoals:
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         coord._breach_history = {"ellevio": [d1]}
         ell_max = _make_state(state="5.5")
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         assert coord._breach_escalation.get("ellevio") == 1
@@ -194,7 +194,7 @@ class TestCheckDailyGoals:
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
         # Empty history
         ell_max = _make_state(state="5.5")
-        coord.hass.states.get = lambda eid: (ell_max if "ellevio_dagens_max" in eid else None)
+        coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()
         coord._check_daily_goals(state)
         assert coord._breach_escalation.get("ellevio") == 0
@@ -210,7 +210,7 @@ class TestCheckDailyGoals:
                 "battery_net_saving_kr": 5.0,
             },
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state(battery_soc_1=70.0, battery_power_1=1000.0)
         results = coord._check_daily_goals(state)
         assert "battery_score" in results
@@ -238,7 +238,7 @@ class TestCheckDailyGoals:
                 "without_battery_kr": 12.0,
             },
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         assert "cost_savings_pct" in results
@@ -251,7 +251,7 @@ class TestCheckDailyGoals:
             state="available",
             attributes={"total_cost_kr": 11.9, "without_battery_kr": 12.0},
         )
-        coord.hass.states.get = lambda eid: (ledger if "energy_ledger" in eid else None)
+        coord.hass.states.get = lambda eid: ledger if "energy_ledger" in eid else None
         state = _make_carmabox_state()
         results = coord._check_daily_goals(state)
         if not results.get("cost_goal_met", True):

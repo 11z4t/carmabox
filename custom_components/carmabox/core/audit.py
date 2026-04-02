@@ -10,8 +10,10 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Deque
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 _MAX_AUDIT_ENTRIES = 200
 
@@ -63,7 +65,7 @@ class AuditLog:
     """
 
     def __init__(self, maxlen: int = _MAX_AUDIT_ENTRIES) -> None:
-        self._buf: Deque[AuditEntry] = deque(maxlen=maxlen)
+        self._buf: deque[AuditEntry] = deque(maxlen=maxlen)
 
     def add(self, entry: AuditEntry) -> None:
         """Append an entry to the ring-buffer."""

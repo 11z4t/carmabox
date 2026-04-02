@@ -432,7 +432,7 @@ class TestAnalyzeHour:
     def test_no_log_for_hour_returns_no_data(self) -> None:
         """No decisions for hour → 'Ingen data för kl...'."""
         coord = _make_coord()
-        coord.decision_log = deque([], maxlen=48)
+        coord.decision_log = deque(maxlen=48)
         result = coord._analyze_hour(10, "worst")
         assert "Ingen data" in result
 

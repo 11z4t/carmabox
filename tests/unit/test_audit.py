@@ -50,7 +50,16 @@ class TestAuditEntry:
     def test_to_dict_keys(self) -> None:
         """to_dict() returns all 8 keys."""
         d = _entry().to_dict()
-        expected = {"timestamp", "command", "target", "value", "reason", "safety_result", "plan_hour", "source"}
+        expected = {
+            "timestamp",
+            "command",
+            "target",
+            "value",
+            "reason",
+            "safety_result",
+            "plan_hour",
+            "source",
+        }
         assert set(d.keys()) == expected
 
     def test_to_dict_timestamp_iso(self) -> None:

@@ -66,7 +66,7 @@ class TestAsyncStepConfirm:
     @pytest.mark.asyncio
     async def test_confirm_acknowledge_creates_entry(self) -> None:
         """user_input with action=acknowledge → create entry without min_soc change."""
-        flow, entry = _make_flow_instance()
+        flow, _ = _make_flow_instance()
         await flow.async_step_confirm(user_input={"action": "acknowledge"})
         flow.async_create_entry.assert_called_once_with(data={})
         # min_soc NOT updated

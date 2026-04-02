@@ -154,9 +154,10 @@ def _schedule_ev_backwards(
         return schedule
 
     # Energy needed (account for BMS overnight discharge)
+    overnight_soc = ev_soc_pct * SCHEDULER_EV_BMS_OVERNIGHT_FACTOR
     energy_needed_kwh = max(
         0,
-        (morning_target_soc - ev_soc_pct * SCHEDULER_EV_BMS_OVERNIGHT_FACTOR) / 100 * ev_capacity_kwh,
+        (morning_target_soc - overnight_soc) / 100 * ev_capacity_kwh,
     )
     if energy_needed_kwh < SCHEDULER_EV_MIN_ENERGY_KWH:
         return schedule
@@ -177,7 +178,11 @@ def _schedule_ev_backwards(
         # Check if learnings say to avoid this hour
         avoid = False
         for lr in learnings:
-            if lr.hour == abs_h and lr.action in ("pause_ev", "shift_ev") and lr.confidence > SCHEDULER_EV_LEARNING_MIN_CONFIDENCE:
+            if (
+                lr.hour == abs_h
+                and lr.action in ("pause_ev", "shift_ev")
+                and lr.confidence > SCHEDULER_EV_LEARNING_MIN_CONFIDENCE
+            ):
                 avoid = True
                 break
 
@@ -352,14 +357,22 @@ def _schedule_battery(
 
     # Find price median for charge/discharge decisions
     valid_prices = [p for p in hourly_prices[:num_hours] if p > 0]
-    median_price = sorted(valid_prices)[len(valid_prices) // 2] if valid_prices else SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE
+    median_price = (
+        sorted(valid_prices)[len(valid_prices) // 2]
+        if valid_prices
+        else SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE
+    )
 
     # ── Price-aware arbitrage thresholds ─────────────────────────
     # Discharge when price is above median x factor, replacing grid import
     # Idle batteries = wasted investment — actively use them!
-    discharge_price_threshold = max(SCHEDULER_DISCHARGE_FLOOR_ORE, median_price * SCHEDULER_DISCHARGE_MEDIAN_FACTOR)
+    discharge_price_threshold = max(
+        SCHEDULER_DISCHARGE_FLOOR_ORE, median_price * SCHEDULER_DISCHARGE_MEDIAN_FACTOR
+    )
     # Aggressive discharge: price well above median
-    aggressive_discharge_threshold = max(SCHEDULER_AGGRESSIVE_FLOOR_ORE, median_price * SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR)
+    aggressive_discharge_threshold = max(
+        SCHEDULER_AGGRESSIVE_FLOOR_ORE, median_price * SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR
+    )
 
     # ── Solar refill analysis ────────────────────────────────────
     # If tomorrow has strong solar, we can drain deeper tonight
@@ -494,7 +507,8 @@ def _schedule_battery(
 
         # Priority 7: Anti-idle — if battery is above ratio threshold and no action taken,
         # discharge a small amount to cover house load (avoid idle waste)
-        if action == "i" and soc_kwh > battery_cap_kwh * SCHEDULER_ANTI_IDLE_SOC_RATIO and net > 0.3 and available > 0.3:
+        near_full = soc_kwh > battery_cap_kwh * SCHEDULER_ANTI_IDLE_SOC_RATIO
+        if action == "i" and near_full and net > 0.3 and available > 0.3:
             idle_discharge = min(net * 0.5, available, SCHEDULER_ANTI_IDLE_MAX_KW)
             if idle_discharge > 0.2:
                 battery_kw = -idle_discharge
@@ -681,17 +695,16 @@ def analyze_breach(
         appliance_total = sum((appliance_loads or {}).values())
         if appliance_total > 1.0:
             root_cause_parts.append(
-                f"EV ({ev_amps}A) + vitvaror ({appliance_total:.1f}kW) "
-                f"kl {hour} orsakade topplast"
+                f"EV ({ev_amps}A) + vitvaror ({appliance_total:.1f}kW) kl {hour} orsakade topplast"
             )
             remediation_parts.append(
-                f"Pausa EV under vitvaror kl {hour}, " "eller sänk EV till 6A under detta fönster"
+                f"Pausa EV under vitvaror kl {hour}, eller sänk EV till 6A under detta fönster"
             )
 
     # Check for insufficient battery support
     if battery_kw >= 0 and house_load_kw > target_kw * 0.7:
         root_cause_parts.append(
-            "Batteri stöttade inte hushållet — " f"huslast {house_load_kw:.1f}kW utan urladdning"
+            f"Batteri stöttade inte hushållet — huslast {house_load_kw:.1f}kW utan urladdning"
         )
         remediation_parts.append("Schemalägg batteri-urladdning under denna timme")
 
@@ -712,7 +725,7 @@ def analyze_breach(
     if ev_kw > 0 and ev_kw > target_kw * 0.5:
         root_cause_parts.append(
             f"EV-laddning ({ev_amps}A = {ev_kw:.1f}kW) "
-            f"använder >{int(ev_kw/target_kw*100)}% av target"
+            f"använder >{int(ev_kw / target_kw * 100)}% av target"
         )
         remediation_parts.append(f"Sänk EV till {DEFAULT_EV_MIN_AMPS}A under toppbelastning")
 

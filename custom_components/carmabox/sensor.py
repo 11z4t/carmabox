@@ -788,7 +788,7 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         device_class=SensorDeviceClass.BATTERY,
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
-        value_fn=lambda coord: (round(coord.data.total_battery_soc, 0) if coord.data else 0),
+        value_fn=lambda coord: round(coord.data.total_battery_soc, 0) if coord.data else 0,
     ),
     CarmaboxSensorDescription(
         key="grid_import",
@@ -1075,9 +1075,10 @@ class CarmaboxSensor(CoordinatorEntity[CarmaboxCoordinator], SensorEntity, Resto
     async def async_added_to_hass(self) -> None:
         """Restore last state on HA restart (PLAT-1208)."""
         await super().async_added_to_hass()
-        if (last_state := await self.async_get_last_state()) is not None:
-            if last_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                self._restored_native_value = last_state.state
+        if (
+            last_state := await self.async_get_last_state()
+        ) is not None and last_state.state not in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            self._restored_native_value = last_state.state
 
     @property
     def device_info(self) -> DeviceInfo:

@@ -205,7 +205,7 @@ def evaluate_evening_strategy(
             # Significant shortfall — reconsider
             confidence *= 0.7
             reason_parts.append(
-                f"OBS: Nattkapacitet räcker bara {(1-shortfall_pct)*100:.0f}% "
+                f"OBS: Nattkapacitet räcker bara {(1 - shortfall_pct) * 100:.0f}% "
                 f"(EV behöver {ev_need_kwh:.1f} kWh)"
             )
 
