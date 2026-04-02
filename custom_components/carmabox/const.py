@@ -344,22 +344,34 @@ SCORE_SUMMARY_WINDOW_DAYS = 7  # Days included in summary average
 
 # ── PLAT-1209: Scheduler Battery/EV thresholds (scheduler.py) ──────
 SCHEDULER_EV_SOC_UNKNOWN_DEFAULT = 50.0  # Fallback EV SoC when unavailable/negative
-SCHEDULER_EV_BMS_OVERNIGHT_FACTOR = 0.9  # BMS discharges ~10% overnight; remaining = SoC x this
+SCHEDULER_EV_BMS_OVERNIGHT_FACTOR = 0.9  # BMS discharges ~10% overnight
 SCHEDULER_EV_MIN_ENERGY_KWH = 0.5  # Skip EV scheduling if < this energy needed
-SCHEDULER_EV_LEARNING_MIN_CONFIDENCE = 0.5  # Ignore breach learnings below this confidence
-SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH = 10.0  # PV surplus > this → use full battery as EV support
+SCHEDULER_EV_LEARNING_MIN_CONFIDENCE = 0.5  # Ignore breach learnings below this
+SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH = 10.0  # PV surplus > this → full battery as EV
 SCHEDULER_BATTERY_BUDGET_LOW_RATIO = 0.3  # Battery budget fraction when no PV surplus
-SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE = 50.0  # Fallback median price when no prices available
-SCHEDULER_DISCHARGE_FLOOR_ORE = 40.0  # Min discharge price threshold (öre/kWh)
+SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE = 50.0  # Fallback median price
+SCHEDULER_DISCHARGE_FLOOR_ORE = 40.0  # Min discharge price threshold
 SCHEDULER_DISCHARGE_MEDIAN_FACTOR = 0.9  # Discharge threshold = median x this
-SCHEDULER_AGGRESSIVE_FLOOR_ORE = 60.0  # Min aggressive discharge threshold (öre/kWh)
+SCHEDULER_AGGRESSIVE_FLOOR_ORE = 60.0  # Min aggressive discharge threshold
 SCHEDULER_AGGRESSIVE_MEDIAN_FACTOR = 1.3  # Aggressive threshold = median x this
-SCHEDULER_SOLAR_STRONG_KWH = 25.0  # Tomorrow PV > this → drain battery aggressively tonight
+SCHEDULER_SOLAR_STRONG_KWH = 25.0  # Tomorrow PV > this → drain aggressively
 SCHEDULER_SOLAR_MODERATE_KWH = 15.0  # Tomorrow PV > this → drain moderately
-SCHEDULER_SUNRISE_TARGET_MODERATE_PCT = 30.0  # Battery SoC target at sunrise: moderate sun
-SCHEDULER_SUNRISE_TARGET_WEAK_PCT = 50.0  # Battery SoC target at sunrise: weak/no sun
+SCHEDULER_SUNRISE_TARGET_MODERATE_PCT = 30.0  # SoC target at sunrise: moderate sun
+SCHEDULER_SUNRISE_TARGET_WEAK_PCT = 50.0  # SoC target at sunrise: weak/no sun
 SCHEDULER_SUNRISE_PV_DETECT_KW = 1.0  # PV output > this kW marks sunrise
 SCHEDULER_ANTI_IDLE_SOC_RATIO = 0.8  # Discharge anti-idle when SoC > cap x this
 SCHEDULER_ANTI_IDLE_MAX_KW = 1.5  # Max anti-idle discharge rate (kW)
-CHEAP_CHARGE_PRICE_ORE: float = 20.0  # Price ≤ this öre/kWh = cheap grid charge opportunity
-CHEAP_CHARGE_SOC_THRESHOLD_PCT: float = 80.0  # Battery SoC below this qualifies for cheap charge
+CHEAP_CHARGE_PRICE_ORE: float = 20.0  # Price <= this = cheap grid charge
+CHEAP_CHARGE_SOC_THRESHOLD_PCT: float = 80.0  # SoC below this qualifies
+
+# Noise thresholds (PLAT-1086)
+POWER_NOISE_THRESHOLD_W = 50  # Min power to consider device active
+GRID_EXPORT_NOISE_W = 100  # Min export before acting on it
+PV_ACTIVE_THRESHOLD_W = 200  # Min PV to consider solar producing
+
+# Illuminance transitions (PLAT-1086)
+LUX_DAYLIGHT = 5000  # Above = bright daylight
+LUX_DARK = 500  # Below = dark / night
+
+# Error tracking (PLAT-1086)
+CONSECUTIVE_ERROR_LOG_INTERVAL = 10  # Log degraded state every N errors

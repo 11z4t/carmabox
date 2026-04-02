@@ -44,6 +44,7 @@ from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
 from .const import (
+    CONSECUTIVE_ERROR_LOG_INTERVAL,
     DEFAULT_BAT_MAX_CHARGE_W,
     DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_BATTERY_1_KWH,
@@ -87,7 +88,10 @@ from .const import (
     EV_RAMP_INTERVAL_S,
     EV_RAMP_STEPS,
     EV_STUCK_TIMEOUT_S,
+    LUX_DARK,
+    LUX_DAYLIGHT,
     PLAN_INTERVAL_SECONDS,
+    PV_ACTIVE_THRESHOLD_W,
     SCAN_INTERVAL_SECONDS,
 )
 from .core.audit import AuditLog
@@ -1399,7 +1403,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # ── EXP-12: Real-time PV Surplus Allocation ──────────────────
         # Priority: House > EV (if home) > Battery > Consumers > Export (NEVER)
-        if not is_night and not self._night_ev_active and state.pv_power_w > 200:
+        if not is_night and not self._night_ev_active and state.pv_power_w > PV_ACTIVE_THRESHOLD_W:
             try:
                 from .core.planner import allocate_pv_surplus
 
@@ -1897,7 +1901,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 with open("/config/carmabox-heartbeat.json", "w") as _ef:
                     _ej.dump(_ehb, _ef)
             # ALDRIG raise UpdateFailed — returnera degraded state, retry nästa cykel
-            if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
+            err_n = CONSECUTIVE_ERROR_LOG_INTERVAL
+            if self._consecutive_errors >= err_n and self._consecutive_errors % err_n == 0:
                 _LOGGER.error(
                     "CARMA Box: %d consecutive failures — DEGRADED but CONTINUING",
                     self._consecutive_errors,
@@ -2170,7 +2175,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
             # Degraded mode: return last known state instead of crashing
             # ALDRIG raise UpdateFailed.
-            if self._consecutive_errors >= 10 and self._consecutive_errors % 10 == 0:
+            err_n = CONSECUTIVE_ERROR_LOG_INTERVAL
+            if self._consecutive_errors >= err_n and self._consecutive_errors % err_n == 0:
                 _LOGGER.error(
                     "CARMA Box: %d consecutive failures — DEGRADED but CONTINUING",
                     self._consecutive_errors,
@@ -2640,13 +2646,13 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             if tempest_lux is not None:
                 # Illuminance-driven transition (overrides clock)
-                if tempest_lux > 5000:
+                if tempest_lux > LUX_DAYLIGHT:
                     target_cap = target_day  # Bright daylight
-                elif tempest_lux < 500:
+                elif tempest_lux < LUX_DARK:
                     target_cap = target_night  # Dark / night
                 else:
-                    # Twilight: linear interpolation 500-5000 lx
-                    ratio = (tempest_lux - 500) / 4500
+                    # Twilight: linear interpolation LUX_DARK-LUX_DAYLIGHT
+                    ratio = (tempest_lux - LUX_DARK) / (LUX_DAYLIGHT - LUX_DARK)
                     target_cap = target_night - ratio * (target_night - target_day)
                 # Override: evening peak still gets tight target
                 if hour_now >= 17 and state.current_price > 50:
