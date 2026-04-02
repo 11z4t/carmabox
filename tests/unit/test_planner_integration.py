@@ -105,6 +105,8 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     # EV SoC tracking
     coord._last_known_ev_soc = -1.0
     coord._last_known_ev_soc_time = 0.0
+    coord._ev_last_soc_change_t = 0.0
+    coord._ev_prev_soc_for_stuck = -1.0
     coord._ev_last_full_charge_date = ""
     coord._ev_days_since_full = 0
     coord._ev_soc_day_start = -1.0

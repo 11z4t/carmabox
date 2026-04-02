@@ -86,6 +86,7 @@ from .const import (
     DRIFT_MIN_EXPECTED_W,
     EV_RAMP_INTERVAL_S,
     EV_RAMP_STEPS,
+    EV_STUCK_TIMEOUT_S,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
@@ -241,6 +242,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_known_ev_soc: float = -1.0
         self._last_known_ev_soc_time: float = 0.0  # monotonic timestamp (process-local)
         self._last_known_ev_soc_unix: float = 0.0  # PLAN-01: unix time for restart survival
+        # CARMA-QUALITY: EV stuck detection (W6 watchdog)
+        self._ev_last_soc_change_t: float = time.monotonic()
+        self._ev_prev_soc_for_stuck: float = -1.0
         # IT-1965: Seed from persistent helper if available
         try:
             seed = self.hass.states.get("input_number.carma_ev_last_known_soc")
@@ -2428,6 +2432,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 self._last_known_ev_soc = state.ev_soc
                 self._last_known_ev_soc_time = time.monotonic()
                 self._last_known_ev_soc_unix = time.time()  # PLAN-01
+                # CARMA-QUALITY: Track SoC changes for W6 stuck detection
+                if abs(state.ev_soc - self._ev_prev_soc_for_stuck) >= 1.0:
+                    self._ev_last_soc_change_t = time.monotonic()
+                    self._ev_prev_soc_for_stuck = state.ev_soc
                 # Persist to HA helper for restart survival
                 self.hass.async_create_task(
                     self.hass.services.async_call(
@@ -4005,6 +4013,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         W3: Battery 100% + grid > target + standby → should discharge
         W4: EV charging + grid importing (day) → stop EV
         W5: High price (>80 öre) + battery >50% + idle → should discharge
+        W6: EV charging but SoC unchanged for 6h (stuck) → stop EV
         """
         if not self.executor_enabled:
             return
@@ -4206,6 +4215,19 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 state.total_battery_soc,
                 weighted_net / 1000,
             )
+
+        # W6: EV stuck — charging but SoC unchanged for 6h → stop EV
+        if (
+            self._ev_enabled
+            and state.ev_power_w > 500  # Actively drawing power
+            and self._ev_prev_soc_for_stuck > 0  # Have at least one SoC reading
+            and (time.monotonic() - self._ev_last_soc_change_t) > EV_STUCK_TIMEOUT_S
+        ):
+            _LOGGER.warning(
+                "WATCHDOG W6: EV stuck — charging for 6h but SoC unchanged at %.0f%% → stopping EV",
+                self._last_known_ev_soc,
+            )
+            await self._cmd_ev_stop()
 
     def _calculate_ev_target(self) -> float:
         """IT-1965: Dynamic EV SoC target based on 3-day solar forecast.
