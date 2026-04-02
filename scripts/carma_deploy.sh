@@ -20,7 +20,8 @@ set -e
 
 REPO_DIR="/home/charlie/carmabox"
 COMPONENT_DIR="$REPO_DIR/custom_components/carmabox"
-HA_HOST="ha"
+# PLAT-1193: SSH-addon (ha:22222) has no sudo — use hassio@IP with sudo instead
+HA_HOST="hassio@192.168.5.22"
 HA_DEST="/homeassistant/custom_components/carmabox"
 LOG_FILE="/tmp/carma_deploy_$(date +%Y%m%d_%H%M%S).log"
 
@@ -157,24 +158,30 @@ log SUCCESS "Cache cleared"
 # Step 7: Reload CARMA Box integration
 # =============================================================================
 log INFO "Step 7/8: Reloading CARMA Box integration..."
-RELOAD_OUTPUT=$(ssh "$HA_HOST" "sudo sh -c '\
+# PLAT-1193: Find carmabox entry_id dynamically, then reload it
+ENTRY_ID=$(ssh "$HA_HOST" "sudo sh -c '\
     T=\$(cat /run/s6/container_environment/SUPERVISOR_TOKEN) && \
-    curl -s -X POST \
-        -H \"Authorization: Bearer \$T\" \
-        -H \"Content-Type: application/json\" \
-        -d \"{\\\"entry_id\\\": \\\"\\\"}\" \
-        http://supervisor/core/api/services/homeassistant/reload_config_entry'" 2>&1) || true
+    curl -s -H \"Authorization: Bearer \$T\" \
+        http://supervisor/core/api/config/config_entries/entry'" 2>&1 \
+    | python3 -c "import sys,json; entries=json.load(sys.stdin); print(next((e['entry_id'] for e in entries if e.get('domain')=='carmabox'), ''))" 2>/dev/null) || true
 
-# Fallback: reload custom components via full reload
-if echo "$RELOAD_OUTPUT" | grep -qiE '"error"'; then
-    log WARNING "Config entry reload failed, trying full reload..."
+if [ -n "$ENTRY_ID" ]; then
+    RELOAD_OUTPUT=$(ssh "$HA_HOST" "sudo sh -c '\
+        T=\$(cat /run/s6/container_environment/SUPERVISOR_TOKEN) && \
+        curl -s -X POST \
+            -H \"Authorization: Bearer \$T\" \
+            -H \"Content-Type: application/json\" \
+            http://supervisor/core/api/config/config_entries/entry/$ENTRY_ID/reload'" 2>&1) || true
+    log SUCCESS "Reload triggered (entry=$ENTRY_ID)"
+else
+    log WARNING "Could not find carmabox entry_id, trying full restart..."
     ssh "$HA_HOST" "sudo sh -c '\
         T=\$(cat /run/s6/container_environment/SUPERVISOR_TOKEN) && \
         curl -s -X POST \
             -H \"Authorization: Bearer \$T\" \
-            http://supervisor/core/api/services/homeassistant/reload_all'" 2>/dev/null || true
+            http://supervisor/core/restart'" 2>/dev/null || true
+    log SUCCESS "Full HA restart triggered"
 fi
-log SUCCESS "Reload triggered"
 
 # =============================================================================
 # Step 8: Wait and check HA error log
@@ -185,7 +192,7 @@ sleep 15
 HA_LOGS=$(ssh "$HA_HOST" "sudo sh -c '\
     T=\$(cat /run/s6/container_environment/SUPERVISOR_TOKEN) && \
     curl -s -H \"Authorization: Bearer \$T\" \
-        http://supervisor/core/logs'" 2>&1) || true
+        http://supervisor/core/api/error_log'" 2>&1) || true
 
 # Filter for carmabox errors in last portion of log
 CARMA_ERRORS=$(echo "$HA_LOGS" | grep -iE 'carmabox.*error|error.*carmabox|carma_box.*error|error.*carma_box' | tail -10 || true)
