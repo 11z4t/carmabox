@@ -109,7 +109,7 @@ class GoodWeAdapter(InverterAdapter):
 
             for attempt in range(2):
                 try:
-                    async with asyncio.timeout(30):  # 30s max per Modbus call
+                    async with asyncio.timeout(10):  # PLAT-1204: 10s max per Modbus call
                         await self.hass.services.async_call(domain, service, data)
                     self._last_call_time = time.monotonic()
                     # Min delay before next Modbus call
@@ -154,7 +154,10 @@ class GoodWeAdapter(InverterAdapter):
     @property
     def soc(self) -> float:
         """Battery SoC (0-100%). Returns -1 if unavailable."""
-        return self._state(f"sensor.pv_battery_soc_{self.prefix}", default=-1.0)
+        raw = self._state(f"sensor.pv_battery_soc_{self.prefix}", default=-1.0)
+        if raw < 0:
+            return -1.0  # Unavailable
+        return max(0.0, min(100.0, raw))
 
     @property
     def power_w(self) -> float:
