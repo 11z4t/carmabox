@@ -450,3 +450,90 @@ class TestWatchdog:
         # Watchdog should have triggered standby
         # (exact behavior depends on watchdog implementation)
         assert coord.last_decision is not None
+
+    @pytest.mark.asyncio
+    async def test_w1_skips_when_night_ev_active(self) -> None:
+        """PLAT-1192 R2: W1 export correction MUST be skipped during night EV.
+
+        During EV ramp-up, GoodWe discharge reacts slowly causing transient
+        export. W1 must not kill discharge during this phase.
+        """
+        coord = _make_coord()
+        coord._night_ev_active = True
+        coord._ev_enabled = True
+        # Simulate transient export during EV ramp (discharge active)
+        coord.last_decision = MagicMock(action="discharge")
+        state = _state_exporting(grid_w=-2000.0, battery_soc_1=50.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=23)
+            await coord._watchdog(state)
+
+        # W1 should NOT have overridden to charge_pv
+        assert coord.last_decision.action != "charge_pv"
+
+    @pytest.mark.asyncio
+    async def test_w1_fires_when_night_ev_inactive(self) -> None:
+        """W1 export correction fires normally when night EV is NOT active."""
+        coord = _make_coord()
+        coord._night_ev_active = False
+        coord._ev_enabled = True
+        coord.last_decision = MagicMock(action="discharge")
+        state = _state_exporting(grid_w=-2000.0, battery_soc_1=50.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=14)
+            await coord._watchdog(state)
+
+        # W1 SHOULD fire (override to charge_pv)
+        assert coord.last_decision is not None
+
+    @pytest.mark.asyncio
+    async def test_w6_increases_discharge_during_night_ev(self) -> None:
+        """PLAT-1192 R3: W6 increases discharge instead of stopping EV during night EV."""
+        coord = _make_coord()
+        coord._night_ev_active = True
+        coord._ev_enabled = True
+        coord.target_kw = 2.0
+        coord.last_decision = MagicMock(action="discharge")
+        # Grid way over target (weighted) — W6 should trigger
+        state = _state_importing(grid_w=6000.0, battery_soc_1=50.0)
+        ev_stop_called = False
+
+        async def mock_ev_stop():
+            nonlocal ev_stop_called
+            ev_stop_called = True
+
+        coord._cmd_ev_stop = mock_ev_stop
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=23)
+            await coord._watchdog(state)
+
+        # W6 should NOT stop EV during night EV (should increase discharge instead)
+        assert not ev_stop_called, "W6 should not stop EV during night_ev_active"
+
+    @pytest.mark.asyncio
+    async def test_w6_stops_ev_when_no_night_ev(self) -> None:
+        """PLAT-1192 R3: W6 stops EV normally when night EV is NOT active."""
+        coord = _make_coord()
+        coord._night_ev_active = False
+        coord._ev_enabled = True
+        coord.target_kw = 2.0
+        # W6 triggers at > target*1.15 weighted — action must be "discharge" to skip W2
+        coord.last_decision = MagicMock(action="discharge")
+        state = _state_importing(grid_w=6000.0, battery_soc_1=50.0, ev_power_w=4000.0)
+        ev_stop_called = False
+
+        async def mock_ev_stop():
+            nonlocal ev_stop_called
+            ev_stop_called = True
+
+        coord._cmd_ev_stop = mock_ev_stop
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(hour=14)
+            await coord._watchdog(state)
+
+        # W6 SHOULD stop EV when not night_ev_active
+        assert ev_stop_called, "W6 should stop EV when grid >> target and no night_ev"
