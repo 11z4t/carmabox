@@ -37,9 +37,9 @@ class TestNightPlanNoDischargeWhenEvCharging:
         """With night_ev_active=True, no 'd' action during night hours 22-06."""
         plan = _night_plan(night_ev_active=True)
         night_actions = [h.action for h in plan if h.hour >= 22 or h.hour < 6]
-        assert "d" not in night_actions, (
-            f"Discharge should be blocked during night EV, got: {night_actions}"
-        )
+        assert (
+            "d" not in night_actions
+        ), f"Discharge should be blocked during night EV, got: {night_actions}"
 
     def test_night_plan_allows_discharge_when_ev_inactive(self) -> None:
         """Without night_ev_active, discharge may happen at night (normal behavior)."""

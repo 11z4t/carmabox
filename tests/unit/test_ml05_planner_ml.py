@@ -34,9 +34,9 @@ class TestPlanUsesML:
             fallback_profile=static_low,
         )
         # Confirm ML profile is higher than static fallback
-        assert sum(ml_profile) > sum(static_low), (
-            "ML profile should reflect trained 4kW, not static 1kW"
-        )
+        assert sum(ml_profile) > sum(
+            static_low
+        ), "ML profile should reflect trained 4kW, not static 1kW"
 
     def test_plan_uses_static_when_not_trained(self) -> None:
         """Untrained predictor falls back to static profile."""
