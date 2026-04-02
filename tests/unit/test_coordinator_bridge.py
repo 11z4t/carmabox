@@ -518,10 +518,9 @@ class TestEllevioSamplesPersistence:
         bridge._last_save_time = 0.0
 
         # Populate 3 samples
+        _HOUR = 14  # fixed — avoids flakiness at hour boundary
         bridge._ellevio_hour_samples = [(1.5, 1.0), (1.2, 0.5), (1.8, 1.0)]
-        from datetime import datetime
-
-        bridge._ellevio_current_hour = datetime.now().hour
+        bridge._ellevio_current_hour = _HOUR
 
         await bridge._async_save_state()
         bridge._store.async_save.assert_called_once()
@@ -529,7 +528,7 @@ class TestEllevioSamplesPersistence:
 
         # Verify samples were serialized
         assert len(saved["ellevio_hour_samples"]) == 3
-        assert saved["ellevio_current_hour"] == datetime.now().hour
+        assert saved["ellevio_current_hour"] == _HOUR
         assert saved["ellevio_saved_at"] > 0
 
         # Create new bridge and restore from saved state
@@ -537,13 +536,16 @@ class TestEllevioSamplesPersistence:
         bridge2._state_restored = False
         bridge2._store.async_load = AsyncMock(return_value=saved)
 
-        await bridge2._async_restore_state()
+        # Patch datetime so restored hour matches saved hour (avoids hour-boundary flakiness)
+        with patch("custom_components.carmabox.coordinator_bridge.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = _HOUR
+            await bridge2._async_restore_state()
 
         assert len(bridge2._ellevio_hour_samples) == 3
         assert bridge2._ellevio_hour_samples[0] == (1.5, 1.0)
         assert bridge2._ellevio_hour_samples[1] == (1.2, 0.5)
         assert bridge2._ellevio_hour_samples[2] == (1.8, 1.0)
-        assert bridge2._ellevio_current_hour == datetime.now().hour
+        assert bridge2._ellevio_current_hour == _HOUR
 
     @pytest.mark.asyncio
     async def test_stale_ellevio_samples_discarded(self) -> None:
@@ -577,26 +579,27 @@ class TestEllevioSamplesPersistence:
     async def test_grid_guard_correct_projection_after_restart(self) -> None:
         """After restore with valid samples, weighted average is correct."""
         import time
-        from datetime import datetime
 
+        _HOUR = 14  # fixed — avoids flakiness at hour boundary
         bridge = _make_bridge()
         bridge._state_restored = False
 
-        now_hour = datetime.now().hour
         stored_data = {
             "plan": [],
             "night_ev_active": False,
             "last_command": "STANDBY",
             "ev_enabled": False,
             "ev_current_amps": 6,
-            "saved_at": datetime.now().isoformat(),
+            "saved_at": "2026-04-02T14:00:00",
             "ellevio_hour_samples": [[2.0, 1.0], [1.0, 1.0], [3.0, 1.0]],
-            "ellevio_current_hour": now_hour,
+            "ellevio_current_hour": _HOUR,
             "ellevio_saved_at": time.time() - 30,  # 30s ago — fresh
         }
         bridge._store.async_load = AsyncMock(return_value=stored_data)
 
-        await bridge._async_restore_state()
+        with patch("custom_components.carmabox.coordinator_bridge.datetime") as mock_dt:
+            mock_dt.now.return_value.hour = _HOUR
+            await bridge._async_restore_state()
 
         # Samples restored — verify weighted average computation
         samples = bridge._ellevio_hour_samples

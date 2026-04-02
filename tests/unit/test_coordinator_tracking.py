@@ -67,9 +67,7 @@ def _make_coord(*, cfg: dict | None = None, executor_enabled: bool = True) -> ob
     coord.shadow_log = []
     coord._bat_idle_seconds = 0
     coord._bat_daily_idle_seconds = 0
-    import datetime as dt
-
-    coord._bat_idle_day = dt.datetime.now().day
+    coord._bat_idle_day = 2  # fixed — avoids flakiness at day boundary
     coord._ev_last_known_enabled = None
     coord._ev_enabled = False
     coord._daily_plans = 0
@@ -242,14 +240,18 @@ class TestTrackSavings:
             grid_power_w=1000.0,
             current_price=100.0,
         )
-        import datetime as dt
+        _HOUR = 14  # fixed — avoids flakiness at hour boundary
+        coord._peak_last_hour = (_HOUR + 1) % 24  # different from mocked hour
 
-        current_hour = dt.datetime.now().hour
-        # Simulate different hour from last
-        coord._peak_last_hour = (current_hour + 1) % 24
+        mock_now = MagicMock()
+        mock_now.hour = _HOUR
+        mock_now.weekday.return_value = 3  # Wednesday
+        mock_now.strftime.return_value = "2026-04-02"
 
-        with patch("custom_components.carmabox.coordinator.record_peak") as mock_peak:
-            coord._track_savings(state)
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = mock_now
+            with patch("custom_components.carmabox.coordinator.record_peak") as mock_peak:
+                coord._track_savings(state)
         mock_peak.assert_called_once()
 
     def test_battery_power_2_positive_adds_to_charge(self) -> None:
@@ -357,33 +359,41 @@ class TestFeedPredictorMl:
 
     def test_plan_feedback_new_hour(self) -> None:
         """New feedback hour → add_plan_feedback for matching hour (lines 5955-5957)."""
+        _HOUR = 14  # fixed — avoids flakiness at hour boundary
 
         coord = _make_coord()
-        import datetime as dt
+        coord._last_feedback_hour = (_HOUR + 1) % 24  # different from mocked hour
 
-        current_hour = dt.datetime.now().hour
-        coord._last_feedback_hour = (current_hour + 1) % 24  # different hour
-
-        # Add a plan hour matching current hour
         ph = MagicMock()
-        ph.hour = current_hour
+        ph.hour = _HOUR
         ph.grid_kw = 1.5
         coord.plan = [ph]
         coord.hass.states.get = MagicMock(return_value=None)
         state = CarmaboxState(grid_power_w=1200.0)
-        coord._feed_predictor_ml(state)
+
+        with patch("datetime.datetime") as mock_dt:
+            now = MagicMock()
+            now.hour = _HOUR
+            now.weekday.return_value = 3
+            mock_dt.now.return_value = now
+            coord._feed_predictor_ml(state)
         coord.predictor.add_plan_feedback.assert_called_once()
 
     def test_plan_feedback_same_hour_skipped(self) -> None:
         """Same feedback hour → plan feedback skipped (line 5951)."""
-        coord = _make_coord()
-        import datetime as dt
+        _HOUR = 14  # fixed — avoids flakiness at hour boundary
 
-        current_hour = dt.datetime.now().hour
-        coord._last_feedback_hour = current_hour  # same hour
+        coord = _make_coord()
+        coord._last_feedback_hour = _HOUR  # same as mocked hour
         coord.hass.states.get = MagicMock(return_value=None)
         state = CarmaboxState()
-        coord._feed_predictor_ml(state)
+
+        with patch("datetime.datetime") as mock_dt:
+            now = MagicMock()
+            now.hour = _HOUR
+            now.weekday.return_value = 3
+            mock_dt.now.return_value = now
+            coord._feed_predictor_ml(state)
         coord.predictor.add_plan_feedback.assert_not_called()
 
     def test_ev_usage_reset_at_midnight(self) -> None:
