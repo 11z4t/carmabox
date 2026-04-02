@@ -433,7 +433,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub HTTPS sync failed: HTTP %s", resp.status)
                 return False
 
-        except (aiohttp.ClientError, TimeoutError, OSError, Exception):
+        except (aiohttp.ClientError, TimeoutError, OSError):
             _LOGGER.debug("Hub HTTPS sync failed", exc_info=True)
             return False
 
@@ -480,7 +480,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub registration failed: HTTP %s", resp.status)
                 return None
 
-        except (aiohttp.ClientError, TimeoutError, OSError, Exception):
+        except (aiohttp.ClientError, TimeoutError, OSError):
             _LOGGER.debug("Hub registration failed", exc_info=True)
             return None
 
