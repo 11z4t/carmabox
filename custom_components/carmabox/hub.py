@@ -341,7 +341,7 @@ class HubSyncClient:
 
             return True
 
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError, TypeError, Exception):
             _LOGGER.debug("MQTT connect failed — will use HTTPS fallback", exc_info=True)
             return False
 
@@ -433,7 +433,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub HTTPS sync failed: HTTP %s", resp.status)
                 return False
 
-        except (aiohttp.ClientError, TimeoutError):
+        except (aiohttp.ClientError, TimeoutError, OSError, Exception):
             _LOGGER.debug("Hub HTTPS sync failed", exc_info=True)
             return False
 
@@ -480,7 +480,7 @@ class HubSyncClient:
                 _LOGGER.warning("Hub registration failed: HTTP %s", resp.status)
                 return None
 
-        except (aiohttp.ClientError, TimeoutError):
+        except (aiohttp.ClientError, TimeoutError, OSError, Exception):
             _LOGGER.debug("Hub registration failed", exc_info=True)
             return None
 
