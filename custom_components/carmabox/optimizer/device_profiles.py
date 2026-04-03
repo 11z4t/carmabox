@@ -28,7 +28,10 @@ from ..const import (
     DISHWASHER_COOLDOWN_MIN,
     DISHWASHER_PEAK_KW,
     DISHWASHER_RUNTIME_H,
+    EV_CAPACITY_KWH,
     EV_DAILY_ROLLING_DAYS,
+    GOODWE_FORRAD_CHARGE_KW,
+    GOODWE_KONTOR_CHARGE_KW,
     MAX_EV_CURRENT,
 )
 
@@ -37,11 +40,11 @@ from ..const import (
 # EV power range derived from amps x phases x voltage
 _EV_MIN_KW: float = DEFAULT_EV_MIN_AMPS * 3 * DEFAULT_VOLTAGE / 1000.0
 _EV_MAX_KW: float = MAX_EV_CURRENT * 3 * DEFAULT_VOLTAGE / 1000.0
-_EV_CAPACITY_KWH: float = 82.0  # XPENG G9 usable battery capacity
+_EV_CAPACITY_KWH: float = EV_CAPACITY_KWH  # XPENG G9 usable battery capacity
 
 # Battery charge rates (GoodWe inverter hardware specs)
-_BATTERY_KONTOR_CHARGE_KW: float = 3.6  # GoodWe 3600 single-phase (kontor)
-_BATTERY_FORRAD_CHARGE_KW: float = 1.8  # GoodWe 1800 single-phase (förråd)
+_BATTERY_KONTOR_CHARGE_KW: float = GOODWE_KONTOR_CHARGE_KW  # GoodWe 3600 single-phase (kontor)
+_BATTERY_FORRAD_CHARGE_KW: float = GOODWE_FORRAD_CHARGE_KW  # GoodWe 1800 single-phase (förråd)
 _BAT_MIN_KW: float = DEFAULT_BAT_MIN_CHARGE_W / 1000.0
 
 
