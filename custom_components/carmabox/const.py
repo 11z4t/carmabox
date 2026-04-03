@@ -429,6 +429,10 @@ LAW_GUARDIAN_BATTERY_IDLE_W = 50  # Below this W = battery considered idle (LAG 
 LAG2_SOC_HYSTERESIS_PCT = 5  # SoC above min_soc required to count as non-idle (LAG 2)
 LAG2_IDLE_HOURS_THRESHOLD = 4  # Hours of idle before LAG 2 breach (LAG 2)
 
+# ── PLAT-1224: Cost Model ──────────────────────────────────────────────────
+ELLEVIO_RATE_KR_PER_KW_MONTH: float = 81.25  # Ellevio capacity tariff (kr/kW/month)
+EXPORT_SPOT_FACTOR: float = 0.8  # Export value as fraction of spot price
+
 # ── PLAT-1225: Device Profiles ─────────────────────────────────────────────
 DISHWASHER_AVG_KW: float = 1.2  # Nominell diskmaskin-effekt (kW)
 DISHWASHER_COOLDOWN_MIN: int = 0  # Ingen väntetid efter stopp
