@@ -428,3 +428,12 @@ LAW_GUARDIAN_TAK_MARGIN_FACTOR = 0.85  # Safety margin applied to Ellevio tak in
 LAW_GUARDIAN_BATTERY_IDLE_W = 50  # Below this W = battery considered idle (LAG 2)
 LAG2_SOC_HYSTERESIS_PCT = 5  # SoC above min_soc required to count as non-idle (LAG 2)
 LAG2_IDLE_HOURS_THRESHOLD = 4  # Hours of idle before LAG 2 breach (LAG 2)
+
+# ── PLAT-1225: Device Profiles ─────────────────────────────────────────────
+DISHWASHER_AVG_KW: float = 1.2  # Nominell diskmaskin-effekt (kW)
+DISHWASHER_COOLDOWN_MIN: int = 0  # Ingen väntetid efter stopp
+DISHWASHER_PEAK_KW: float = 1.8  # Max diskmaskin-effekt vid uppvärmning (kW)
+DISHWASHER_RUNTIME_H: float = 2.0  # Min körtid per cykel (h)
+EV_DAILY_ROLLING_DAYS: int = 7  # Rolling window för daglig förbrukningsstatistik
+SCENARIO_MAX_COUNT: int = 15  # Max antal scenarios att hålla i minnet
+SCENARIO_MIN_COUNT: int = 5  # Min antal scenarios för meningsfull jämförelse
