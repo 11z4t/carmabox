@@ -55,6 +55,14 @@ DEFAULT_SURPLUS_MIN_W: float = 50.0  # Ignore surplus below this (noise floor)
 DEFAULT_CLIMATE_BOOST_DEGREES: float = 2.0  # Max setpoint boost offset (°C)
 DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W: float = 500.0  # Min surplus to activate climate boost
 
+# Surplus chain — switch rate limiting (SurplusPlanner level)
+MAX_SURPLUS_SWITCHES_PER_WINDOW: int = 2  # Max switch events per rate-limit window
+SURPLUS_SWITCH_WINDOW_MIN: int = 30  # Rate-limit window (minutes)
+SURPLUS_START_THRESHOLD_KW: float = 1.0  # Min surplus to start consumers (kW)
+SURPLUS_STOP_THRESHOLD_KW: float = 0.5  # Surplus below this → stop consumers (kW)
+SURPLUS_START_DELAY_MIN: int = 5  # Start delay at planner level (minutes)
+SURPLUS_STOP_DELAY_MIN: int = 3  # Stop delay at planner level (minutes)
+
 # Planner — night reserve calculation
 DEFAULT_PLANNER_HOUSE_BASELOAD_KW: float = 2.5  # Measured night baseload (kW)
 DEFAULT_PLANNER_NIGHT_HOURS: int = 8  # Night window hours (22:00-06:00)
