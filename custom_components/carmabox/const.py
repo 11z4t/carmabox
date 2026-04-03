@@ -441,3 +441,6 @@ DISHWASHER_RUNTIME_H: float = 2.0  # Min körtid per cykel (h)
 EV_DAILY_ROLLING_DAYS: int = 7  # Rolling window för daglig förbrukningsstatistik
 SCENARIO_MAX_COUNT: int = 15  # Max antal scenarios att hålla i minnet
 SCENARIO_MIN_COUNT: int = 5  # Min antal scenarios för meningsfull jämförelse
+
+# ── PLAT-1226: Night Planner ────────────────────────────────────────────────
+MAX_NIGHTLY_SOC_DELTA_PCT: int = 20  # Max EV SoC increase per night (%)
