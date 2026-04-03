@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from custom_components.carmabox.const import (
+from ..const import (
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
     EV_DAILY_ROLLING_DAYS,
