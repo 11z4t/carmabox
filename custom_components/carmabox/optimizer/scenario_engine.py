@@ -13,7 +13,10 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from ..const import (
+    DEFAULT_BATTERY_TARGET_SOC,
     DEFAULT_EV_NIGHT_TARGET_SOC,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
     SCENARIO_MAX_COUNT,
     SCENARIO_MIN_COUNT,
 )
@@ -150,8 +153,11 @@ class ScenarioEngine:
         battery_soc: float = float(state.get("battery_soc", 50.0))
         ev_soc: float = float(state.get("ev_soc", -1.0))
         ev_target_soc: float = float(state.get("ev_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
-        battery_target_soc: float = float(state.get("battery_target_soc", 80.0))
-        hours: list[int] = list(state.get("hours", list(range(22, 24)) + list(range(0, 6))))
+        battery_target_soc: float = float(
+            state.get("battery_target_soc", DEFAULT_BATTERY_TARGET_SOC)
+        )
+        default_hours = list(range(DEFAULT_NIGHT_START, 24)) + list(range(0, DEFAULT_NIGHT_END))
+        hours: list[int] = list(state.get("hours", default_hours))
         prices_ore: list[float] = list(state.get("prices_ore", [50.0] * 24))
 
         ev_disconnected: bool = ev_soc < 0.0
