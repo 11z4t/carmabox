@@ -209,3 +209,99 @@ def test_nightloadbudget_is_frozen() -> None:
     b = budget()
     with pytest.raises((AttributeError, TypeError)):
         b.bat_charge_kw = 99.0  # type: ignore[misc]
+
+
+# ── TC14: bat_charge_kw never negative ───────────────────────────────────────
+
+
+def test_bat_budget_never_negative() -> None:
+    """Even with massive overload, bat_charge_kw is clamped to >= 0."""
+    b = budget(viktat=10.0, disk_w=5000.0, ev_w=7000.0, bat_kw=5.0)
+    assert b.bat_charge_kw >= 0.0
+    assert b.ev_amps >= 0
+
+
+# ── TC15: ev_amps never negative ─────────────────────────────────────────────
+
+
+def test_ev_amps_never_negative() -> None:
+    """ev_amps is always >= 0 even with huge overload."""
+    b = budget(viktat=5.0, disk_w=3000.0, ev_w=0.0, bat_kw=0.0)
+    assert b.ev_amps >= 0
+
+
+# ── TC16: house load in viktat reduces bat budget ────────────────────────────
+
+
+def test_house_load_reduces_bat_budget() -> None:
+    """House using 1kW raw = 0.5kW viktat, bat_kw=0 => bat budget drops."""
+    b_no_house = budget(viktat=0.0, disk_w=0.0, ev_w=0.0, bat_kw=0.0, max_charge=3.0)
+    b_with_house = budget(viktat=0.5, disk_w=0.0, ev_w=0.0, bat_kw=0.0, max_charge=3.0)
+    # non_bat=0.5, bat_viktat=2.0-0.5-0.3=1.2, raw=2.4kW
+    assert b_with_house.bat_charge_kw < b_no_house.bat_charge_kw
+    assert b_with_house.bat_charge_kw == pytest.approx(2.4, abs=0.01)
+
+
+# ── TC17: disk exactly above threshold counted ───────────────────────────────
+
+
+def test_disk_exactly_at_threshold_counted() -> None:
+    """Disk at DISK_ACTIVE_THRESHOLD_W+1W is counted as active."""
+    from custom_components.carmabox.const import DISK_ACTIVE_THRESHOLD_W
+
+    b_at = budget(viktat=0.0, disk_w=DISK_ACTIVE_THRESHOLD_W + 1.0)
+    b_off = budget(viktat=0.0, disk_w=DISK_ACTIVE_THRESHOLD_W - 1.0)
+    assert b_at.disk_kw > 0.0
+    # bat budget should be smaller when disk is counted
+    assert b_at.bat_charge_kw <= b_off.bat_charge_kw
+
+
+# ── TC18: P0 scenario disk+bat+house => bat budget prevents overshoot ─────────
+
+
+def test_p0_scenario_disk_bat_house_never_exceeds_target() -> None:
+    """P0: disk 1.5kW + potential bat 6kW + house 0.5kW = 8kW raw > target.
+
+    NightLoadBudget must constrain bat so total viktat stays <= target.
+    """
+    house_raw_kw = 0.5
+    disk_raw_kw = 1.5
+    viktat_no_bat = (house_raw_kw + disk_raw_kw) * 0.5  # 1.0 kW viktat
+    b = budget(viktat=viktat_no_bat, disk_w=1500.0, ev_w=0.0, bat_kw=0.0, max_charge=3.0)
+    # bat_budget raw = (2.0 - 1.0 - 0.3) / 0.5 = 1.4 kW
+    assert b.bat_charge_kw == pytest.approx(1.4, abs=0.01)
+    # Verify total viktat stays under target
+    total_viktat = viktat_no_bat + b.bat_charge_kw * 0.5
+    assert total_viktat <= 2.0, f"Breach! {total_viktat:.3f} kW viktat"
+
+
+# ── TC19: weight=1.0 does not crash ──────────────────────────────────────────
+
+
+def test_day_weight_does_not_crash() -> None:
+    """weight=1.0 should work without ZeroDivision or errors."""
+    b = calculate_night_budget(
+        viktat_grid_kw=0.5,
+        disk_w=500.0,
+        ev_power_w=0.0,
+        bat_charge_kw=0.0,
+        target_kw=2.0,
+        night_weight=1.0,
+        max_grid_charge_kw=3.0,
+    )
+    assert b.bat_charge_kw >= 0.0
+    assert isinstance(b.ev_amps, int)
+
+
+# ── TC20: all field types correct ────────────────────────────────────────────
+
+
+def test_budget_field_types() -> None:
+    """NightLoadBudget must have correct types on all fields."""
+    b = budget()
+    assert isinstance(b.available_kw, float)
+    assert isinstance(b.bat_charge_kw, float)
+    assert isinstance(b.ev_amps, int)
+    assert isinstance(b.disk_kw, float)
+    assert isinstance(b.defer_bat, bool)
+    assert isinstance(b.defer_ev, bool)
