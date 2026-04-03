@@ -450,3 +450,10 @@ MAX_SURPLUS_SWITCHES_PER_WINDOW: int = 2  # Max switch events per rate-limit win
 SURPLUS_SWITCH_WINDOW_MIN: int = 30  # Rate-limit window (minutes)
 SURPLUS_START_THRESHOLD_KW: float = 1.0  # Min surplus to start consumers (kW)
 SURPLUS_STOP_THRESHOLD_KW: float = 0.5  # Surplus below this → stop consumers (kW)
+
+# ── PLAT-1229: Plan Feedback ───────────────────────────────────────────────
+FEEDBACK_RETENTION_DAYS: int = 30  # Keep HourRecords for this many days
+OUTLIER_STD_FACTOR: float = 2.0  # Reject EV sample if > mean + N*std
+BASELOAD_MIN_TRAINING_DAYS: int = 7  # Min days of records for reliable baseload
+FEEDBACK_ACCURACY_TOLERANCE: float = 0.20  # |planned-actual|/planned ≤ this = accurate
+FEEDBACK_PLANNED_FLOOR_KWH: float = 0.1  # Floor for planned_kwh in accuracy division
