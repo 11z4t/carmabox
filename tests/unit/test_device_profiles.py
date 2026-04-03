@@ -11,7 +11,6 @@ from custom_components.carmabox.const import (
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_EV_EFFICIENCY,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_VOLTAGE,
     DISHWASHER_AVG_KW,
@@ -19,6 +18,7 @@ from custom_components.carmabox.const import (
     DISHWASHER_PEAK_KW,
     DISHWASHER_RUNTIME_H,
     EV_DAILY_ROLLING_DAYS,
+    MAX_EV_CURRENT,
 )
 from custom_components.carmabox.optimizer.device_profiles import (
     DeviceProfile,
@@ -28,27 +28,26 @@ from custom_components.carmabox.optimizer.device_profiles import (
     can_coexist,
 )
 
-
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 
 def _ev_profile(**kwargs: object) -> DeviceProfile:
-    base = dict(
-        name="ev",
-        display_name="XPENG G9",
-        power_kw=6.9,
-        min_power_kw=4.14,
-        max_power_kw=6.9,
-        min_runtime_h=0.0,
-        interruptible=True,
-        cooldown_min=0,
-        priority=1,
-        consumer_type="variable",
-        efficiency=DEFAULT_EV_EFFICIENCY,
-        entity_switch=None,
-        entity_power=None,
-        capacity_kwh=82.0,
-    )
+    base: dict[str, object] = {
+        "name": "ev",
+        "display_name": "XPENG G9",
+        "power_kw": 6.9,
+        "min_power_kw": 4.14,
+        "max_power_kw": 6.9,
+        "min_runtime_h": 0.0,
+        "interruptible": True,
+        "cooldown_min": 0,
+        "priority": 1,
+        "consumer_type": "variable",
+        "efficiency": DEFAULT_EV_EFFICIENCY,
+        "entity_switch": None,
+        "entity_power": None,
+        "capacity_kwh": 82.0,
+    }
     base.update(kwargs)
     return DeviceProfile(**base)  # type: ignore[arg-type]
 
@@ -290,13 +289,21 @@ class TestCanCoexist:
 class TestBuildProfiles:
     def test_returns_all_eight_profiles(self) -> None:
         profiles = build_profiles({})
-        expected = {"ev", "battery_kontor", "battery_forrad", "vp_kontor",
-                    "vp_pool", "pool_heater", "miner", "dishwasher"}
+        expected = {
+            "ev",
+            "battery_kontor",
+            "battery_forrad",
+            "vp_kontor",
+            "vp_pool",
+            "pool_heater",
+            "miner",
+            "dishwasher",
+        }
         assert set(profiles.keys()) == expected
 
     def test_ev_defaults(self) -> None:
         p = build_profiles({})["ev"]
-        ev_max_kw = DEFAULT_EV_MAX_AMPS * 3 * DEFAULT_VOLTAGE / 1000.0
+        ev_max_kw = MAX_EV_CURRENT * 3 * DEFAULT_VOLTAGE / 1000.0
         ev_min_kw = DEFAULT_EV_MIN_AMPS * 3 * DEFAULT_VOLTAGE / 1000.0
         assert p.max_power_kw == pytest.approx(ev_max_kw)
         assert p.min_power_kw == pytest.approx(ev_min_kw)
@@ -306,7 +313,7 @@ class TestBuildProfiles:
         assert p.capacity_kwh == pytest.approx(82.0)
 
     def test_ev_max_kw_is_69(self) -> None:
-        """MAX_EV_CURRENT=10A × 3phases × 230V = 6.9 kW."""
+        """MAX_EV_CURRENT=10A x 3phases x 230V = 6.9 kW."""
         p = build_profiles({})["ev"]
         assert p.max_power_kw == pytest.approx(6.9, abs=0.01)
 
@@ -355,6 +362,7 @@ class TestBuildProfiles:
         prios = [p.priority for p in profiles.values()]
         # Both batteries have priority 2 — all others unique
         from collections import Counter
+
         c = Counter(prios)
         assert c[2] == 2  # battery_kontor + battery_forrad
         for prio, count in c.items():
@@ -381,8 +389,9 @@ class TestLoadSlot:
         assert slot.reason == ""
 
     def test_custom_duration_and_reason(self) -> None:
-        slot = LoadSlot(hour=3, device="battery_kontor", power_kw=3.6,
-                        duration_min=30, reason="cheap rate")
+        slot = LoadSlot(
+            hour=3, device="battery_kontor", power_kw=3.6, duration_min=30, reason="cheap rate"
+        )
         assert slot.duration_min == 30
         assert slot.reason == "cheap rate"
 

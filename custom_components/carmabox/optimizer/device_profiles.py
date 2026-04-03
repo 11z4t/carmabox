@@ -18,7 +18,6 @@ from ..const import (
     DEFAULT_BATTERY_2_KWH,
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_EV_EFFICIENCY,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_SURPLUS_MINER_W,
     DEFAULT_SURPLUS_POOL_HEATER_W,
@@ -30,13 +29,14 @@ from ..const import (
     DISHWASHER_PEAK_KW,
     DISHWASHER_RUNTIME_H,
     EV_DAILY_ROLLING_DAYS,
+    MAX_EV_CURRENT,
 )
 
 # ── Module-level defaults (device-specific hardware specs) ─────────────────
 
 # EV power range derived from amps x phases x voltage
 _EV_MIN_KW: float = DEFAULT_EV_MIN_AMPS * 3 * DEFAULT_VOLTAGE / 1000.0
-_EV_MAX_KW: float = DEFAULT_EV_MAX_AMPS * 3 * DEFAULT_VOLTAGE / 1000.0
+_EV_MAX_KW: float = MAX_EV_CURRENT * 3 * DEFAULT_VOLTAGE / 1000.0
 _EV_CAPACITY_KWH: float = 82.0  # XPENG G9 usable battery capacity
 
 # Battery charge rates (GoodWe inverter hardware specs)
