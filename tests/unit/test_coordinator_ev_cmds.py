@@ -81,6 +81,15 @@ def _make_coord(*, ev_enabled: bool = False, ev_amps: int = 0) -> CarmaboxCoordi
     coord._predictor_store = MagicMock()
     coord._predictor_store.async_save = AsyncMock()
     coord._predictor_last_save = 0.0
+    # PLAT-975: ML Predictor
+    from custom_components.carmabox.core.ml_predictor import MLPredictor as _MLPred
+
+    coord._ml_predictor = _MLPred()
+    coord._ml_predictor_store = MagicMock()
+    coord._ml_predictor_store.async_save = AsyncMock()
+    coord._ml_predictor_loaded = True
+    coord._ml_predictor_last_save = 0.0
+    coord.ml_forecast_24h = []
     coord._consumption_store = MagicMock()
     coord._consumption_store.async_save = AsyncMock()
     coord._consumption_last_save = 0.0

@@ -96,6 +96,13 @@ from .const import (
 )
 from .core.audit import AuditLog
 from .core.execution_engine import ExecutionEngine
+from .core.ml_predictor import (
+    ConsumptionSample as MLConsumptionSample,
+)
+from .core.ml_predictor import (
+    MLPredictor,
+    PlanAccuracySample,
+)
 from .notifications import CarmaNotifier
 from .optimizer.consumption import ConsumptionProfile, calculate_house_consumption
 from .optimizer.ev_strategy import calculate_ev_schedule
@@ -161,6 +168,9 @@ RUNTIME_STORE_KEY = "carmabox_runtime"
 LEDGER_STORE_VERSION = 1
 LEDGER_STORE_KEY = "carmabox_ledger"
 
+ML_PREDICTOR_STORE_VERSION = 1
+ML_PREDICTOR_STORE_KEY = "carmabox_ml"
+
 # Self-healing constants (PLAT-972)
 SELF_HEALING_MAX_FAILURES = 3
 SELF_HEALING_PAUSE_SECONDS = 300  # 5 minutes
@@ -172,6 +182,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     # Class-level defaults for mock spec compatibility
     _taper_active: bool = False
     _cold_lock_active: bool = False
+    _ml_predictor_loaded: bool = False
+    _ml_predictor_last_save: float = 0.0
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         """Initialize coordinator."""
@@ -376,6 +388,15 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._predictor_loaded = False
         self._predictor_last_save: float = 0.0
 
+        # PLAT-975: ML Predictor (core/ml_predictor.py) — feature-flagged
+        self._ml_predictor: MLPredictor = MLPredictor()
+        self._ml_predictor_store: Store[dict[str, Any]] = Store(
+            hass, ML_PREDICTOR_STORE_VERSION, ML_PREDICTOR_STORE_KEY
+        )
+        self._ml_predictor_loaded: bool = False
+        self._ml_predictor_last_save: float = 0.0
+        self.ml_forecast_24h: list[float] = []
+
         # CARMA-P0-FIXES Task 4: Runtime persistence
         self._runtime_store: Store[dict[str, Any]] = Store(
             hass, RUNTIME_STORE_VERSION, RUNTIME_STORE_KEY
@@ -524,6 +545,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             self._state_mgr_cache = StateManager(self.hass, self._cfg)
             return self._state_mgr_cache
+
+    @property
+    def _ml_enabled(self) -> bool:
+        """PLAT-975: Feature flag — True when input_boolean.carma_ml_enabled is on."""
+        state = self.hass.states.get("input_boolean.carma_ml_enabled")
+        return state is not None and state.state == "on"
 
     def _has_feature(self, feature: str) -> bool:
         """Check if a feature is enabled by current license."""
@@ -794,6 +821,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except (OSError, ValueError, KeyError, RuntimeError):
             _LOGGER.warning("Failed to restore predictor, starting fresh", exc_info=True)
 
+    async def _async_restore_ml_predictor(self) -> None:
+        """Restore MLPredictor from persistent storage (PLAT-975)."""
+        try:
+            data = await self._ml_predictor_store.async_load()
+            if data and isinstance(data, dict):
+                self._ml_predictor.from_dict(data)
+                _LOGGER.info(
+                    "Restored ML predictor: %d consumption buckets, trained=%s",
+                    len(self._ml_predictor._consumption),
+                    self._ml_predictor.is_trained,
+                )
+        except (OSError, ValueError, KeyError, RuntimeError):
+            _LOGGER.warning("Failed to restore ML predictor, starting fresh", exc_info=True)
+
     async def _async_restore_runtime(self) -> None:
         """Restore runtime state from persistent storage (CARMA-P0-FIXES Task 4)."""
         try:
@@ -991,6 +1032,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._predictor_store.async_save(self.predictor.to_dict())
         except (OSError, ValueError, RuntimeError, AttributeError):
             _LOGGER.debug("Failed to save predictor", exc_info=True)
+
+    async def _async_save_ml_predictor(self) -> None:
+        """Persist MLPredictor state (rate-limited to every 5 minutes, PLAT-975)."""
+        now = time.monotonic()
+        if now - self._ml_predictor_last_save < SAVINGS_SAVE_INTERVAL:
+            return
+        self._ml_predictor_last_save = now
+        try:
+            await self._ml_predictor_store.async_save(self._ml_predictor.to_dict())
+        except (OSError, ValueError, RuntimeError, AttributeError):
+            _LOGGER.debug("Failed to save ML predictor", exc_info=True)
 
     async def _async_fetch_benchmarking(self) -> None:
         """PLAT-962: Fetch benchmarking data from hub (rate-limited to every hour)."""
@@ -1991,6 +2043,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if not self._predictor_loaded:
                 self._predictor_loaded = True
                 await self._async_restore_predictor()
+            if not self._ml_predictor_loaded:
+                self._ml_predictor_loaded = True
+                await self._async_restore_ml_predictor()
             # CARMA-P0-FIXES Task 4: Restore runtime + ledger BEFORE first _execute cycle
             if not self._runtime_loaded:
                 self._runtime_loaded = True
@@ -2145,6 +2200,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             await self._async_save_savings()
             await self._async_save_consumption()
             await self._async_save_predictor()
+            await self._async_save_ml_predictor()
             await self._async_fetch_benchmarking()
             self._consecutive_errors = 0
             return state
@@ -2354,36 +2410,58 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 _LOGGER.warning("PLANNER: Daytime Solcast=0 — continuing (price arbitrage)")
                 # Don't skip — price arbitrage works without PV data
 
-            # PLAT-965: Use predictor if trained, else fallback to profile
+            # PLAT-965/PLAT-975: Build consumption profile — ML > EMA > static
             _step = "consumption"
             base = self.consumption_profile.get_profile_for_date(now)
             # Pass outdoor temperature for temperature-aware prediction
             # Use last known value (updated by IT-2080 each cycle) — avoids
             # a duplicate sensor read with a hardcoded entity ID here.
             _outdoor_temp_c: float | None = getattr(self, "_last_known_outdoor_temp_c", None)
-            if self.predictor.is_trained:
-                consumption = self.predictor.predict_24h(
-                    start_hour=start_hour,
-                    weekday=now.weekday(),
-                    month=now.month,
-                    fallback_profile=base,
-                    outdoor_temp_c=_outdoor_temp_c,
-                )
-                # Pad to match prices length (predict_24h returns exactly 24)
-                consumption = (consumption or base[start_hour:]) + base
-                _LOGGER.info(
-                    "Plan: ML profile (trained, %d samples, MAE=%.2f, cov=%.0f%%)",
-                    self.predictor.total_samples,
-                    self.predictor.mean_absolute_error,
-                    self.predictor.data_coverage_pct,
-                )
-            else:
-                consumption = base[start_hour:] + base
-                _LOGGER.info(
-                    "Plan: using static consumption profile (%d/%d samples)",
-                    self.predictor.total_samples,
-                    24,
-                )
+
+            # PLAT-975: MLPredictor — highest priority when feature flag ON and trained
+            _ml_used = False
+            if self._ml_enabled and self._ml_predictor.is_trained:
+                try:
+                    ml_profile = self._ml_predictor.predict_24h_consumption(now.weekday())
+                    consumption = ml_profile[start_hour:] + ml_profile
+                    while len(consumption) < len(prices):
+                        consumption.extend(ml_profile)
+                    consumption = consumption[: len(prices)]
+                    self.ml_forecast_24h = ml_profile
+                    _ml_used = True
+                    _LOGGER.info(
+                        "Plan: MLPredictor active (%d buckets)",
+                        len(self._ml_predictor._consumption),
+                    )
+                except Exception:
+                    _LOGGER.warning("MLPredictor failed, falling back to EMA", exc_info=True)
+                    self.ml_forecast_24h = []
+
+            if not _ml_used:
+                self.ml_forecast_24h = []
+                if self.predictor.is_trained:
+                    consumption = self.predictor.predict_24h(
+                        start_hour=start_hour,
+                        weekday=now.weekday(),
+                        month=now.month,
+                        fallback_profile=base,
+                        outdoor_temp_c=_outdoor_temp_c,
+                    )
+                    # Pad to match prices length (predict_24h returns exactly 24)
+                    consumption = (consumption or base[start_hour:]) + base
+                    _LOGGER.info(
+                        "Plan: EMA profile (trained, %d samples, MAE=%.2f, cov=%.0f%%)",
+                        self.predictor.total_samples,
+                        self.predictor.mean_absolute_error,
+                        self.predictor.data_coverage_pct,
+                    )
+                else:
+                    consumption = base[start_hour:] + base
+                    _LOGGER.info(
+                        "Plan: using static consumption profile (%d/%d samples)",
+                        self.predictor.total_samples,
+                        24,
+                    )
 
             # EV demand — dynamic schedule based on prices + SoC
             _step = "ev_schedule"
@@ -6202,6 +6280,49 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     self.predictor.add_ev_usage(weekday, drop, capacity_kwh=ev_cap)
         elif hour == 0:
             self._ev_usage_tracked_today = False
+
+        # PLAT-975: Feed MLPredictor with consumption + appliance + plan accuracy
+        house_kw = getattr(self, "_estimated_house_base_kw", max(0.0, state.grid_power_w / 1000.0))
+        self._ml_predictor.add_consumption(
+            MLConsumptionSample(weekday=weekday, hour=hour, consumption_kw=house_kw)
+        )
+
+        # Appliance events (any appliance > 500 W counts as an appliance-hour)
+        for eid in [
+            "sensor.98_shelly_plug_s_power",
+            "sensor.102_shelly_plug_g3_power",
+            "sensor.103_shelly_plug_g3_power",
+        ]:
+            st = self.hass.states.get(eid)
+            if st and st.state not in ("unavailable", "unknown", ""):
+                try:
+                    if float(st.state) > 500:
+                        self._ml_predictor.add_appliance_event(hour)
+                        break  # Count at most one appliance event per cycle
+                except (ValueError, TypeError):
+                    _LOGGER.debug("Suppressed error", exc_info=True)
+
+        # Plan accuracy (once per hour)
+        if getattr(self, "_ml_last_feedback_hour", -1) != hour:
+            self._ml_last_feedback_hour = hour
+            for ph in self.plan:
+                if ph.hour == hour:
+                    actual_grid = max(0.0, state.grid_power_w / 1000.0)
+                    last_cmd = getattr(self, "_last_command", None)
+                    cmd_val = getattr(last_cmd, "value", None) or (
+                        str(last_cmd) if last_cmd is not None else "unknown"
+                    )
+                    self._ml_predictor.add_plan_accuracy(
+                        PlanAccuracySample(
+                            hour=hour,
+                            planned_grid_kw=ph.grid_kw,
+                            actual_grid_kw=actual_grid,
+                            planned_action=ph.action,
+                            actual_action=cmd_val,
+                            price=ph.price,
+                        )
+                    )
+                    break
 
     def _check_daily_goals(self, state: CarmaboxState) -> dict[str, Any]:
         """Check daily goals and generate root cause if breached.

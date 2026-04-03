@@ -94,6 +94,11 @@ def _make_coord(*, cfg: dict | None = None, executor_enabled: bool = True) -> ob
 
     coord.consumption_profile = ConsumptionProfile()
     coord._read_battery_temp = MagicMock(return_value=20.0)
+    # PLAT-975: ML Predictor
+    from custom_components.carmabox.core.ml_predictor import MLPredictor as _MLPred
+
+    coord._ml_predictor = _MLPred()
+    coord.ml_forecast_24h = []
     return coord
 
 

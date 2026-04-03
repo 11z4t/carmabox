@@ -69,7 +69,7 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 28  # IT-1937 added carma_box_rules (updated count)
+        assert len(SENSOR_DESCRIPTIONS) == 29  # PLAT-975 added ml_forecast sensor
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
         assert "plan_accuracy" in keys
         assert "decision" in keys

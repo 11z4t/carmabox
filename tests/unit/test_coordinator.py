@@ -157,6 +157,16 @@ def _make_coordinator(
     coord._predictor_loaded = True
     coord._predictor_last_save = 0.0
 
+    # PLAT-975: ML Predictor
+    from custom_components.carmabox.core.ml_predictor import MLPredictor as _MLPredictor
+
+    coord._ml_predictor = _MLPredictor()
+    coord._ml_predictor_store = MagicMock()
+    coord._ml_predictor_store.async_save = AsyncMock()
+    coord._ml_predictor_loaded = True  # Skip restore in tests
+    coord._ml_predictor_last_save = 0.0
+    coord.ml_forecast_24h = []
+
     # IT-2380: EV daily SoC tracking for predictor
     coord._ev_soc_day_start = -1.0
 

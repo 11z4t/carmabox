@@ -728,6 +728,27 @@ def _idle_analysis_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
     }
 
 
+def _ml_forecast_value(coord: CarmaboxCoordinator) -> float | None:
+    """PLAT-975: ML 24h forecast total (kWh)."""
+    forecast = getattr(coord, "ml_forecast_24h", [])
+    if not forecast:
+        return None
+    return float(round(sum(forecast), 1))
+
+
+def _ml_forecast_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """PLAT-975: ML forecast details — hourly breakdown + status."""
+    ml = getattr(coord, "_ml_predictor", None)
+    forecast = getattr(coord, "ml_forecast_24h", [])
+    ml_enabled = getattr(coord, "_ml_enabled", False)
+    return {
+        "ml_enabled": ml_enabled,
+        "trained": ml.is_trained if ml else False,
+        "consumption_buckets": len(ml._consumption) if ml else 0,
+        "hourly_forecast_kw": [round(v, 2) for v in forecast],
+    }
+
+
 SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
     CarmaboxSensorDescription(
         key="plan_accuracy",
@@ -950,6 +971,16 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=_idle_analysis_value,
         extra_attrs_fn=_idle_analysis_attrs,
+    ),
+    CarmaboxSensorDescription(
+        key="ml_forecast",
+        translation_key="ml_forecast",
+        icon="mdi:brain",
+        native_unit_of_measurement="kWh",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=1,
+        value_fn=_ml_forecast_value,
+        extra_attrs_fn=_ml_forecast_attrs,
     ),
     CarmaboxSensorDescription(
         key="breach_monitor_projected",

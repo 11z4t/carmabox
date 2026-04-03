@@ -172,6 +172,16 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     coord._predictor_loaded = True
     coord._predictor_last_save = 0.0
 
+    # PLAT-975: ML Predictor
+    from custom_components.carmabox.core.ml_predictor import MLPredictor as _MLPred
+
+    coord._ml_predictor = _MLPred()
+    coord._ml_predictor_store = MagicMock()
+    coord._ml_predictor_store.async_save = AsyncMock()
+    coord._ml_predictor_loaded = True
+    coord._ml_predictor_last_save = 0.0
+    coord.ml_forecast_24h = []
+
     # Plan tracking
     coord._plan_deviation_count = 0
     coord._plan_last_correction_time = 0.0
