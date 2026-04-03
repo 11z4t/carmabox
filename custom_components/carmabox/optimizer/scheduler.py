@@ -47,6 +47,8 @@ from ..const import (
     SCHEDULER_BREACH_MAJOR_PCT,
     SCHEDULER_BREACH_MINOR_PCT,
     SCHEDULER_CONSTRAINT_MARGIN,
+    SCHEDULER_CORRECTION_DISCHARGE_KW,
+    SCHEDULER_CORRECTION_MIN_AVAIL_KWH,
     SCHEDULER_DISCHARGE_FLOOR_ORE,
     SCHEDULER_DISCHARGE_MEDIAN_FACTOR,
     SCHEDULER_EV_100_INTERVAL_DAYS,
@@ -56,11 +58,28 @@ from ..const import (
     SCHEDULER_EV_LEARNING_MIN_CONFIDENCE,
     SCHEDULER_EV_MIN_ENERGY_KWH,
     SCHEDULER_EV_SOC_UNKNOWN_DEFAULT,
+    SCHEDULER_IDLE_CHEAP_CHARGE_KW,
+    SCHEDULER_IDLE_CHEAP_PRICE_RATIO,
+    SCHEDULER_IDLE_DISCHARGE_PRICE_RATIO,
+    SCHEDULER_IDLE_DISCHARGE_SOC_BUFFER_PCT,
+    SCHEDULER_IDLE_EXPENSIVE_PRICE_RATIO,
+    SCHEDULER_IDLE_EXPENSIVE_SOC_BUFFER_PCT,
+    SCHEDULER_IDLE_HIGH_PCT,
+    SCHEDULER_IDLE_MAX_AVAIL_KW,
+    SCHEDULER_IDLE_MISSED_CHARGE_THRESHOLD_KWH,
+    SCHEDULER_IDLE_MISSED_DISCHARGE_THRESHOLD_KWH,
+    SCHEDULER_IDLE_MOD_PCT,
+    SCHEDULER_IDLE_PV_MAX_CHARGE_KW,
+    SCHEDULER_IDLE_PV_MAX_SOC_PCT,
+    SCHEDULER_IDLE_PV_MIN_SURPLUS_KW,
     SCHEDULER_LEARNING_CONFIDENCE_STEP,
+    SCHEDULER_LOAD_ALT_FALLBACK_KW,
+    SCHEDULER_LOAD_FALLBACK_KW,
     SCHEDULER_MAX_LEARNINGS,
     SCHEDULER_MEDIAN_PRICE_FALLBACK_ORE,
     SCHEDULER_MINER_EXPORT_MIN_W,
     SCHEDULER_PLAN_HOURS,
+    SCHEDULER_PRICE_FALLBACK_ORE,
     SCHEDULER_PV_SURPLUS_FULL_BUDGET_KWH,
     SCHEDULER_SOLAR_MODERATE_KWH,
     SCHEDULER_SOLAR_STRONG_KWH,
@@ -173,8 +192,8 @@ def _schedule_ev_backwards(
         abs_h = (start_hour + i) % 24
         if not _is_night_hour(abs_h, night_start, night_end):
             continue
-        price = hourly_prices[i] if i < len(hourly_prices) else 100.0
-        load = hourly_loads[i] if i < len(hourly_loads) else 2.0
+        price = hourly_prices[i] if i < len(hourly_prices) else SCHEDULER_PRICE_FALLBACK_ORE
+        load = hourly_loads[i] if i < len(hourly_loads) else SCHEDULER_LOAD_FALLBACK_KW
         w = ellevio_weight(abs_h, night_weight)
 
         # Check if learnings say to avoid this hour
@@ -425,10 +444,10 @@ def _schedule_battery(
     for i in range(num_hours):
         abs_h = (start_hour + i) % 24
         w = ellevio_weight(abs_h, night_weight)
-        load = hourly_loads[i] if i < len(hourly_loads) else 1.5
+        load = hourly_loads[i] if i < len(hourly_loads) else SCHEDULER_LOAD_ALT_FALLBACK_KW
         pv = hourly_pv[i] if i < len(hourly_pv) else 0.0
         ev = hourly_ev[i] if i < len(hourly_ev) else 0.0
-        price = hourly_prices[i] if i < len(hourly_prices) else 100.0
+        price = hourly_prices[i] if i < len(hourly_prices) else SCHEDULER_PRICE_FALLBACK_ORE
 
         net = load + ev - pv  # Positive = importing, negative = exporting
         battery_kw = 0.0
@@ -919,10 +938,10 @@ def _apply_corrections(
                 params = dict(p.split("=", 1) for p in corr.param.split(",") if "=" in p)
             except (ValueError, TypeError):
                 params = {}
-            discharge_kw = float(params.get("discharge_kw", "2.0"))
+            discharge_kw = float(params.get("discharge_kw", str(SCHEDULER_CORRECTION_DISCHARGE_KW)))
             discharge_kw = min(discharge_kw, max_discharge_kw)
             avail_kwh = (battery_soc_pct - battery_min_soc) / 100 * battery_cap_kwh
-            if avail_kwh > 1.0:
+            if avail_kwh > SCHEDULER_CORRECTION_MIN_AVAIL_KWH:
                 battery_schedule[idx] = (-discharge_kw, "d")
                 corr.applied = True
                 applied_count += 1
@@ -1276,44 +1295,56 @@ def analyze_idle_time(
         # V6: Use per-slot SoC instead of global snapshot
         soc = slot.battery_soc
 
-        # Missed PV charge: PV surplus > 0.5 kW but battery idle
+        # Missed PV charge: PV surplus > threshold but battery idle
         pv_surplus = slot.pv_kw - slot.consumption_kw
-        if pv_surplus > 0.5 and soc < 95:
-            surplus = min(pv_surplus, 3.0)  # Max 3kW charge rate
+        if pv_surplus > SCHEDULER_IDLE_PV_MIN_SURPLUS_KW and soc < SCHEDULER_IDLE_PV_MAX_SOC_PCT:
+            surplus = min(pv_surplus, SCHEDULER_IDLE_PV_MAX_CHARGE_KW)
             missed_charge += surplus
 
         # Missed cheap charge: price below threshold and battery not full
         if price < CHEAP_CHARGE_PRICE_ORE and soc < CHEAP_CHARGE_SOC_THRESHOLD_PCT:
-            missed_charge += 2.0  # Could charge 2 kW
+            missed_charge += SCHEDULER_IDLE_CHEAP_CHARGE_KW
 
-        # Missed discharge: price > avg*1.3 and battery has energy
-        if price > avg_price * 1.3 and soc > battery_min_soc + 10:
-            avail = min(2.0, (soc - battery_min_soc) / 100 * battery_cap_kwh)
+        # Missed discharge: price > avg*ratio and battery has energy
+        if (
+            price > avg_price * SCHEDULER_IDLE_DISCHARGE_PRICE_RATIO
+            and soc > battery_min_soc + SCHEDULER_IDLE_DISCHARGE_SOC_BUFFER_PCT
+        ):
+            avail = min(
+                SCHEDULER_IDLE_MAX_AVAIL_KW, (soc - battery_min_soc) / 100 * battery_cap_kwh
+            )
             missed_discharge += avail
             missed_savings_kr += avail * price / 100
 
     # Generate actionable tips
-    if missed_charge > 2:
+    if missed_charge > SCHEDULER_IDLE_MISSED_CHARGE_THRESHOLD_KWH:
         opportunities.append(f"Ladda batteri vid PV-överskott: ~{missed_charge:.0f} kWh/dag missas")
-    if missed_discharge > 1:
+    if missed_discharge > SCHEDULER_IDLE_MISSED_DISCHARGE_THRESHOLD_KWH:
         opportunities.append(
             f"Ladda ur vid dyra timmar: ~{missed_discharge:.0f} kWh "
             f"→ spara ~{missed_savings_kr:.1f} kr/dag"
         )
 
-    cheap_hours = [i for i, p in enumerate(prices) if p < avg_price * 0.6]
+    cheap_hours = [
+        i for i, p in enumerate(prices) if p < avg_price * SCHEDULER_IDLE_CHEAP_PRICE_RATIO
+    ]
     if cheap_hours and battery_soc_pct < CHEAP_CHARGE_SOC_THRESHOLD_PCT:
         h_str = ", ".join(f"{h:02d}" for h in cheap_hours[:4])
         opportunities.append(f"Billiga laddningstimmar: {h_str}")
 
-    expensive_hours = [i for i, p in enumerate(prices) if p > avg_price * 1.5]
-    if expensive_hours and battery_soc_pct > battery_min_soc + 15:
+    expensive_hours = [
+        i for i, p in enumerate(prices) if p > avg_price * SCHEDULER_IDLE_EXPENSIVE_PRICE_RATIO
+    ]
+    if (
+        expensive_hours
+        and battery_soc_pct > battery_min_soc + SCHEDULER_IDLE_EXPENSIVE_SOC_BUFFER_PCT
+    ):
         h_str = ", ".join(f"{h:02d}" for h in expensive_hours[:4])
         opportunities.append(f"Dyra urladdningstimmar: {h_str}")
 
-    if idle_pct > 70:
+    if idle_pct > SCHEDULER_IDLE_HIGH_PCT:
         opportunities.append("Batterierna idle >70% — överväg lägre charge/discharge-trösklar")
-    elif idle_pct > 50:
+    elif idle_pct > SCHEDULER_IDLE_MOD_PCT:
         opportunities.append("Batterierna idle >50% — kontrollera att prisarbitrage aktivt")
 
     # Utilization score: 0-100, penalize idle, reward charge+discharge

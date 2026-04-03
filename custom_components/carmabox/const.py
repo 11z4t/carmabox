@@ -385,6 +385,29 @@ SCHEDULER_ANTI_IDLE_MAX_KW = 1.5  # Max anti-idle discharge rate (kW)
 CHEAP_CHARGE_PRICE_ORE: float = 20.0  # Price <= this = cheap grid charge
 CHEAP_CHARGE_SOC_THRESHOLD_PCT: float = 80.0  # SoC below this qualifies
 
+# Scheduler — idle opportunity analysis (PLAT-1065)
+SCHEDULER_IDLE_PV_MIN_SURPLUS_KW: float = 0.5  # Min PV surplus to flag missed charge
+SCHEDULER_IDLE_PV_MAX_SOC_PCT: float = 95.0  # SoC below this = PV charge opportunity
+SCHEDULER_IDLE_PV_MAX_CHARGE_KW: float = 3.0  # Cap on counted PV charge rate
+SCHEDULER_IDLE_CHEAP_CHARGE_KW: float = 2.0  # Assumed charge rate during cheap hours
+SCHEDULER_IDLE_DISCHARGE_PRICE_RATIO: float = 1.3  # Price > avg*this = discharge opportunity
+SCHEDULER_IDLE_DISCHARGE_SOC_BUFFER_PCT: float = 10.0  # SoC above min to qualify for discharge
+SCHEDULER_IDLE_MAX_AVAIL_KW: float = 2.0  # Cap on available discharge kW per hour
+SCHEDULER_IDLE_MISSED_CHARGE_THRESHOLD_KWH: float = 2.0  # Report missed charge if > this
+SCHEDULER_IDLE_MISSED_DISCHARGE_THRESHOLD_KWH: float = 1.0  # Report missed discharge if > this
+SCHEDULER_IDLE_CHEAP_PRICE_RATIO: float = 0.6  # Price < avg*this = cheap hour tip
+SCHEDULER_IDLE_EXPENSIVE_PRICE_RATIO: float = 1.5  # Price > avg*this = expensive hour tip
+SCHEDULER_IDLE_EXPENSIVE_SOC_BUFFER_PCT: float = 15.0  # SoC above min for expensive discharge tip
+SCHEDULER_IDLE_HIGH_PCT: float = 70.0  # Idle >this% = high warning
+SCHEDULER_IDLE_MOD_PCT: float = 50.0  # Idle >this% = moderate warning
+
+# Scheduler — data fallbacks (PLAT-1065)
+SCHEDULER_PRICE_FALLBACK_ORE: float = 100.0  # Default price when hourly data unavailable
+SCHEDULER_LOAD_FALLBACK_KW: float = 2.0  # Default house load when hourly data unavailable
+SCHEDULER_LOAD_ALT_FALLBACK_KW: float = 1.5  # Alt load fallback for battery arbitrage loop
+SCHEDULER_CORRECTION_DISCHARGE_KW: float = 2.0  # Default discharge kW for breach corrections
+SCHEDULER_CORRECTION_MIN_AVAIL_KWH: float = 1.0  # Min available kWh to apply discharge correction
+
 # Noise thresholds (PLAT-1086)
 POWER_NOISE_THRESHOLD_W = 50  # Min power to consider device active
 GRID_EXPORT_NOISE_W = 100  # Min export before acting on it
