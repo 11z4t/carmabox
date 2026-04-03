@@ -9,7 +9,8 @@ DEFAULT_BATTERY_MIN_SOC = 15.0
 DEFAULT_EV_NIGHT_TARGET_SOC = 75.0
 DEFAULT_EV_FULL_CHARGE_DAYS = 7
 DEFAULT_EV_MIN_AMPS = 6
-MAX_EV_CURRENT = 10  # 16A spräcker säkring + timmedel
+DEFAULT_EV_MAX_AMPS = 10  # 16A spräcker säkring + timmedel
+MAX_EV_CURRENT: int = 10  # Hard current limit (A): 10A × 3ph × 230V = 6.9 kW
 DEFAULT_FALLBACK_PRICE_ORE = 100.0
 
 # Ellevio defaults
