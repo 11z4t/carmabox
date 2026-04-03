@@ -400,3 +400,62 @@ def test_no_ev_slots_when_soc_above_75_and_tomorrow_cheap() -> None:
     # No EV charging slots since ev_soc > 75 and min_ev_h == 0
     ev_slots = [s for s in plan.slots if s.device == "ev"]
     assert ev_slots == []
+
+
+# ── Multi-night deferral ──────────────────────────────────────────────────
+
+
+class TestMultiNightDeferral:
+    """PLAT-1226 requirement: defer EV charging to tomorrow if cheaper."""
+
+    def test_ev_above_75_tomorrow_cheaper_defers(self) -> None:
+        """If EV >= 75% and tomorrow night >10% cheaper → skip EV tonight."""
+        state = _base_state()
+        state["ev_soc"] = 80.0
+        state["ev_days_since_full"] = 2  # tactical, not deadline
+        state["prices_ore"] = _flat_prices(100.0)  # expensive tonight
+        state["tomorrow_prices_ore"] = _flat_prices(10.0)  # very cheap tomorrow
+        plan = _planner().plan_tonight(state)
+        assert plan.ev_skipped is True
+        assert "deferred" in plan.ev_skip_reason
+
+    def test_ev_above_75_tomorrow_not_cheaper_charges(self) -> None:
+        """If EV >= 75% but tomorrow is NOT cheaper → charge normally."""
+        state = _base_state()
+        state["ev_soc"] = 80.0
+        state["ev_days_since_full"] = 2
+        state["prices_ore"] = _flat_prices(10.0)  # cheap tonight
+        state["tomorrow_prices_ore"] = _flat_prices(100.0)  # expensive tomorrow
+        plan = _planner().plan_tonight(state)
+        assert plan.ev_skipped is False
+
+    def test_ev_below_75_never_defers(self) -> None:
+        """If EV < 75% → MUST charge tonight regardless of price."""
+        state = _base_state()
+        state["ev_soc"] = 50.0
+        state["ev_days_since_full"] = 2
+        state["prices_ore"] = _flat_prices(100.0)
+        state["tomorrow_prices_ore"] = _flat_prices(10.0)
+        plan = _planner().plan_tonight(state)
+        assert plan.ev_skipped is False
+
+    def test_ev_target_100_never_defers(self) -> None:
+        """If deadline requires 100% → charge tonight even if tomorrow cheaper."""
+        state = _base_state()
+        state["ev_soc"] = 80.0
+        state["ev_days_since_full"] = 6  # deadline → target=100
+        state["prices_ore"] = _flat_prices(100.0)
+        state["tomorrow_prices_ore"] = _flat_prices(10.0)
+        plan = _planner().plan_tonight(state)
+        # ev_target is 100 so multi-night logic does NOT trigger
+        assert plan.ev_skipped is False
+
+    def test_no_tomorrow_prices_no_defer(self) -> None:
+        """Without tomorrow prices → no deferral possible."""
+        state = _base_state()
+        state["ev_soc"] = 80.0
+        state["ev_days_since_full"] = 2
+        state["prices_ore"] = _flat_prices(100.0)
+        state["tomorrow_prices_ore"] = None
+        plan = _planner().plan_tonight(state)
+        assert plan.ev_skipped is False

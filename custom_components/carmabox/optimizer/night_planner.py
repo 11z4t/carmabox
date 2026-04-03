@@ -13,7 +13,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from ..const import DEFAULT_EV_NIGHT_TARGET_SOC, MAX_NIGHTLY_SOC_DELTA_PCT
+from ..const import (
+    DEFAULT_EV_NIGHT_TARGET_SOC,
+    DEFAULT_NIGHT_END,
+    DEFAULT_NIGHT_START,
+    MAX_NIGHTLY_SOC_DELTA_PCT,
+)
 
 if TYPE_CHECKING:
     from ..optimizer.cost_model import CostModel, EllevioState
@@ -25,10 +30,27 @@ __all__ = ["NightPlan", "NightPlanner", "NightSlot", "calculate_ev_trajectory"]
 
 # ── Night window constants ─────────────────────────────────────────────────
 
-_NIGHT_START: int = 22
-_NIGHT_END: int = 6  # exclusive — window covers hours [22..5]
+_NIGHT_START: int = DEFAULT_NIGHT_START  # 22
+_NIGHT_END: int = DEFAULT_NIGHT_END  # 6, exclusive — window covers hours [22..5]
 
 # ── Internal helpers ───────────────────────────────────────────────────────
+
+
+def _night_avg_price(prices_ore: list[float]) -> float:
+    """Average Nordpool price during night window (22-05)."""
+    night_hours = list(range(_NIGHT_START, 24)) + list(range(0, _NIGHT_END))
+    vals = [prices_ore[h] for h in night_hours if h < len(prices_ore)]
+    return sum(vals) / len(vals) if vals else 50.0
+
+
+def _tomorrow_night_cheaper(
+    tonight_prices_ore: list[float],
+    tomorrow_prices_ore: list[float],
+) -> bool:
+    """Return True if tomorrow night is cheaper than tonight on average."""
+    tonight_avg = _night_avg_price(tonight_prices_ore)
+    tomorrow_avg = _night_avg_price(tomorrow_prices_ore)
+    return tomorrow_avg < tonight_avg * 0.9  # 10% cheaper threshold
 
 
 def _build_night_window(current_hour: int) -> list[int]:
@@ -235,6 +257,26 @@ class NightPlanner:
             )
 
         ev_target = calculate_ev_trajectory(ev_soc, ev_days_since_full)
+
+        # Multi-night logic: if EV already above daily minimum and tomorrow
+        # night is cheaper, defer EV charging to tomorrow — focus on battery.
+        if (
+            ev_soc >= DEFAULT_EV_NIGHT_TARGET_SOC
+            and ev_target < 100.0
+            and tomorrow_prices_ore is not None
+            and _tomorrow_night_cheaper(prices_ore, tomorrow_prices_ore)
+        ):
+            return self._plan_no_ev(
+                battery_soc=battery_soc,
+                battery_target=battery_target,
+                prices_ore=prices_ore,
+                ellevio_state=ellevio_state,
+                tomorrow_prices_ore=tomorrow_prices_ore,
+                pv_tomorrow_kwh=pv_tomorrow_kwh,
+                hours=hours,
+                dishwasher_needed=dishwasher_needed,
+                skip_reason="deferred_to_tomorrow_cheaper",
+            )
 
         engine_state: dict[str, Any] = {
             "battery_soc": battery_soc,
