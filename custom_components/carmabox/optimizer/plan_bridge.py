@@ -22,6 +22,7 @@ from ..const import (
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_VOLTAGE,
+    EV_PHASE_COUNT,
     MAX_EV_CURRENT,
 )
 from ..optimizer.night_planner import NightPlan, NightSlot
@@ -36,7 +37,7 @@ __all__ = [
 ]
 
 # Standard 3-phase EV charging (L1+L2+L3)
-_EV_PHASE_COUNT: int = 3
+_EV_PHASE_COUNT: int = EV_PHASE_COUNT
 
 
 class NightPlanBridge:
