@@ -104,7 +104,7 @@ def calculate_ev_trajectory(
         raw = max(daily_min, current_soc + 5.0)
         tonight_target = min(raw, current_soc + MAX_NIGHTLY_SOC_DELTA_PCT)
 
-    return max(75.0, min(100.0, tonight_target))
+    return max(daily_min, min(100.0, tonight_target))
 
 
 # ── NightSlot ──────────────────────────────────────────────────────────────
