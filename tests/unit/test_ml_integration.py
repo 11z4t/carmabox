@@ -14,6 +14,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from custom_components.carmabox.const import DEFAULT_PLANNER_HOUSE_BASELOAD_KW
 from custom_components.carmabox.core.ml_predictor import (
     ConsumptionSample as MLConsumptionSample,
 )
@@ -115,18 +116,18 @@ class TestMLPlannerSelection:
     """Verify planner uses correct profile based on flag + training."""
 
     def test_ml_profile_differs_from_default(self) -> None:
-        """When MLPredictor trained at 5 kW, its profile should differ from 1.7 kW default."""
+        """When MLPredictor trained at 5 kW, its profile should differ from default baseload."""
         pred = _trained_ml_predictor(kw=5.0)
         ml_profile = pred.predict_24h_consumption(0)
         assert all(abs(v - 5.0) < 0.01 for v in ml_profile)
-        assert ml_profile != [1.7] * 24  # Different from default
+        assert ml_profile != [DEFAULT_PLANNER_HOUSE_BASELOAD_KW] * 24  # Different from default
 
     def test_ml_fallback_default_when_not_trained(self) -> None:
-        """Untrained MLPredictor returns default 1.7 kW per hour."""
+        """Untrained MLPredictor returns DEFAULT_PLANNER_HOUSE_BASELOAD_KW per hour."""
         pred = MLPredictor()
         assert not pred.is_trained
         profile = pred.predict_24h_consumption(0)
-        assert all(v == 1.7 for v in profile)
+        assert all(v == DEFAULT_PLANNER_HOUSE_BASELOAD_KW for v in profile)
 
     def test_ml_forecast_cached_after_planning(self) -> None:
         """ml_forecast_24h attribute is set when flag ON + trained."""
@@ -256,7 +257,7 @@ class TestMLPredictorPersistence:
         pred = MLPredictor()
         pred.from_dict({})
         assert not pred.is_trained
-        assert pred.predict_consumption(0, 0) == 1.7
+        assert pred.predict_consumption(0, 0) == DEFAULT_PLANNER_HOUSE_BASELOAD_KW
 
     def test_from_dict_malformed_key_ignored(self) -> None:
         """from_dict with a malformed key (wrong split) → gracefully skipped."""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from custom_components.carmabox.const import DEFAULT_PLANNER_HOUSE_BASELOAD_KW
 from custom_components.carmabox.core.ml_predictor import (
     AppliancePowerProfile,
     ConsumptionSample,
@@ -15,7 +16,7 @@ from custom_components.carmabox.core.ml_predictor import (
 class TestConsumptionPrediction:
     def test_default_consumption(self):
         p = MLPredictor()
-        assert p.predict_consumption(0, 14) == 1.7
+        assert p.predict_consumption(0, 14) == DEFAULT_PLANNER_HOUSE_BASELOAD_KW
 
     def test_learned_consumption(self):
         p = MLPredictor()
@@ -27,7 +28,7 @@ class TestConsumptionPrediction:
         p = MLPredictor()
         profile = p.predict_24h_consumption(0)
         assert len(profile) == 24
-        assert all(v == 1.7 for v in profile)  # Default
+        assert all(v == DEFAULT_PLANNER_HOUSE_BASELOAD_KW for v in profile)  # Default
 
     def test_samples_capped(self):
         p = MLPredictor()

@@ -17,9 +17,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-# Pressure thresholds for PV forecast correction
-_PRESSURE_HIGH_HPA = 1015  # High-pressure → typically better PV than forecast
-_PRESSURE_LOW_HPA = 1005  # Low-pressure → typically worse PV than forecast
+from custom_components.carmabox.const import (
+    DEFAULT_PLANNER_HOUSE_BASELOAD_KW,
+    ML_CONFIDENCE_SATURATION_SAMPLES,
+    ML_DEFAULT_APPLIANCE_RISK,
+    ML_DEFAULT_TEMPERATURE_C,
+    ML_EMA_ALPHA,
+    ML_MAX_DECISION_OUTCOMES,
+    ML_MAX_PRESSURE_SAMPLES,
+    ML_MAX_SAMPLES_PER_BUCKET,
+    ML_MIN_PLAN_CORRECTION_SAMPLES,
+    ML_MIN_PLANNED_THRESHOLD_KW,
+    ML_MIN_TRAINED_BUCKETS,
+    ML_PRESSURE_HIGH_HPA,
+    ML_PRESSURE_LOW_HPA,
+    ML_SERIALIZE_LIMIT,
+)
 
 
 @dataclass
@@ -29,7 +42,7 @@ class ConsumptionSample:
     weekday: int  # 0=Monday
     hour: int
     consumption_kw: float
-    temperature_c: float = 15.0
+    temperature_c: float = ML_DEFAULT_TEMPERATURE_C
 
 
 @dataclass
@@ -77,7 +90,7 @@ def learn_appliance_cycle(
     Uses exponential moving average (EMA) with alpha=0.3.
     First observation sets values directly.
     """
-    alpha = 0.3
+    alpha = ML_EMA_ALPHA
     if profile.sample_count == 0:
         return AppliancePowerProfile(
             appliance_id=profile.appliance_id,
@@ -116,7 +129,7 @@ def predict_appliance_remaining(
     fraction_elapsed = min(elapsed_min / profile.typical_duration_min, 1.0)
     remaining_min = max(profile.typical_duration_min - elapsed_min, 0.0)
     remaining_wh = max(profile.total_energy_wh * (1.0 - fraction_elapsed), 0.0)
-    confidence = min(profile.sample_count / 10.0, 1.0)
+    confidence = min(profile.sample_count / ML_CONFIDENCE_SATURATION_SAMPLES, 1.0)
 
     return {
         "remaining_min": remaining_min,
@@ -141,7 +154,7 @@ class MLPredictor:
         self._temp_capacity: list[tuple[float, float]] = []
         # Decision outcomes
         self._decision_outcomes: list[dict[str, Any]] = []
-        self._max_samples = 30  # Per bucket
+        self._max_samples = ML_MAX_SAMPLES_PER_BUCKET
 
     # ── Add samples ─────────────────────────────────────────────
 
@@ -171,8 +184,8 @@ class MLPredictor:
     def add_pressure_pv(self, pressure_hpa: float, pv_ratio: float) -> None:
         """Record pressure → PV forecast accuracy."""
         self._pressure_pv.append((pressure_hpa, pv_ratio))
-        if len(self._pressure_pv) > 100:
-            self._pressure_pv = self._pressure_pv[-100:]
+        if len(self._pressure_pv) > ML_MAX_PRESSURE_SAMPLES:
+            self._pressure_pv = self._pressure_pv[-ML_MAX_PRESSURE_SAMPLES:]
 
     def add_decision_outcome(
         self,
@@ -190,8 +203,8 @@ class MLPredictor:
                 "laws_ok": laws_ok,
             }
         )
-        if len(self._decision_outcomes) > 200:
-            self._decision_outcomes = self._decision_outcomes[-200:]
+        if len(self._decision_outcomes) > ML_MAX_DECISION_OUTCOMES:
+            self._decision_outcomes = self._decision_outcomes[-ML_MAX_DECISION_OUTCOMES:]
 
     # ── Predictions ─────────────────────────────────────────────
 
@@ -200,7 +213,7 @@ class MLPredictor:
         key = (weekday, hour)
         samples = self._consumption.get(key, [])
         if not samples:
-            return 1.7  # Default house baseload
+            return DEFAULT_PLANNER_HOUSE_BASELOAD_KW
         return sum(samples) / len(samples)
 
     def predict_24h_consumption(self, weekday: int) -> list[float]:
@@ -211,15 +224,19 @@ class MLPredictor:
         """Probability (0-1) that an appliance runs at this hour."""
         total = sum(self._appliance_hours.values())
         if total == 0:
-            return 0.1  # Default 10% baseline
+            return ML_DEFAULT_APPLIANCE_RISK
         return self._appliance_hours.get(hour, 0) / total
 
     def get_plan_correction_factor(self, hour: int) -> float:
         """How much to adjust plan for this hour (1.0 = no correction)."""
         samples = self._plan_accuracy.get(hour, [])
-        if len(samples) < 3:
+        if len(samples) < ML_MIN_PLAN_CORRECTION_SAMPLES:
             return 1.0
-        ratios = [actual / max(0.1, planned) for planned, actual in samples if planned > 0.1]
+        ratios = [
+            actual / max(ML_MIN_PLANNED_THRESHOLD_KW, planned)
+            for planned, actual in samples
+            if planned > ML_MIN_PLANNED_THRESHOLD_KW
+        ]
         if not ratios:
             return 1.0
         return sum(ratios) / len(ratios)
@@ -230,11 +247,11 @@ class MLPredictor:
             return 1.0
         # Simple: high pressure → PV usually better than forecast
         # Low pressure → PV usually worse
-        high = [r for p, r in self._pressure_pv if p > _PRESSURE_HIGH_HPA]
-        low = [r for p, r in self._pressure_pv if p < _PRESSURE_LOW_HPA]
-        if pressure_hpa > _PRESSURE_HIGH_HPA and high:
+        high = [r for p, r in self._pressure_pv if p > ML_PRESSURE_HIGH_HPA]
+        low = [r for p, r in self._pressure_pv if p < ML_PRESSURE_LOW_HPA]
+        if pressure_hpa > ML_PRESSURE_HIGH_HPA and high:
             return sum(high) / len(high)
-        if pressure_hpa < _PRESSURE_LOW_HPA and low:
+        if pressure_hpa < ML_PRESSURE_LOW_HPA and low:
             return sum(low) / len(low)
         return 1.0
 
@@ -255,8 +272,8 @@ class MLPredictor:
         return {
             "consumption": {f"{k[0]}_{k[1]}": v for k, v in self._consumption.items()},
             "appliance_hours": self._appliance_hours,
-            "pressure_pv": self._pressure_pv[-50:],
-            "decision_outcomes": self._decision_outcomes[-50:],
+            "pressure_pv": self._pressure_pv[-ML_SERIALIZE_LIMIT:],
+            "decision_outcomes": self._decision_outcomes[-ML_SERIALIZE_LIMIT:],
         }
 
     def from_dict(self, data: dict[str, Any]) -> None:
@@ -272,4 +289,4 @@ class MLPredictor:
     @property
     def is_trained(self) -> bool:
         """True if we have enough data to make predictions."""
-        return len(self._consumption) >= 24  # At least 1 day of data
+        return len(self._consumption) >= ML_MIN_TRAINED_BUCKETS
