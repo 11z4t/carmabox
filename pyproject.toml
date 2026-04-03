@@ -34,6 +34,10 @@ ignore_missing_imports = true
 module = "custom_components.carmabox.hub"
 warn_unused_ignores = false
 
+[[tool.mypy.overrides]]
+module = "custom_components.carmabox.coordinator"
+warn_unused_ignores = false
+
 
 [tool.coverage.run]
 source = ["custom_components/carmabox"]
