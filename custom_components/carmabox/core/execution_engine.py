@@ -25,16 +25,17 @@ from ..adapters.goodwe import GoodWeAdapter
 from ..const import (
     DEFAULT_BATTERY_1_KWH,
     DEFAULT_BATTERY_2_KWH,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     EV_RAMP_STEPS,
+    MAX_EV_CURRENT,
     PLAN_INTERVAL_SECONDS,
     SCAN_INTERVAL_SECONDS,
 )
+from .audit import AuditEntry
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +63,33 @@ class ExecutionEngine:
                          hårdvaruadaptrarna och tillståndsattributen.
         """
         self._coord = coordinator
+
+    def _audit(
+        self,
+        command: str,
+        target: str,
+        value: str,
+        reason: str,
+        *,
+        safety_result: bool | None = True,
+        plan_hour: int | None = None,
+        source: str = "executor",
+    ) -> None:
+        """Log a hardware write to the audit trail."""
+        audit_log = getattr(self._coord, "audit_log", None)
+        if audit_log is not None:
+            audit_log.add(
+                AuditEntry(
+                    timestamp=datetime.now(),
+                    command=command,
+                    target=target,
+                    value=str(value),
+                    reason=reason,
+                    safety_result=safety_result,
+                    plan_hour=plan_hour,
+                    source=source,
+                )
+            )
 
     # ═══════════════════════════════════════════════════════════════════════
     # execute_v2 — plan-driven execution (PLAT-1141)
@@ -144,7 +172,7 @@ class ExecutionEngine:
         exec_cfg = ExecutorConfig(
             ev_phase_count=ev_phase,
             ev_min_amps=int(opts.get("ev_min_amps", DEFAULT_EV_MIN_AMPS)),
-            ev_max_amps=int(opts.get("ev_max_amps", DEFAULT_EV_MAX_AMPS)),
+            ev_max_amps=int(opts.get("ev_max_amps", MAX_EV_CURRENT)),
             grid_charge_price_threshold=float(opts.get("grid_charge_price_threshold", 15.0)),
         )
         cmd = execute_plan_hour(plan_action, exec_state, exec_cfg)
@@ -674,11 +702,11 @@ class ExecutionEngine:
                 elif alloc.id == "ev":
                     if alloc.action == "start" and alloc.target_w >= _EVSE_3P_6A_W:
                         amps = int(alloc.target_w / (230 * 3))
-                        clamped = max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps))
+                        clamped = max(DEFAULT_EV_MIN_AMPS, min(MAX_EV_CURRENT, amps))
                         await self.cmd_ev_start(clamped)
                     elif alloc.action == "increase":
                         amps = int(alloc.target_w / (230 * 3))
-                        clamped = max(DEFAULT_EV_MIN_AMPS, min(DEFAULT_EV_MAX_AMPS, amps))
+                        clamped = max(DEFAULT_EV_MIN_AMPS, min(MAX_EV_CURRENT, amps))
                         await self.cmd_ev_adjust(clamped)
                     elif alloc.action == "stop":
                         await self.cmd_ev_stop()
@@ -831,6 +859,7 @@ class ExecutionEngine:
                 {"entity_id": self._coord._miner_entity},
             )
             self._coord._miner_on = on
+            self._audit("miner", self._coord._miner_entity or "miner", service, "miner_control")
             await self._coord._async_save_runtime()
         except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: miner control failed", exc_info=True)
@@ -843,9 +872,9 @@ class ExecutionEngine:
         """Starta EV: sätt ström FÖRST, aktivera sedan (förhindrar 16A-burst).
 
         Args:
-            amps: Laddström i ampere (kläms till [DEFAULT_EV_MIN_AMPS, DEFAULT_EV_MAX_AMPS]).
+            amps: Laddström i ampere (kläms till [DEFAULT_EV_MIN_AMPS, MAX_EV_CURRENT]).
         """
-        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, DEFAULT_EV_MAX_AMPS))
+        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, MAX_EV_CURRENT))
         if self._coord._ev_enabled and self._coord._ev_current_amps == amps:
             return
         if not self._coord.ev_adapter:
@@ -870,6 +899,7 @@ class ExecutionEngine:
                 return
         self._coord._ev_enabled = True
         self._coord._ev_current_amps = amps
+        self._audit("ev_start", "easee", f"{amps}A", "ev_charging")
         await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -894,6 +924,7 @@ class ExecutionEngine:
             )
         self._coord._ev_enabled = False
         self._coord._ev_current_amps = 0
+        self._audit("ev_stop", "easee", "0A", "ev_stop")
         await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -911,7 +942,7 @@ class ExecutionEngine:
         """
         if not self._coord.ev_adapter or not self._coord._ev_enabled:
             return
-        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, DEFAULT_EV_MAX_AMPS))
+        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, MAX_EV_CURRENT))
         if amps == self._coord._ev_current_amps:
             return
         if amps > self._coord._ev_current_amps:
@@ -934,6 +965,7 @@ class ExecutionEngine:
             )
         if ok:
             self._coord._ev_current_amps = amps
+            self._audit("ev_adjust", "easee", f"{amps}A", "ev_ramp")
             await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1033,6 +1065,13 @@ class ExecutionEngine:
         if success:
             self._coord._last_command = BatteryCommand.CHARGE_PV
             self._coord.safety.record_mode_change()
+            self._audit(
+                "set_ems_mode",
+                "battery",
+                "charge_pv",
+                "solar_surplus",
+                safety_result=charge_check.ok,
+            )
             await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1145,6 +1184,13 @@ class ExecutionEngine:
         if success:
             self._coord._last_command = BatteryCommand.CHARGE_PV
             self._coord.safety.record_mode_change()
+            self._audit(
+                "set_ems_mode",
+                "battery",
+                "grid_charge",
+                "cheap_price",
+                safety_result=charge_check.ok,
+            )
             await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1205,6 +1251,7 @@ class ExecutionEngine:
         if success:
             self._coord._last_command = BatteryCommand.STANDBY
             self._coord.safety.record_mode_change()
+            self._audit("set_ems_mode", "battery", "standby", "forced" if force else "standby")
             await self._coord._async_save_runtime()
 
     # ═══════════════════════════════════════════════════════════════════════
@@ -1319,6 +1366,13 @@ class ExecutionEngine:
                 self._coord._last_command = BatteryCommand.DISCHARGE
                 self._coord._last_discharge_w = watts
                 self._coord.safety.record_mode_change()
+                self._audit(
+                    "set_ems_mode",
+                    "battery",
+                    f"discharge_{watts}W",
+                    "peak_shaving",
+                    safety_result=discharge_check.ok,
+                )
                 await self._coord._async_save_runtime()
         else:
             opts = self._coord._cfg
@@ -1378,4 +1432,11 @@ class ExecutionEngine:
                 self._coord._last_command = BatteryCommand.DISCHARGE
                 self._coord._last_discharge_w = watts
                 self._coord.safety.record_mode_change()
+                self._audit(
+                    "set_ems_mode",
+                    "battery",
+                    f"discharge_{watts}W",
+                    "peak_shaving",
+                    safety_result=discharge_check.ok,
+                )
                 await self._coord._async_save_runtime()

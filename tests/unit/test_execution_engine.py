@@ -21,7 +21,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from custom_components.carmabox.const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS
+from custom_components.carmabox.const import DEFAULT_EV_MIN_AMPS, MAX_EV_CURRENT
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -395,7 +395,7 @@ async def test_cmd_ev_start_clamps_below_min() -> None:
 
 @pytest.mark.asyncio
 async def test_cmd_ev_start_clamps_above_max() -> None:
-    """Amps above DEFAULT_EV_MAX_AMPS clamped to DEFAULT_EV_MAX_AMPS."""
+    """Amps above MAX_EV_CURRENT clamped to MAX_EV_CURRENT."""
     from custom_components.carmabox.core.execution_engine import ExecutionEngine
 
     ev = _make_ev_adapter()
@@ -403,7 +403,7 @@ async def test_cmd_ev_start_clamps_above_max() -> None:
     engine = ExecutionEngine(coord)
     await engine.cmd_ev_start(99)  # Way above max
 
-    ev.set_current.assert_called_once_with(DEFAULT_EV_MAX_AMPS)
+    ev.set_current.assert_called_once_with(MAX_EV_CURRENT)
 
 
 @pytest.mark.asyncio
@@ -543,9 +543,9 @@ async def test_cmd_ev_adjust_ramp_up_one_step() -> None:
     first_step_above = next(s for s in EV_RAMP_STEPS if s > current)
     coord = _make_coord(ev_enabled=True, ev_amps=current, ev_adapter=ev)
     engine = ExecutionEngine(coord)
-    await engine.cmd_ev_adjust(DEFAULT_EV_MAX_AMPS)  # Target max
+    await engine.cmd_ev_adjust(MAX_EV_CURRENT)  # Target max
 
-    ev.set_current.assert_called_once_with(min(first_step_above, DEFAULT_EV_MAX_AMPS))
+    ev.set_current.assert_called_once_with(min(first_step_above, MAX_EV_CURRENT))
 
 
 @pytest.mark.asyncio
@@ -554,7 +554,7 @@ async def test_cmd_ev_adjust_ramp_down_direct() -> None:
     from custom_components.carmabox.core.execution_engine import ExecutionEngine
 
     ev = _make_ev_adapter()
-    coord = _make_coord(ev_enabled=True, ev_amps=DEFAULT_EV_MAX_AMPS, ev_adapter=ev)
+    coord = _make_coord(ev_enabled=True, ev_amps=MAX_EV_CURRENT, ev_adapter=ev)
     engine = ExecutionEngine(coord)
     await engine.cmd_ev_adjust(DEFAULT_EV_MIN_AMPS)
 
@@ -568,7 +568,7 @@ async def test_cmd_ev_adjust_set_current_ok_updates_state() -> None:
     from custom_components.carmabox.core.execution_engine import ExecutionEngine
 
     ev = _make_ev_adapter()
-    coord = _make_coord(ev_enabled=True, ev_amps=DEFAULT_EV_MAX_AMPS, ev_adapter=ev)
+    coord = _make_coord(ev_enabled=True, ev_amps=MAX_EV_CURRENT, ev_adapter=ev)
     engine = ExecutionEngine(coord)
     await engine.cmd_ev_adjust(8)
 

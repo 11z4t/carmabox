@@ -17,12 +17,12 @@ from __future__ import annotations
 from ..const import (
     DEFAULT_BATTERY_EFFICIENCY,
     DEFAULT_EV_EFFICIENCY,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_VOLTAGE,
+    MAX_EV_CURRENT,
 )
 
 # Price tiers (öre/kWh)
@@ -44,7 +44,7 @@ def calculate_ev_schedule(
     days_since_full_charge: int = 0,
     full_charge_interval_days: int = 7,
     min_amps: int = DEFAULT_EV_MIN_AMPS,
-    max_amps: int = DEFAULT_EV_MAX_AMPS,
+    max_amps: int = MAX_EV_CURRENT,
     voltage: float = DEFAULT_VOLTAGE,
     battery_kwh_available: float = 0.0,
     battery_efficiency: float = DEFAULT_BATTERY_EFFICIENCY,

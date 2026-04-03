@@ -329,7 +329,7 @@ class TestEVStartAmps:
             ev_cap_kwh=92,
             hours_until_departure=1,
         )
-        assert amps == 10  # DEFAULT_EV_MAX_AMPS
+        assert amps == 10  # MAX_EV_CURRENT
 
 
 class TestEVFullCharge:

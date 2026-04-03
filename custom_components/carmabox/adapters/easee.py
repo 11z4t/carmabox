@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
-from ..const import DEFAULT_EV_MAX_AMPS
+from ..const import MAX_EV_CURRENT
 from . import EVAdapter
 
 if TYPE_CHECKING:
@@ -369,11 +369,11 @@ class EaseeAdapter(EVAdapter):
         """Set charging current via dynamic_charger_limit.
 
         Uses set_charger_dynamic_limit (NOT max_limit — max stays at 10A).
-        Range: 6-DEFAULT_EV_MAX_AMPS hard capped (defense-in-depth).
+        Range: 6-MAX_EV_CURRENT hard capped (defense-in-depth).
         """
         await self.ensure_initialized()
         # SAFETY: Never exceed hardware limit regardless of caller
-        amps = max(_DYNAMIC_MIN, min(DEFAULT_EV_MAX_AMPS, amps))
+        amps = max(_DYNAMIC_MIN, min(MAX_EV_CURRENT, amps))
         # Raise max_limit if needed (max_limit must be >= dynamic_limit)
         if amps > _MAX_LIMIT_FLOOR and self.charger_id:
             await self._safe_call(

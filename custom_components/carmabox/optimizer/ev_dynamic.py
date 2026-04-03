@@ -39,7 +39,7 @@ def calculate_dynamic_amps(
         voltage: Grid voltage.
 
     Returns:
-        Optimal EV amps (0 = pause, 6-10 = active charging (max DEFAULT_EV_MAX_AMPS)).
+        Optimal EV amps (0 = pause, 6-10 = active charging (max MAX_EV_CURRENT)).
     """
     if night_weight <= 0:
         return 0

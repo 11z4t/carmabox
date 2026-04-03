@@ -322,9 +322,9 @@ class TestModbusSerializationRegression:
             )
 
         assert hass.services.async_call.call_count == 2
-        assert max_concurrent <= 1, (
-            f"Max {max_concurrent} concurrent Modbus calls — must be serialized!"
-        )
+        assert (
+            max_concurrent <= 1
+        ), f"Max {max_concurrent} concurrent Modbus calls — must be serialized!"
 
     @pytest.mark.asyncio
     async def test_modbus_timeout_retries_once(self) -> None:

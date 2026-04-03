@@ -21,10 +21,10 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..const import (
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
+    MAX_EV_CURRENT,
 )
 from .battery_balancer import BatteryInfo, calculate_proportional_discharge
 from .grid_guard import BatteryState, GridGuard, GridGuardConfig
@@ -62,7 +62,7 @@ class CoordinatorConfig:
     max_discharge_kw: float = 5.0
     ev_phase_count: int = 3
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS
-    ev_max_amps: int = DEFAULT_EV_MAX_AMPS
+    ev_max_amps: int = MAX_EV_CURRENT
     ev_target_soc: float = 75.0
     ev_departure_hour: int = 6
     ev_capacity_kwh: float = 92.0

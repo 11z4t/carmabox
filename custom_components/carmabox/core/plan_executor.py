@@ -23,9 +23,9 @@ from dataclasses import dataclass
 
 from ..const import (
     DEFAULT_EV_FULL_CHARGE_DAYS,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_EV_NIGHT_TARGET_SOC,
+    MAX_EV_CURRENT,
 )
 
 _BATTERY_SOC_DRIFT_THRESHOLD = 15  # % — trigger replan if SoC differs by more than this
@@ -50,7 +50,7 @@ class ExecutorConfig:
 
     ev_phase_count: int = 3
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS
-    ev_max_amps: int = DEFAULT_EV_MAX_AMPS
+    ev_max_amps: int = MAX_EV_CURRENT
     grid_charge_price_threshold: float = 15.0
     pv_charge_threshold_w: float = 500.0
     reactive_discharge_margin: float = 1.05  # Discharge if grid > target x this
@@ -210,7 +210,7 @@ def calculate_ev_amps(
     headroom_kw: float,
     phase_count: int = 3,
     min_amps: int = DEFAULT_EV_MIN_AMPS,
-    max_amps: int = DEFAULT_EV_MAX_AMPS,
+    max_amps: int = MAX_EV_CURRENT,
 ) -> int:
     """Calculate max EV amps that fit within grid headroom.
 
@@ -233,7 +233,7 @@ def calculate_ev_start_amps(
     phase_count: int = 3,
     voltage: float = 230.0,
     min_amps: int = DEFAULT_EV_MIN_AMPS,
-    max_amps: int = DEFAULT_EV_MAX_AMPS,
+    max_amps: int = MAX_EV_CURRENT,
 ) -> int:
     """Calculate minimum EV amps to reach target by departure.
 

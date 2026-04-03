@@ -53,7 +53,6 @@ from .const import (
     DEFAULT_BATTERY_MIN_SOC,
     DEFAULT_DAILY_BATTERY_NEED_KWH,
     DEFAULT_DAILY_CONSUMPTION_KWH,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_EV_NIGHT_HEADROOM_KW,
     DEFAULT_EV_NIGHT_TARGET_SOC,
@@ -90,6 +89,7 @@ from .const import (
     EV_STUCK_TIMEOUT_S,
     LUX_DARK,
     LUX_DAYLIGHT,
+    MAX_EV_CURRENT,
     PLAN_INTERVAL_SECONDS,
     PV_ACTIVE_THRESHOLD_W,
     SCAN_INTERVAL_SECONDS,
@@ -1083,7 +1083,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         exec_cfg = ExecutorConfig(
             ev_phase_count=ev_phase,
             ev_min_amps=int(opts.get("ev_min_amps", DEFAULT_EV_MIN_AMPS)),
-            ev_max_amps=int(opts.get("ev_max_amps", DEFAULT_EV_MAX_AMPS)),
+            ev_max_amps=int(opts.get("ev_max_amps", MAX_EV_CURRENT)),
             grid_charge_price_threshold=float(opts.get("grid_charge_price_threshold", 15.0)),
         )
         cmd = execute_plan_hour(plan_action, exec_state, exec_cfg)
@@ -1574,7 +1574,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 priority=1,
                 type=ConsumerType.VARIABLE,
                 min_w=230 * ev_phase * DEFAULT_EV_MIN_AMPS,
-                max_w=230 * ev_phase * DEFAULT_EV_MAX_AMPS,
+                max_w=230 * ev_phase * MAX_EV_CURRENT,
                 current_w=ev_power,
                 is_running=ev_power > 100,
                 phase_count=ev_phase,
@@ -4569,7 +4569,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     bat_available,
                 )
             optimal_amps = max(0, int(headroom_kw * 1000 / DEFAULT_VOLTAGE))
-            optimal_amps = min(optimal_amps, DEFAULT_EV_MAX_AMPS)
+            optimal_amps = min(optimal_amps, MAX_EV_CURRENT)
 
             if optimal_amps >= DEFAULT_EV_MIN_AMPS:
                 if not self._ev_enabled:
@@ -4610,7 +4610,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
             solar_amps = min(
                 max(0, int(export_kw * 1000 / DEFAULT_VOLTAGE)),
-                DEFAULT_EV_MAX_AMPS,
+                MAX_EV_CURRENT,
             )
 
             if not self._ev_enabled:
@@ -4789,7 +4789,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
     async def _cmd_ev_start(self, amps: int = DEFAULT_EV_MIN_AMPS) -> None:
         """Start EV: set current FIRST, then enable (prevent 16A burst)."""
-        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, DEFAULT_EV_MAX_AMPS))
+        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, MAX_EV_CURRENT))
         if self._ev_enabled and self._ev_current_amps == amps:
             return
         if not self.ev_adapter:
@@ -4848,7 +4848,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """
         if not self.ev_adapter or not self._ev_enabled:
             return
-        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, DEFAULT_EV_MAX_AMPS))
+        amps = max(DEFAULT_EV_MIN_AMPS, min(amps, MAX_EV_CURRENT))
         if amps == self._ev_current_amps:
             return
         # EXP-04: Ramp UP = one step at a time per EV_RAMP_STEPS
@@ -5404,7 +5404,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             },
             {
                 "id": "guard_ev_max",
-                "label": f"EV max {DEFAULT_EV_MAX_AMPS}A",
+                "label": f"EV max {MAX_EV_CURRENT}A",
                 "icon": "mdi:flash-alert",
                 "status": "ok",
             },

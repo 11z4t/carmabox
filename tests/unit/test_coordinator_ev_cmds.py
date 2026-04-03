@@ -159,7 +159,7 @@ class TestCmdEvStart:
 
     @pytest.mark.asyncio
     async def test_clamps_amps_above_max(self) -> None:
-        """amps > DEFAULT_EV_MAX_AMPS → clamped to max (10A)."""
+        """amps > MAX_EV_CURRENT → clamped to max (10A)."""
         coord = _make_coord()
 
         await coord._cmd_ev_start(999)

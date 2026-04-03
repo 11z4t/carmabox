@@ -115,7 +115,7 @@ def test_no_magic_numbers_in_if_statements():
 
 
 def test_no_16a_in_codebase():
-    """16A EV current is FORBIDDEN — max is 10A (DEFAULT_EV_MAX_AMPS)."""
+    """16A EV current is FORBIDDEN — max is 10A (MAX_EV_CURRENT)."""
     all_py = list(Path("custom_components/carmabox").rglob("*.py"))
     violations = []
     for fpath in all_py:

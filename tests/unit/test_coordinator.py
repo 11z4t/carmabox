@@ -2244,7 +2244,7 @@ class TestSurplusEvAmpClamping:
     @pytest.mark.parametrize(
         "target_w, action, expected_amps",
         [
-            # amps = int(W / 690). Clamped to [DEFAULT_EV_MIN_AMPS, DEFAULT_EV_MAX_AMPS] = [6, 10]
+            # amps = int(W / 690). Clamped to [DEFAULT_EV_MIN_AMPS, MAX_EV_CURRENT] = [6, 10]
             (0, "start", 6),  # 0A → clamped to min 6
             (3450, "start", 6),  # 5A → clamped to min 6
             (4140, "start", 6),  # 6A → exactly min
@@ -2259,10 +2259,10 @@ class TestSurplusEvAmpClamping:
         ],
     )
     async def test_ev_amp_clamping(self, target_w, action, expected_amps):
-        """Amps must never exceed DEFAULT_EV_MAX_AMPS or go below DEFAULT_EV_MIN_AMPS."""
+        """Amps must never exceed MAX_EV_CURRENT or go below DEFAULT_EV_MIN_AMPS."""
         from custom_components.carmabox.const import (
-            DEFAULT_EV_MAX_AMPS,
             DEFAULT_EV_MIN_AMPS,
+            MAX_EV_CURRENT,
         )
         from custom_components.carmabox.core.surplus_chain import SurplusAllocation
 
@@ -2286,10 +2286,10 @@ class TestSurplusEvAmpClamping:
             actual = coord._execution_engine.cmd_ev_start.call_args[0][0]
             assert actual == expected_amps
             assert actual >= DEFAULT_EV_MIN_AMPS
-            assert actual <= DEFAULT_EV_MAX_AMPS
+            assert actual <= MAX_EV_CURRENT
         elif action == "increase":
             coord._execution_engine.cmd_ev_adjust.assert_called_once()
             actual = coord._execution_engine.cmd_ev_adjust.call_args[0][0]
             assert actual == expected_amps
             assert actual >= DEFAULT_EV_MIN_AMPS
-            assert actual <= DEFAULT_EV_MAX_AMPS
+            assert actual <= MAX_EV_CURRENT

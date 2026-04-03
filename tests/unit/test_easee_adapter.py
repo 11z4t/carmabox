@@ -16,7 +16,7 @@ from custom_components.carmabox.adapters.easee import (
     _MAX_LIMIT_FLOOR,
     EaseeAdapter,
 )
-from custom_components.carmabox.const import DEFAULT_EV_MAX_AMPS
+from custom_components.carmabox.const import MAX_EV_CURRENT
 
 
 def _make_hass(*entities: tuple[str, str]) -> MagicMock:
@@ -39,11 +39,11 @@ CHARGER_ID = "EH12840"
 
 
 class TestSetCurrentClamp:
-    """AC: set_current clamps to [_DYNAMIC_MIN, DEFAULT_EV_MAX_AMPS]."""
+    """AC: set_current clamps to [_DYNAMIC_MIN, MAX_EV_CURRENT]."""
 
     @pytest.mark.asyncio
     async def test_set_current_clamp_upper(self) -> None:
-        """set_current(20) → clamped to DEFAULT_EV_MAX_AMPS (10A)."""
+        """set_current(20) → clamped to MAX_EV_CURRENT (10A)."""
         hass = _make_hass()
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
         await adapter.set_current(20)
@@ -52,7 +52,7 @@ class TestSetCurrentClamp:
         assert last_call[0] == (
             "easee",
             "set_charger_dynamic_limit",
-            {"charger_id": CHARGER_ID, "current": DEFAULT_EV_MAX_AMPS},
+            {"charger_id": CHARGER_ID, "current": MAX_EV_CURRENT},
         )
 
     @pytest.mark.asyncio
@@ -90,9 +90,9 @@ class TestSetCurrentClamp:
         last_call = hass.services.async_call.call_args
         assert last_call[0][2]["current"] == _DYNAMIC_MIN
 
-        await adapter.set_current(DEFAULT_EV_MAX_AMPS)
+        await adapter.set_current(MAX_EV_CURRENT)
         last_call = hass.services.async_call.call_args
-        assert last_call[0][2]["current"] == DEFAULT_EV_MAX_AMPS
+        assert last_call[0][2]["current"] == MAX_EV_CURRENT
 
 
 class TestEnsureInitialized:

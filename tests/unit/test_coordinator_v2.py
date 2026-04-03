@@ -1,6 +1,6 @@
 """Tests for Coordinator V2 — full cycle integration."""
 
-from custom_components.carmabox.const import DEFAULT_EV_MAX_AMPS
+from custom_components.carmabox.const import MAX_EV_CURRENT
 from custom_components.carmabox.core.coordinator_v2 import (
     CoordinatorConfig,
     CoordinatorV2,
@@ -134,9 +134,9 @@ class TestPlanExecution:
             )
         )
         # PV charge: with 3kW PV and plan action=charge, coordinator must command charge_pv
-        assert any(b["mode"] == "charge_pv" for b in r.battery_commands), (
-            f"Expected charge_pv command, got: {r.battery_commands}"
-        )
+        assert any(
+            b["mode"] == "charge_pv" for b in r.battery_commands
+        ), f"Expected charge_pv command, got: {r.battery_commands}"
 
 
 class TestNightEV:
@@ -231,7 +231,7 @@ class TestSensorsReadyFullPV:
 
 
 class TestEVMaxAmps:
-    """PLAT-1048: EV command amps must never exceed DEFAULT_EV_MAX_AMPS."""
+    """PLAT-1048: EV command amps must never exceed MAX_EV_CURRENT."""
 
     def test_ev_max_amps_respected_night_ev(self):
         """Night EV start must not exceed configured max amps."""
@@ -247,9 +247,9 @@ class TestEVMaxAmps:
             )
         )
         assert r.ev_command is not None, "Night EV should start"
-        assert r.ev_command["amps"] <= DEFAULT_EV_MAX_AMPS, (
-            f"EV amps {r.ev_command['amps']} exceeds max {DEFAULT_EV_MAX_AMPS}"
-        )
+        assert (
+            r.ev_command["amps"] <= MAX_EV_CURRENT
+        ), f"EV amps {r.ev_command['amps']} exceeds max {MAX_EV_CURRENT}"
 
     def test_ev_max_amps_respected_restored(self):
         """Restored night EV must not exceed max amps."""
@@ -257,9 +257,9 @@ class TestEVMaxAmps:
         c.set_restored_state(StartupState(night_ev_active=True, ev_enabled=True))
         r = c.cycle(_state(ev_soc=60, ev_connected=True, hour=23))
         assert r.ev_command is not None
-        assert r.ev_command["amps"] <= DEFAULT_EV_MAX_AMPS, (
-            f"Restored EV amps {r.ev_command['amps']} exceeds max {DEFAULT_EV_MAX_AMPS}"
-        )
+        assert (
+            r.ev_command["amps"] <= MAX_EV_CURRENT
+        ), f"Restored EV amps {r.ev_command['amps']} exceeds max {MAX_EV_CURRENT}"
 
 
 class TestGridGuardBlocksNightEV:

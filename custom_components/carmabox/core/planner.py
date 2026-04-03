@@ -19,7 +19,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..const import (
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PEAK_TOP_N,
@@ -28,6 +27,7 @@ from ..const import (
     DEFAULT_PLANNER_NIGHT_HOURS,
     DEFAULT_VOLTAGE,
     GRID_LIMIT_DEFAULT_KW,
+    MAX_EV_CURRENT,
     P10_DISCHARGE_CONSERVATIVE_KW,
     P10_DISCHARGE_MODERATE_KW,
     P10_DISCHARGE_NORMAL_KW,
@@ -77,7 +77,7 @@ def plan_solar_allocation(
     sunset_hour: int = 19,
     ev_phase_count: int = 3,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
-    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    ev_max_amps: int = MAX_EV_CURRENT,
     voltage: float = DEFAULT_VOLTAGE,
     pv_confidence: float = 1.0,
 ) -> SolarAllocationResult:
@@ -353,7 +353,7 @@ def allocate_pv_surplus(
     hourly_pv_remaining_kw: list[float],
     pv_confidence: float = 1.0,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
-    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    ev_max_amps: int = MAX_EV_CURRENT,
     voltage: float = DEFAULT_VOLTAGE,
     ellevio_tak_w: float = 2000.0,
     battery_max_charge_w: float = 5000,

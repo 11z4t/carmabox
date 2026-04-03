@@ -27,7 +27,6 @@ from ..const import (
     DEFAULT_BAT_MIN_CHARGE_W,
     DEFAULT_CLIMATE_BOOST_DEGREES,
     DEFAULT_CLIMATE_BOOST_MIN_SURPLUS_W,
-    DEFAULT_EV_MAX_AMPS,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_SURPLUS_BUMP_DELAY_S,
     DEFAULT_SURPLUS_MIN_W,
@@ -38,6 +37,7 @@ from ..const import (
     DEFAULT_SURPLUS_VP_KONTOR_W,
     DEFAULT_SURPLUS_VP_POOL_W,
     DEFAULT_VOLTAGE,
+    MAX_EV_CURRENT,
 )
 
 _INCREASE_NOISE_W = 50  # W — minimum increase to bother sending a new command
@@ -112,7 +112,7 @@ class SurplusConfig:
 def build_default_consumers(
     ev_phase_count: int = 3,
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
-    ev_max_amps: int = DEFAULT_EV_MAX_AMPS,
+    ev_max_amps: int = MAX_EV_CURRENT,
     miner_w: float = DEFAULT_SURPLUS_MINER_W,
     vp_kontor_w: float = DEFAULT_SURPLUS_VP_KONTOR_W,
     vp_pool_w: float = DEFAULT_SURPLUS_VP_POOL_W,

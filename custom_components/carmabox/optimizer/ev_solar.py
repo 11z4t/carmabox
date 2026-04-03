@@ -9,7 +9,7 @@ Priority: battery > EV > export.
 
 from __future__ import annotations
 
-from ..const import DEFAULT_EV_MAX_AMPS, DEFAULT_EV_MIN_AMPS, DEFAULT_VOLTAGE
+from ..const import DEFAULT_EV_MIN_AMPS, DEFAULT_VOLTAGE, MAX_EV_CURRENT
 
 
 def should_start_solar_ev(
@@ -74,7 +74,7 @@ def should_stop_solar_ev(
 def calculate_solar_ev_amps(
     pv_surplus_kw: float,
     min_amps: int = DEFAULT_EV_MIN_AMPS,
-    max_amps: int = DEFAULT_EV_MAX_AMPS,
+    max_amps: int = MAX_EV_CURRENT,
     voltage: float = DEFAULT_VOLTAGE,
 ) -> int:
     """Calculate EV amps from PV surplus.
@@ -88,7 +88,7 @@ def calculate_solar_ev_amps(
         voltage: Grid voltage.
 
     Returns:
-        EV amps (0 if below minimum, 6-10 otherwise (max DEFAULT_EV_MAX_AMPS)).
+        EV amps (0 if below minimum, 6-10 otherwise (max MAX_EV_CURRENT)).
     """
     amps = int(pv_surplus_kw * 1000 / voltage)
     if amps < min_amps:
