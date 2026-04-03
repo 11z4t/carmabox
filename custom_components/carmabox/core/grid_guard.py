@@ -245,7 +245,7 @@ class GridGuard:
             effective_status = (
                 "BRAKE" if level == "BRAKE" and self._status == "OK" else self._status
             )
-            brake_commands: list[dict] = (
+            brake_commands: list[dict[str, Any]] = (
                 [{"action": "limit_grid_charging"}] if self._braking else []
             )
             if effective_status == "BRAKE":
