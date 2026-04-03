@@ -106,6 +106,7 @@ def _make_coordinator(
     coord._miner_on = False
     coord._taper_active = False
     coord._cold_lock_active = False
+    coord._pv_low_since = None  # PLAT-1076: solar hysteresis timer
     # IT-2067: Peak tracking, spike, reserve, dynamic discharge
     from custom_components.carmabox.const import PEAK_RANK_COUNT
 
@@ -2303,3 +2304,102 @@ class TestSurplusEvAmpClamping:
             assert actual == expected_amps
             assert actual >= DEFAULT_EV_MIN_AMPS
             assert actual <= MAX_EV_CURRENT
+
+
+# ---------------------------------------------------------------------------
+# PLAT-1076: Standby-oscillation vid grid=0W
+# Solar-charge must NOT fall to standby when PV > PV_ACTIVE_THRESHOLD_W
+# ---------------------------------------------------------------------------
+@pytest.mark.asyncio
+class TestSolarStandbyOscillation:
+    """PLAT-1076 — grid=0 + PV active must stay in charge_pv, never oscillate."""
+
+    async def test_grid_zero_pv_active_gives_charge_pv(self) -> None:
+        """grid=0W + pv=500W → charge_pv (INTE standby).
+
+        PV is producing but exactly covering house load, so grid=0.
+        Solar-charge rule must recognise PV>threshold as solar-active.
+        """
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        state = CarmaboxState(
+            grid_power_w=0,
+            pv_power_w=500,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    async def test_grid_zero_pv_zero_gives_standby(self) -> None:
+        """grid=0W + pv=0W → standby OK.
+
+        No PV and no export: no solar, standby is correct.
+        """
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        state = CarmaboxState(
+            grid_power_w=0,
+            pv_power_w=0,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        # With no solar and no significant grid load, system goes standby/idle
+        assert coord._last_command in (BatteryCommand.STANDBY, BatteryCommand.IDLE)
+
+    async def test_grid_import_pv_zero_hysteresis_keeps_charge_pv(self) -> None:
+        """grid=100W + pv=0W, was recently in charge_pv → stays charge_pv (hysteresis).
+
+        Cloud cover drops PV to 0 and grid goes slightly positive.
+        Hysteresis timer must prevent immediate standby transition.
+        """
+        import time
+
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._last_command = BatteryCommand.CHARGE_PV
+        # _pv_low_since just set (< PV_LOW_STANDBY_DELAY_S ago)
+        coord._pv_low_since = time.monotonic() - 10  # 10 s ago, well within 300 s
+        state = CarmaboxState(
+            grid_power_w=100,
+            pv_power_w=0,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        assert coord._last_command == BatteryCommand.CHARGE_PV
+
+    async def test_grid_zero_pv_below_threshold_gives_standby(self) -> None:
+        """grid=0W + pv=50W (below 200W threshold) → standby OK.
+
+        50W is below PV_ACTIVE_THRESHOLD_W, not considered solar-active.
+        """
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        state = CarmaboxState(
+            grid_power_w=0,
+            pv_power_w=50,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        assert coord._last_command in (BatteryCommand.STANDBY, BatteryCommand.IDLE)
+
+    async def test_hysteresis_expires_gives_standby(self) -> None:
+        """After PV_LOW_STANDBY_DELAY_S of no PV, transition to standby.
+
+        Once hysteresis timer expires, system must leave solar-charge mode.
+        """
+        import time
+
+        from custom_components.carmabox.const import PV_LOW_STANDBY_DELAY_S
+
+        coord = _make_coordinator({"battery_ems_1": "select.ems1"})
+        coord._last_command = BatteryCommand.CHARGE_PV
+        # Simulate timer expired: pv_low_since is older than the delay
+        coord._pv_low_since = time.monotonic() - (PV_LOW_STANDBY_DELAY_S + 60)
+        state = CarmaboxState(
+            grid_power_w=0,
+            pv_power_w=0,
+            battery_soc_1=50,
+            battery_soc_2=-1,
+        )
+        await coord._execute(state)
+        assert coord._last_command in (BatteryCommand.STANDBY, BatteryCommand.IDLE)

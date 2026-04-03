@@ -92,6 +92,7 @@ from .const import (
     MAX_EV_CURRENT,
     PLAN_INTERVAL_SECONDS,
     PV_ACTIVE_THRESHOLD_W,
+    PV_LOW_STANDBY_DELAY_S,
     SCAN_INTERVAL_SECONDS,
 )
 from .core.audit import AuditLog
@@ -205,6 +206,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self.plan: list[HourPlan] = []
         self._taper_active: bool = False
         self._cold_lock_active: bool = False
+        # PLAT-1076: Hysteresis — track when PV first dropped below active threshold
+        # Only exit solar-charge mode after PV has been low for _PV_LOW_STANDBY_DELAY_S
+        self._pv_low_since: float | None = None
         # Compatibility attributes for sensor.py (scheduler_plan.X)
         self.breaches: list[Any] = []
         self.breach_count_month: int = 0
@@ -3256,10 +3260,23 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
 
         # ── RULE 0.5: PV surplus + battery not full → charge_pv ──
-        # ONLY charge batteries from PV if we are EXPORTING (PV > house load).
-        # If grid is importing, PV doesn't cover house — don't add battery
-        # charging load on top (it increases grid import).
-        if pv_kw > 0.5 and not state.all_batteries_full and state.is_exporting:
+        # Solar is active when exporting (PV > house load) OR when PV exceeds the
+        # active threshold even though grid=0W (PV exactly covers house load).
+        # In charge_pv EMS mode the inverter only draws from PV, so grid stays ~0W.
+        # PLAT-1076: grid=0W with PV>threshold must NOT fall to standby.
+        pv_solar_active = state.is_exporting or state.pv_power_w > PV_ACTIVE_THRESHOLD_W
+        # PLAT-1076: Hysteresis — require PV to be below threshold for
+        # PV_LOW_STANDBY_DELAY_S before allowing a solar→standby transition.
+        if not pv_solar_active:
+            if self._pv_low_since is None:
+                self._pv_low_since = time.monotonic()
+            pv_solar_active = (
+                time.monotonic() - self._pv_low_since < PV_LOW_STANDBY_DELAY_S
+                and self._last_command in (BatteryCommand.CHARGE_PV, BatteryCommand.CHARGE_PV_TAPER)
+            )
+        else:
+            self._pv_low_since = None
+        if pv_solar_active and not state.all_batteries_full:
             charge_result = self.safety.check_charge(
                 state.battery_soc_1, state.battery_soc_2, temp_c
             )

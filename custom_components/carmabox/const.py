@@ -421,6 +421,8 @@ SCHEDULER_CORRECTION_MIN_AVAIL_KWH: float = 1.0  # Min available kWh to apply di
 POWER_NOISE_THRESHOLD_W = 50  # Min power to consider device active
 GRID_EXPORT_NOISE_W = 100  # Min export before acting on it
 PV_ACTIVE_THRESHOLD_W = 200  # Min PV to consider solar producing
+# PLAT-1076: seconds PV must stay below threshold before leaving solar-charge mode
+PV_LOW_STANDBY_DELAY_S = 300
 
 # Illuminance transitions (PLAT-1086)
 LUX_DAYLIGHT = 5000  # Above = bright daylight

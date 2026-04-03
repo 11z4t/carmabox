@@ -237,6 +237,8 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     # Rule tracking (IT-1937)
     coord._rule_triggers = {}
     coord._active_rule_id = ""
+    # PLAT-1076: solar hysteresis timer
+    coord._pv_low_since = None
 
     # Self-healing (PLAT-972)
     coord._ems_consecutive_failures = 0

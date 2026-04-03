@@ -116,6 +116,7 @@ def _make_coord(options: dict[str, object] | None = None) -> CarmaboxCoordinator
     coord._avg_price_initialized = True
     coord._taper_active = False
     coord._cold_lock_active = False
+    coord._pv_low_since = None  # PLAT-1076
     coord._grid_samples = []
     coord._grid_sample_max = 10
     coord._disabled_methods = {}
