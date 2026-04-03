@@ -561,7 +561,7 @@ def _schedule_miner(
 
     for i in range(num_hours):
         pv = hourly_pv[i] if i < len(hourly_pv) else 0.0
-        load = hourly_loads[i] if i < len(hourly_loads) else 1.5
+        load = hourly_loads[i] if i < len(hourly_loads) else SCHEDULER_LOAD_ALT_FALLBACK_KW
         ev = hourly_ev[i] if i < len(hourly_ev) else 0.0
         batt = hourly_battery[i] if i < len(hourly_battery) else 0.0
 
