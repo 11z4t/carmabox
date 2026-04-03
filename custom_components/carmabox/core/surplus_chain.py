@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -38,6 +39,8 @@ from ..const import (
     DEFAULT_SURPLUS_VP_POOL_W,
     DEFAULT_VOLTAGE,
     MAX_EV_CURRENT,
+    MAX_SURPLUS_SWITCHES_PER_WINDOW,
+    SURPLUS_SWITCH_WINDOW_MIN,
 )
 
 _INCREASE_NOISE_W = 50  # W — minimum increase to bother sending a new command
@@ -90,6 +93,13 @@ class SurplusResult:
     export_w: float  # Remaining export (goal: 0)
     actions_taken: int
 
+    @property
+    def self_consumption_ratio(self) -> float:
+        """Fraction of available surplus consumed locally (0.0-1.0)."""
+        if self.surplus_w <= 0:
+            return 1.0
+        return min(1.0, self.allocated_w / self.surplus_w)
+
 
 @dataclass
 class HysteresisState:
@@ -107,6 +117,35 @@ class SurplusConfig:
     stop_delay_s: float = DEFAULT_SURPLUS_STOP_DELAY_S  # Wait before stopping consumer
     bump_delay_s: float = DEFAULT_SURPLUS_BUMP_DELAY_S  # Wait before bumping low→high prio
     min_surplus_w: float = DEFAULT_SURPLUS_MIN_W  # Ignore surplus below this
+
+
+@dataclass
+class SwitchTracker:
+    """Rate-limits surplus switching to prevent oscillation.
+
+    Allows at most MAX_SURPLUS_SWITCHES_PER_WINDOW switch events within
+    a SURPLUS_SWITCH_WINDOW_MIN rolling window.
+    """
+
+    _switch_history: list[datetime] = field(default_factory=list)
+
+    def _check_switch_limit(
+        self,
+        window_min: int = SURPLUS_SWITCH_WINDOW_MIN,
+        max_switches: int = MAX_SURPLUS_SWITCHES_PER_WINDOW,
+    ) -> bool:
+        """Return True if another switch is allowed within the current window."""
+        now = datetime.now()
+        cutoff = now - timedelta(minutes=window_min)
+        recent = [t for t in self._switch_history if t > cutoff]
+        return len(recent) < max_switches
+
+    def record_switch(self, ts: datetime | None = None) -> None:
+        """Record a switch event and prune expired history."""
+        now = ts if ts is not None else datetime.now()
+        self._switch_history.append(now)
+        cutoff = now - timedelta(minutes=SURPLUS_SWITCH_WINDOW_MIN * 2)
+        self._switch_history = [t for t in self._switch_history if t > cutoff]
 
 
 def build_default_consumers(

@@ -444,3 +444,9 @@ SCENARIO_MIN_COUNT: int = 5  # Min antal scenarios för meningsfull jämförelse
 
 # ── PLAT-1226: Night Planner ────────────────────────────────────────────────
 MAX_NIGHTLY_SOC_DELTA_PCT: int = 20  # Max EV SoC increase per night (%)
+
+# ── PLAT-1227: Surplus Planner ─────────────────────────────────────────────
+MAX_SURPLUS_SWITCHES_PER_WINDOW: int = 2  # Max switch events per rate-limit window
+SURPLUS_SWITCH_WINDOW_MIN: int = 30  # Rate-limit window (minutes)
+SURPLUS_START_THRESHOLD_KW: float = 1.0  # Min surplus to start consumers (kW)
+SURPLUS_STOP_THRESHOLD_KW: float = 0.5  # Surplus below this → stop consumers (kW)
