@@ -44,6 +44,14 @@ class EllevioState:
     )
     target_kw: float = 2.0
 
+    def to_dict(self) -> dict[str, object]:
+        """Return dict representation of EllevioState."""
+        return {
+            "month_peak_kw": self.month_peak_kw,
+            "top3_weighted_hours": list(self.top3_weighted_hours),
+            "target_kw": self.target_kw,
+        }
+
 
 # ---- ScenarioCost -------------------------------------------------------
 
@@ -75,6 +83,16 @@ class ScenarioCost:
             + self.export_loss_kr
             + self.deferred_cost_kr
         )
+
+    def to_dict(self) -> dict[str, float]:
+        """Return dict representation of ScenarioCost including total_kr."""
+        return {
+            "grid_cost_kr": self.grid_cost_kr,
+            "ellevio_penalty_kr": self.ellevio_penalty_kr,
+            "export_loss_kr": self.export_loss_kr,
+            "deferred_cost_kr": self.deferred_cost_kr,
+            "total_kr": self.total_kr,
+        }
 
 
 # ---- CostModel ----------------------------------------------------------

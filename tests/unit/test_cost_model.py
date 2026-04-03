@@ -402,3 +402,33 @@ class TestDeferredCost:
         )
         expected = 6.9 * 30.0 / 100.0
         assert result.deferred_cost_kr == pytest.approx(expected, abs=0.01)
+
+
+# ---- to_dict ------------------------------------------------------------
+
+
+class TestToDict:
+    def test_scenario_cost_to_dict_contains_all_fields(self) -> None:
+        sc = ScenarioCost(
+            grid_cost_kr=1.0,
+            ellevio_penalty_kr=2.0,
+            export_loss_kr=0.5,
+            deferred_cost_kr=0.3,
+        )
+        d = sc.to_dict()
+        assert d["grid_cost_kr"] == pytest.approx(1.0)
+        assert d["ellevio_penalty_kr"] == pytest.approx(2.0)
+        assert d["export_loss_kr"] == pytest.approx(0.5)
+        assert d["deferred_cost_kr"] == pytest.approx(0.3)
+        assert d["total_kr"] == pytest.approx(3.8)
+
+    def test_ellevio_state_to_dict_contains_all_fields(self) -> None:
+        es = EllevioState(
+            month_peak_kw=1.5,
+            top3_weighted_hours=[1.2, 1.4, 1.5],
+            target_kw=2.0,
+        )
+        d = es.to_dict()
+        assert d["month_peak_kw"] == pytest.approx(1.5)
+        assert d["top3_weighted_hours"] == [1.2, 1.4, 1.5]
+        assert d["target_kw"] == pytest.approx(2.0)
