@@ -17,7 +17,11 @@ from ..const import (
     DEFAULT_EV_NIGHT_TARGET_SOC,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
+    DISHWASHER_RUNTIME_H,
+    EV_TACTICAL_DELTA_PCT,
+    GOODWE_KONTOR_CHARGE_KW,
     MAX_NIGHTLY_SOC_DELTA_PCT,
+    NIGHT_DEFER_PRICE_FACTOR,
 )
 
 if TYPE_CHECKING:
@@ -50,7 +54,7 @@ def _tomorrow_night_cheaper(
     """Return True if tomorrow night is cheaper than tonight on average."""
     tonight_avg = _night_avg_price(tonight_prices_ore)
     tomorrow_avg = _night_avg_price(tomorrow_prices_ore)
-    return tomorrow_avg < tonight_avg * 0.9  # 10% cheaper threshold
+    return tomorrow_avg < tonight_avg * NIGHT_DEFER_PRICE_FACTOR  # 10% cheaper threshold
 
 
 def _build_night_window(current_hour: int) -> list[int]:
@@ -122,8 +126,8 @@ def calculate_ev_trajectory(
         # Spread over multiple nights: add up to MAX_NIGHTLY_SOC_DELTA_PCT
         tonight_target = max(daily_min, min(100.0, current_soc + MAX_NIGHTLY_SOC_DELTA_PCT))
     else:
-        # Tactical: minimal +5 %, respect delta cap
-        raw = max(daily_min, current_soc + 5.0)
+        # Tactical: minimal EV_TACTICAL_DELTA_PCT, respect delta cap
+        raw = max(daily_min, current_soc + EV_TACTICAL_DELTA_PCT)
         tonight_target = min(raw, current_soc + MAX_NIGHTLY_SOC_DELTA_PCT)
 
     return max(daily_min, min(100.0, tonight_target))
@@ -396,7 +400,7 @@ class NightPlanner:
             NightSlot(
                 hour=h,
                 device="battery_kontor",
-                power_kw=3.6,
+                power_kw=GOODWE_KONTOR_CHARGE_KW,
                 duration_min=60,
                 reason="fallback",
             )
@@ -448,7 +452,7 @@ class NightPlanner:
             hour=best_hour,
             device="dishwasher",
             power_kw=power_kw,
-            duration_min=120,
+            duration_min=int(DISHWASHER_RUNTIME_H * 60),
             reason="dishwasher_needed",
         )
 
