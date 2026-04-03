@@ -972,9 +972,9 @@ class TestPriceAwareDischargeThrottling:
 
         assert coord._last_command == BatteryCommand.DISCHARGE
         # Unthrottled: (4000-2000)/1 = 2000 W; throttled: max(100, 2000//2) = 1000 W
-        assert coord.last_decision.discharge_w <= 1000, (
-            f"Expected throttled discharge ≤ 1000 W, got {coord.last_decision.discharge_w} W"
-        )
+        assert (
+            coord.last_decision.discharge_w <= 1000
+        ), f"Expected throttled discharge ≤ 1000 W, got {coord.last_decision.discharge_w} W"
 
     @pytest.mark.asyncio
     async def test_no_throttle_when_price_stays_similar(self) -> None:
@@ -998,9 +998,9 @@ class TestPriceAwareDischargeThrottling:
 
         assert coord._last_command == BatteryCommand.DISCHARGE
         # 5% drop < 30% threshold → no throttle → ~2000 W
-        assert coord.last_decision.discharge_w >= 1500, (
-            f"Expected full discharge ≥ 1500 W, got {coord.last_decision.discharge_w} W"
-        )
+        assert (
+            coord.last_decision.discharge_w >= 1500
+        ), f"Expected full discharge ≥ 1500 W, got {coord.last_decision.discharge_w} W"
 
     @pytest.mark.asyncio
     async def test_no_throttle_with_empty_plan(self) -> None:

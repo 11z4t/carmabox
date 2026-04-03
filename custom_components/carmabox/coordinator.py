@@ -40,9 +40,12 @@ from homeassistant.helpers.update_coordinator import (
 
 from .adapters.easee import EaseeAdapter
 from .adapters.goodwe import GoodWeAdapter
+from .adapters.huawei import HuaweiAdapter
 from .adapters.nordpool import NordpoolAdapter
 from .adapters.solcast import SolcastAdapter
 from .adapters.tempest import TempestAdapter
+from .adapters.tibber import TibberAdapter
+from .adapters.zaptec import ZaptecAdapter
 from .const import (
     CONSECUTIVE_ERROR_LOG_INTERVAL,
     DEFAULT_BAT_MAX_CHARGE_W,
@@ -309,8 +312,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         for i in (1, 2):
             prefix = self._cfg.get(f"inverter_{i}_prefix", "")
             device_id = self._cfg.get(f"inverter_{i}_device_id", "")
+            brand = self._cfg.get(f"inverter_{i}_brand", "goodwe")
             if prefix:
-                self.inverter_adapters.append(GoodWeAdapter(hass, device_id, prefix))
+                if brand == "huawei":
+                    self.inverter_adapters.append(HuaweiAdapter(hass, device_id, prefix))
+                else:
+                    self.inverter_adapters.append(GoodWeAdapter(hass, device_id, prefix))
 
         # ── EV adapter ────────────────────────────────────────
         self.ev_adapter: EVAdapter | None = None
@@ -318,10 +325,20 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             ev_prefix = self._cfg.get("ev_prefix", "easee_home_12840")
             ev_device_id = self._cfg.get("ev_device_id", "")
             ev_charger_id = self._cfg.get("ev_charger_id", "")
+            ev_brand = self._cfg.get("ev_brand", "easee")
             if ev_prefix:
-                self.ev_adapter = EaseeAdapter(
-                    hass, ev_device_id, str(ev_prefix), charger_id=ev_charger_id
-                )
+                if ev_brand == "zaptec":
+                    ev_install_prefix = self._cfg.get("ev_installation_prefix", "")
+                    self.ev_adapter = ZaptecAdapter(
+                        hass,
+                        ev_device_id,
+                        str(ev_prefix),
+                        installation_prefix=ev_install_prefix,
+                    )
+                else:
+                    self.ev_adapter = EaseeAdapter(
+                        hass, ev_device_id, str(ev_prefix), charger_id=ev_charger_id
+                    )
 
         # ── Weather adapter ───────────────────────────────────
         # IT-1585: Tempest weather station integration (optional)
@@ -528,7 +545,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         for adapter in self.inverter_adapters:
             adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
         if self.ev_adapter:
-            self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+            self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[union-attr,attr-defined]
 
         if not self.executor_enabled:
             _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
@@ -700,6 +717,17 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     def _get_entity(self, key: str, default: str = "") -> str:
         """Get entity_id from config options."""
         return str(self._cfg.get(key, default))
+
+    def _make_price_adapter(
+        self,
+        entity_id: str,
+        fallback_price: float,
+    ) -> NordpoolAdapter | TibberAdapter:
+        """Create price adapter based on configured brand (Nordpool or Tibber)."""
+        price_brand = self._cfg.get("price_brand", "nordpool")
+        if price_brand == "tibber":
+            return TibberAdapter(self.hass, entity_id, fallback_price)
+        return NordpoolAdapter(self.hass, entity_id, fallback_price)
 
     def _read_float(self, entity_id: str, default: float = 0.0) -> float:
         """Read float state from HA entity — delegates to StateManager."""
@@ -2348,7 +2376,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             price_entity = self._get_entity("price_entity", "sensor.nordpool_kwh_se3_sek_3_10_025")
             price_entity_fallback = self._get_entity("price_entity_fallback", "")
             fallback_price = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
-            price_adapter = NordpoolAdapter(self.hass, price_entity, fallback_price)
+            price_adapter = self._make_price_adapter(price_entity, fallback_price)
             today_prices = price_adapter.today_prices
             _LOGGER.warning(
                 "PLAN DATA: entity=%s, today[0:3]=%s, fallback=%s, N=%d",
@@ -2362,9 +2390,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if all(p == fallback_price for p in today_prices):
                 if price_entity_fallback:
                     _LOGGER.info("Primary price source offline, trying fallback")
-                    price_adapter = NordpoolAdapter(
-                        self.hass, price_entity_fallback, fallback_price
-                    )
+                    price_adapter = self._make_price_adapter(price_entity_fallback, fallback_price)
                     today_prices = price_adapter.today_prices
                 if all(p == fallback_price for p in today_prices):
                     _LOGGER.warning(
@@ -5604,7 +5630,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if not price_entity:
             return
         fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
-        adapter = NordpoolAdapter(self.hass, price_entity, fallback)
+        adapter = self._make_price_adapter(price_entity, fallback)
         prices = adapter.today_prices
         if prices and not all(p == fallback for p in prices):
             self._daily_avg_price = sum(prices) / len(prices)
@@ -5853,8 +5879,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             if idle_secs > 1800:
                 price_entity = self._get_entity("price_entity", "")
                 fallback = float(self._cfg.get("fallback_price_ore", DEFAULT_FALLBACK_PRICE_ORE))
-                # V3: NordpoolAdapter already imported at module level
-                pa = NordpoolAdapter(self.hass, price_entity, fallback)
+                pa = self._make_price_adapter(price_entity, fallback)
                 cur = pa.current_price
                 today = pa.today_prices
                 avg = sum(today) / len(today) if today else 0

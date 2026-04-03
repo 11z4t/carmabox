@@ -296,6 +296,15 @@ BATTERY_BRANDS = {
     "other": "Annan",
 }
 
+# Household profile — weather providers (IT-2344)
+WEATHER_PROVIDERS = {
+    "tempest": "WeatherFlow Tempest",
+    "openweathermap": "OpenWeatherMap",
+    "smhi": "SMHI",
+    "met": "Met.no",
+    "ha_default": "HA Standard (met.no)",
+}
+
 # ── IT-2378: Intelligent Scheduler ────────────────────────────────
 SCHEDULER_INTERVAL_SECONDS = 900  # 15 min
 SCHEDULER_PLAN_HOURS = 24
@@ -490,3 +499,8 @@ ML_MIN_TRAINED_BUCKETS: int = 24  # Min weekday/hour buckets for is_trained=True
 ML_DEFAULT_TEMPERATURE_C: float = 15.0  # Default ambient temp when not measured
 ML_PRESSURE_HIGH_HPA: float = 1015.0  # High pressure threshold for PV correction
 ML_PRESSURE_LOW_HPA: float = 1005.0  # Low pressure threshold for PV correction
+
+# ── Night Load Manager (PLAT-1240) ───────────────────────────────────────────
+NIGHT_SAFETY_MARGIN_KW: float = 0.3  # Safety headroom kept free at all times (weighted kW)
+DEFAULT_MIN_GRID_CHARGE_KW: float = 0.5  # Minimum useful grid charge; below → defer_bat=True
+DISK_ACTIVE_THRESHOLD_W: float = 50.0  # Dishwasher considered active above this threshold (W)

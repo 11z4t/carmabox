@@ -42,6 +42,7 @@ from .const import (
     ELECTRICITY_RETAILERS,
     HEATING_TYPES,
     SOLAR_DIRECTIONS,
+    WEATHER_PROVIDERS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -273,7 +274,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
         """Step 5b: Detailed household profile for benchmarking."""
         if user_input is not None:
             self._user_input.update(user_input)
-            return await self.async_step_consumers()
+            return await self.async_step_weather()
 
         # Auto-detect battery brand from inverter domains
         detected_brand = "other"
@@ -321,10 +322,74 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             ),
         )
 
+    async def async_step_weather(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Step 5c: Weather provider configuration (IT-2344)."""
+        if user_input is not None:
+            self._user_input.update(user_input)
+            return await self.async_step_consumers()
+
+        # Auto-detect weather integrations
+        detected_weather = self._detect_weather()
+        default_provider = detected_weather.get("provider", "ha_default")
+        default_entity = detected_weather.get("entity", "weather.home")
+
+        return self.async_show_form(
+            step_id="weather",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("weather_provider", default=default_provider): vol.In(
+                        dict(WEATHER_PROVIDERS.items())
+                    ),
+                    vol.Optional("weather_entity", default=default_entity): str,
+                }
+            ),
+            description_placeholders={
+                "detected": detected_weather.get("name", "HA Standard (met.no)"),
+            },
+        )
+
+    def _detect_weather(self) -> dict[str, str]:
+        """Auto-detect weather integrations in HA."""
+        # Check for Tempest (WeatherFlow)
+        for state in self.hass.states.async_all("weather"):
+            eid = state.entity_id.lower()
+            if "tempest" in eid or "weatherflow" in eid:
+                return {
+                    "provider": "tempest",
+                    "entity": state.entity_id,
+                    "name": "WeatherFlow Tempest",
+                }
+        # Check for OpenWeatherMap
+        for state in self.hass.states.async_all("weather"):
+            eid = state.entity_id.lower()
+            if "openweathermap" in eid:
+                return {
+                    "provider": "openweathermap",
+                    "entity": state.entity_id,
+                    "name": "OpenWeatherMap",
+                }
+        # Check for SMHI
+        for state in self.hass.states.async_all("weather"):
+            eid = state.entity_id.lower()
+            if "smhi" in eid:
+                return {
+                    "provider": "smhi",
+                    "entity": state.entity_id,
+                    "name": "SMHI",
+                }
+        # Default: met.no (HA default)
+        return {
+            "provider": "ha_default",
+            "entity": "weather.home",
+            "name": "HA Standard (met.no)",
+        }
+
     async def async_step_consumers(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Step 5c: Configure surplus chain consumers."""
+        """Step 6: Configure surplus chain consumers."""
         if user_input is not None:
             self._user_input["consumers"] = user_input
             return await self.async_step_appliances()
@@ -610,6 +675,9 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
             "postal_code": self._user_input.get("postal_code", ""),
             "contract_type": self._user_input.get("contract_type", ""),
             "electricity_retailer": self._user_input.get("electricity_retailer", ""),
+            # Weather (IT-2344)
+            "weather_provider": self._user_input.get("weather_provider", "ha_default"),
+            "weather_entity": self._user_input.get("weather_entity", "weather.home"),
             # Mode — analyzer only by default (no battery commands sent)
             "executor_enabled": self._user_input.get("executor_enabled", False),
             # Consumers (surplus chain configuration)
@@ -1142,6 +1210,15 @@ class CarmaboxOptionsFlow(OptionsFlow):
                         "electricity_retailer",
                         default=opts.get("electricity_retailer", ""),
                     ): vol.In({**ELECTRICITY_RETAILERS, "": "Ej valt"}),
+                    # Weather (IT-2344)
+                    vol.Optional(
+                        "weather_provider",
+                        default=opts.get("weather_provider", "ha_default"),
+                    ): vol.In({**WEATHER_PROVIDERS, "": "Ej valt"}),
+                    vol.Optional(
+                        "weather_entity",
+                        default=opts.get("weather_entity", "weather.home"),
+                    ): str,
                     # Consumers (surplus chain)
                     vol.Optional(
                         "consumers_ev_enabled",

@@ -52,9 +52,9 @@ class TestScenarioB:
         # With 38 kWh PV tomorrow, floor should be min_soc (15%)
         # Battery should drain well below 50%
         min_soc_in_plan = min(h.battery_soc for h in plan)
-        assert min_soc_in_plan <= 30, (
-            f"With 38kWh solar tomorrow, battery should drain below 30%, got {min_soc_in_plan}%"
-        )
+        assert (
+            min_soc_in_plan <= 30
+        ), f"With 38kWh solar tomorrow, battery should drain below 30%, got {min_soc_in_plan}%"
 
     def test_charge_hours_during_solar(self) -> None:
         """PV surplus hours should show charge action."""

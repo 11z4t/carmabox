@@ -60,6 +60,27 @@
           "electricity_retailer": "Electricity retailer"
         }
       },
+      "weather": {
+        "title": "Weather",
+        "description": "Weather forecasts help CARMA Box plan better.\nDetected: {detected}",
+        "data": {
+          "weather_provider": "Weather source",
+          "weather_entity": "Weather entity"
+        }
+      },
+      "consumers": {
+        "title": "Surplus Chain",
+        "description": "Configure which devices should use solar surplus.",
+        "data": {
+          "ev_enabled": "EV charging in surplus chain",
+          "miner_entity": "Miner entity",
+          "miner_power_w": "Miner power (W)",
+          "vp_kontor_entity": "Office heat pump entity",
+          "vp_pool_entity": "Pool heat pump entity",
+          "pool_heater_entity": "Pool heater entity",
+          "cirkpump_entity": "Circulation pump entity"
+        }
+      },
       "summary": {
         "title": "CARMA Box found your equipment",
         "description": "**Found:**\n{equipment}\n\n**Your strategy:** {strategy}\n\nFirst plan will be generated in 5 minutes.\n\n**Tip:** Open the CARMA Box card in your dashboard to follow optimization in real time."
@@ -155,7 +176,9 @@
           "solar_direction": "Solar panel direction",
           "postal_code": "Postal code",
           "contract_type": "Electricity contract",
-          "electricity_retailer": "Electricity retailer"
+          "electricity_retailer": "Electricity retailer",
+          "weather_provider": "Weather source",
+          "weather_entity": "Weather entity"
         }
       }
     }

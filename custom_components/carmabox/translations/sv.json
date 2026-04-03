@@ -60,6 +60,27 @@
           "electricity_retailer": "Elhandlare"
         }
       },
+      "weather": {
+        "title": "Väder",
+        "description": "Väderprognoser hjälper CARMA Box att planera bättre.\nHittade: {detected}",
+        "data": {
+          "weather_provider": "Väderkälla",
+          "weather_entity": "Väderentitet"
+        }
+      },
+      "consumers": {
+        "title": "Överskottskedja",
+        "description": "Konfigurera vilka enheter som ska använda solöverskott.",
+        "data": {
+          "ev_enabled": "EV-laddning i överskottskedjan",
+          "miner_entity": "Miner-entitet",
+          "miner_power_w": "Miner effekt (W)",
+          "vp_kontor_entity": "VP kontor entitet",
+          "vp_pool_entity": "VP pool entitet",
+          "pool_heater_entity": "Poolvärmareentitet",
+          "cirkpump_entity": "Cirkulationspump entitet"
+        }
+      },
       "appliances": {
         "title": "Energisensorer ({detected_count} hittade)",
         "description": "Vi hittade dessa effektsensorer:\n{sensor_list}\n\nVälj kategori för varje sensor och avmarkera de du inte vill spåra."
@@ -180,7 +201,9 @@
           "solar_direction": "Solpanelernas riktning",
           "postal_code": "Postnummer",
           "contract_type": "Elavtal",
-          "electricity_retailer": "Elhandlare"
+          "electricity_retailer": "Elhandlare",
+          "weather_provider": "Väderkälla",
+          "weather_entity": "Väderentitet"
         }
       }
     }

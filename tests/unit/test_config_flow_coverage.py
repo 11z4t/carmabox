@@ -688,13 +688,13 @@ class TestStepMethods:
         flow.async_show_form.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_step_household_profile_with_input_calls_consumers(self) -> None:
+    async def test_step_household_profile_with_input_calls_weather(self) -> None:
         flow = _make_config_flow()
         with patch.object(
-            flow, "async_step_consumers", new=AsyncMock(return_value={"type": "form"})
-        ) as mock_cons:
+            flow, "async_step_weather", new=AsyncMock(return_value={"type": "form"})
+        ) as mock_weather:
             await flow.async_step_household_profile(user_input={"house_size_m2": 150})
-        mock_cons.assert_awaited_once()
+        mock_weather.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_step_consumers_no_input_shows_form(self) -> None:

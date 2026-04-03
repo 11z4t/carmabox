@@ -1,0 +1,25 @@
+#!/bin/bash
+# IT-2470: Trigger sync-carmabox-to-haconfig after push completes.
+# Git has no post-push hook, so we use pre-push and fork a background
+# process that waits for the push to finish, then syncs.
+# This is a LOCAL fallback — the Gitea webhook is the primary trigger.
+
+SYNC_SCRIPT="/home/charlie/scripts/sync-carmabox-to-haconfig.sh"
+LOG="/home/charlie/logs/carmabox-webhook.log"
+
+# Only sync pushes to main
+while read local_ref local_sha remote_ref remote_sha; do
+    if [[ "$remote_ref" == "refs/heads/main" ]]; then
+        # Fork background sync (wait 10s for push to complete on remote)
+        (
+            sleep 10
+            echo "$(date): pre-push hook triggering sync..." >> "$LOG"
+            bash "$SYNC_SCRIPT" >> "$LOG" 2>&1
+        ) &
+        disown
+        break
+    fi
+done
+
+# Always allow the push to proceed
+exit 0
