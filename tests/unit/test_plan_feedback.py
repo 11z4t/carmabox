@@ -212,7 +212,7 @@ class TestGetFeedbackData:
     def test_baseload_day_and_night_separate(self) -> None:
         pf = PlanFeedback()
         _record(pf, hour=10, actual=4.0)  # day
-        _record(pf, hour=2, actual=1.0)  # night
+        _record(pf, hour=2, actual=1.0)   # night
         fd = pf.get_feedback_data()
         assert fd.house_baseload_day_kw == pytest.approx(4.0)
         assert fd.house_baseload_night_kw == pytest.approx(1.0)
@@ -239,10 +239,10 @@ class TestPlanAccuracy:
 
     def test_partial_accuracy(self) -> None:
         pf = PlanFeedback()
-        _record(pf, planned=1.0, actual=1.0)  # accurate
-        _record(pf, planned=1.0, actual=1.0)  # accurate
-        _record(pf, planned=1.0, actual=2.0)  # inaccurate
-        _record(pf, planned=1.0, actual=2.0)  # inaccurate
+        _record(pf, planned=1.0, actual=1.0)   # accurate
+        _record(pf, planned=1.0, actual=1.0)   # accurate
+        _record(pf, planned=1.0, actual=2.0)   # inaccurate
+        _record(pf, planned=1.0, actual=2.0)   # inaccurate
         fd = pf.get_feedback_data()
         assert fd.plan_accuracy_pct == pytest.approx(50.0)
 

@@ -175,7 +175,8 @@ class PlanFeedback:
         accurate = sum(
             1
             for r in self._history
-            if abs(r.planned_kwh - r.actual_kwh) / max(r.planned_kwh, FEEDBACK_PLANNED_FLOOR_KWH)
+            if abs(r.planned_kwh - r.actual_kwh)
+            / max(r.planned_kwh, FEEDBACK_PLANNED_FLOOR_KWH)
             <= FEEDBACK_ACCURACY_TOLERANCE
         )
         return accurate / len(self._history) * 100.0
