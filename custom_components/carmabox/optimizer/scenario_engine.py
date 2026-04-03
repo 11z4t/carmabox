@@ -12,7 +12,11 @@ import math
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
-from ..const import SCENARIO_MAX_COUNT, SCENARIO_MIN_COUNT
+from ..const import (
+    DEFAULT_EV_NIGHT_TARGET_SOC,
+    SCENARIO_MAX_COUNT,
+    SCENARIO_MIN_COUNT,
+)
 from ..optimizer.device_profiles import (
     DeviceProfile,
     LoadSlot,
@@ -145,7 +149,7 @@ class ScenarioEngine:
         """
         battery_soc: float = float(state.get("battery_soc", 50.0))
         ev_soc: float = float(state.get("ev_soc", -1.0))
-        ev_target_soc: float = float(state.get("ev_target_soc", 75.0))
+        ev_target_soc: float = float(state.get("ev_target_soc", DEFAULT_EV_NIGHT_TARGET_SOC))
         battery_target_soc: float = float(state.get("battery_target_soc", 80.0))
         hours: list[int] = list(state.get("hours", list(range(22, 24)) + list(range(0, 6))))
         prices_ore: list[float] = list(state.get("prices_ore", [50.0] * 24))
@@ -182,8 +186,8 @@ class ScenarioEngine:
         # Minimum EV hours -- just enough to reach 75 %
         min_ev_energy = (
             0.0
-            if ev_disconnected or ev_prof is None or ev_soc >= 75.0
-            else ev_prof.energy_needed(ev_soc, 75.0)
+            if ev_disconnected or ev_prof is None or ev_soc >= DEFAULT_EV_NIGHT_TARGET_SOC
+            else ev_prof.energy_needed(ev_soc, DEFAULT_EV_NIGHT_TARGET_SOC)
         )
         min_ev_h = (
             0
@@ -291,7 +295,7 @@ class ScenarioEngine:
                         bat_f_power,
                         bat_k_h,
                     ),
-                    ev_target_soc=min(75.0, ev_target_soc),
+                    ev_target_soc=min(DEFAULT_EV_NIGHT_TARGET_SOC, ev_target_soc),
                     battery_target_soc=battery_target_soc,
                 )
             )
