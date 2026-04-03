@@ -420,7 +420,7 @@ SCHEDULER_CORRECTION_MIN_AVAIL_KWH: float = 1.0  # Min available kWh to apply di
 # Noise thresholds (PLAT-1086)
 POWER_NOISE_THRESHOLD_W = 50  # Min power to consider device active
 GRID_EXPORT_NOISE_W = 100  # Min export before acting on it
-PV_ACTIVE_THRESHOLD_W = 200  # Min PV to consider solar producing
+PV_ACTIVE_THRESHOLD_W = 100  # Min PV to consider solar producing (PLAT-1076 AC1)
 # PLAT-1076: seconds PV must stay below threshold before leaving solar-charge mode
 PV_LOW_STANDBY_DELAY_S = 300
 
@@ -477,16 +477,16 @@ NIGHT_DEFER_PRICE_FACTOR: float = 0.9  # Defer if tomorrow night <= factor x ton
 EV_TACTICAL_DELTA_PCT: float = 5.0  # SoC delta for tactical trajectory estimate (%)
 
 # ── ML Predictor (PLAT-975) ─────────────────────────────────────────────────
-ML_EMA_ALPHA: float = 0.3                  # EMA weight for appliance profile updates
+ML_EMA_ALPHA: float = 0.3  # EMA weight for appliance profile updates
 ML_CONFIDENCE_SATURATION_SAMPLES: int = 10  # Sample count at which confidence saturates to 1.0
-ML_MAX_SAMPLES_PER_BUCKET: int = 30        # Rolling window size per weekday/hour bucket
-ML_MAX_PRESSURE_SAMPLES: int = 100         # Max stored pressure→PV observations
-ML_MAX_DECISION_OUTCOMES: int = 200        # Max stored decision outcome records
-ML_DEFAULT_APPLIANCE_RISK: float = 0.1     # Baseline appliance risk when no data
-ML_MIN_PLAN_CORRECTION_SAMPLES: int = 3    # Min samples needed for plan correction factor
-ML_MIN_PLANNED_THRESHOLD_KW: float = 0.1   # Floor for planned_kw in accuracy ratio
-ML_SERIALIZE_LIMIT: int = 50               # Max records kept in serialized snapshot
-ML_MIN_TRAINED_BUCKETS: int = 24           # Min weekday/hour buckets for is_trained=True
-ML_DEFAULT_TEMPERATURE_C: float = 15.0     # Default ambient temp when not measured
-ML_PRESSURE_HIGH_HPA: float = 1015.0       # High pressure threshold for PV correction
-ML_PRESSURE_LOW_HPA: float = 1005.0        # Low pressure threshold for PV correction
+ML_MAX_SAMPLES_PER_BUCKET: int = 30  # Rolling window size per weekday/hour bucket
+ML_MAX_PRESSURE_SAMPLES: int = 100  # Max stored pressure→PV observations
+ML_MAX_DECISION_OUTCOMES: int = 200  # Max stored decision outcome records
+ML_DEFAULT_APPLIANCE_RISK: float = 0.1  # Baseline appliance risk when no data
+ML_MIN_PLAN_CORRECTION_SAMPLES: int = 3  # Min samples needed for plan correction factor
+ML_MIN_PLANNED_THRESHOLD_KW: float = 0.1  # Floor for planned_kw in accuracy ratio
+ML_SERIALIZE_LIMIT: int = 50  # Max records kept in serialized snapshot
+ML_MIN_TRAINED_BUCKETS: int = 24  # Min weekday/hour buckets for is_trained=True
+ML_DEFAULT_TEMPERATURE_C: float = 15.0  # Default ambient temp when not measured
+ML_PRESSURE_HIGH_HPA: float = 1015.0  # High pressure threshold for PV correction
+ML_PRESSURE_LOW_HPA: float = 1005.0  # Low pressure threshold for PV correction
