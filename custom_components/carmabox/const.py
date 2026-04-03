@@ -455,5 +455,9 @@ SURPLUS_STOP_THRESHOLD_KW: float = 0.5  # Surplus below this → stop consumers 
 FEEDBACK_RETENTION_DAYS: int = 30  # Keep HourRecords for this many days
 OUTLIER_STD_FACTOR: float = 2.0  # Reject EV sample if > mean + N*std
 BASELOAD_MIN_TRAINING_DAYS: int = 7  # Min days of records for reliable baseload
-FEEDBACK_ACCURACY_TOLERANCE: float = 0.20  # |planned-actual|/planned ≤ this = accurate
+FEEDBACK_ACCURACY_TOLERANCE: float = 0.20  # |planned-actual|/planned <= this = accurate
 FEEDBACK_PLANNED_FLOOR_KWH: float = 0.1  # Floor for planned_kwh in accuracy division
+
+# Grid Guard braking thresholds (IT-2064)
+GRID_GUARD_BRAKE_THRESHOLD_PCT: float = 0.80  # Braking activates at 80% of tak
+GRID_GUARD_BRAKE_RELEASE_PCT: float = 0.70  # Braking releases at 70% of tak (hysteresis)

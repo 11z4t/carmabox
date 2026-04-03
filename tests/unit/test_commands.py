@@ -300,7 +300,7 @@ class TestChargePvAdapterPath:
     async def test_adapter_soc_100_uses_standby(self) -> None:
         """Line 93: soc >= 100 → set battery_standby."""
         adapter = self._mock_adapter(soc=100.0, set_ok=True)
-        success, delta = await cmd_charge_pv(
+        success, _delta = await cmd_charge_pv(
             hass=MagicMock(),
             adapters=[adapter],
             safety=_safety_ok(),
@@ -315,7 +315,7 @@ class TestChargePvAdapterPath:
     async def test_adapter_failure_sets_failed(self) -> None:
         """Lines 102-103: set_ems_mode returns False → failed=True."""
         adapter = self._mock_adapter(soc=50.0, set_ok=False)
-        success, delta = await cmd_charge_pv(
+        success, _delta = await cmd_charge_pv(
             hass=MagicMock(),
             adapters=[adapter],
             safety=_safety_ok(),
@@ -351,7 +351,7 @@ class TestChargePvAdapterPath:
         adapter.soc = 50.0
         adapter.set_ems_mode = AsyncMock(return_value=True)
         adapter.set_fast_charging = AsyncMock()
-        success, delta = await cmd_charge_pv(
+        success, _delta = await cmd_charge_pv(
             hass=MagicMock(),
             adapters=[adapter],
             safety=_safety_ok(),

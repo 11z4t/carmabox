@@ -829,18 +829,19 @@ class TestProjectionLevels:
         assert "increase_discharge" not in actions
 
     def test_scenario_short_spike_ok(self):
-        """Spike at XX:50, average already low → no action needed."""
+        """Spike at XX:50, average low but >80% tak → BRAKE (IT-2064 braking, not WARN)."""
         g = _guard()
-        # 50 min at 1.0 kW, now spike to 5 kW for remaining 10 min
-        # projected = (1.0*50 + 5.0*10)/60 = 58.3/60 = 0.97 kW
+        # viktat=1.0, minute=50: seed=833Wh, remaining=10min
+        # projected = (833 + 5000*(10/60)) / 1000 ≈ 1.67 kW
+        # 1.67 > brake_limit (1.6) but < warn_limit (1.7) → BRAKE (not WARN)
         r = g.evaluate(
             viktat_timmedel_kw=1.0,
             grid_import_w=5000,
             hour=14,
             minute=50,
         )
-        # projected ~1.67 < 1.7 (tak*margin) — should be OK
-        assert r.status == "OK"
+        assert r.status == "BRAKE"  # IT-2064: proactive braking at 80% tak
+        assert r.projected_kw < 2.0 * 0.85  # Still below WARN threshold
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1019,3 +1020,77 @@ class TestPersistence:
         g2.evaluate(viktat_timmedel_kw=0.5, grid_import_w=2000, hour=9, minute=5, timestamp=200.0)
         wh_after = g2.get_persistent_state()["accumulated_viktat_wh"]
         assert wh_after == pytest.approx(wh_before)  # No spurious addition
+
+
+class TestBrakingIT2064:
+    """IT-2064: Ellevio braking logic at 80% tak with 70% hysteresis release."""
+
+    # At minute=0 with viktat=0: projected = grid_import_w / 1000 (clean formula).
+    # tak=2.0 kW → brake_limit=1.6 kW (grid=1600W), brake_release=1.4 kW (grid=1400W).
+
+    def _eval(
+        self,
+        g: GridGuard,
+        grid_w: float,
+        ts: float = 1000.0,
+    ):
+        return g.evaluate(
+            viktat_timmedel_kw=0.0,
+            grid_import_w=grid_w,
+            hour=14,
+            minute=0,
+            timestamp=ts,
+        )
+
+    def test_no_braking_well_below_threshold(self):
+        """Projected 1.0 kW (50% tak) → OK, braking=False, no commands."""
+        g = GridGuard()
+        r = self._eval(g, grid_w=1000)
+        assert r.status == "OK"
+        assert r.braking is False
+        assert len(r.commands) == 0
+
+    def test_brake_activates_at_80pct(self):
+        """Projected 1.62 kW (>80% tak) → BRAKE, braking=True, limit_grid_charging."""
+        g = GridGuard()
+        r = self._eval(g, grid_w=1620)
+        assert r.status == "BRAKE"
+        assert r.braking is True
+        actions = [c["action"] for c in r.commands]
+        assert "limit_grid_charging" in actions
+
+    def test_braking_held_in_hysteresis_band(self):
+        """After BRAKE, projected drops to 1.5 kW (70-80% band) -> still BRAKE (hysteresis)."""
+        g = GridGuard()
+        # First call: activate braking
+        self._eval(g, grid_w=1620, ts=1000.0)
+        assert g._braking is True
+        # Second call: projected 1.50 kW — between release (1.4) and brake (1.6) threshold
+        r = self._eval(g, grid_w=1500, ts=1001.0)
+        assert r.status == "BRAKE"
+        assert r.braking is True
+
+    def test_braking_released_below_release_threshold(self):
+        """After BRAKE, projected drops to 1.38 kW (<70% tak) → braking released, OK."""
+        g = GridGuard()
+        self._eval(g, grid_w=1620, ts=1000.0)
+        assert g._braking is True
+        self._eval(g, grid_w=1500, ts=1001.0)  # hysteresis band
+        r = self._eval(g, grid_w=1380, ts=1002.0)  # below release
+        assert r.status == "OK"
+        assert r.braking is False
+        assert len(r.commands) == 0
+
+    def test_braking_set_when_at_100pct_stop(self):
+        """Projected 2.05 kW (>100% tak) → CRITICAL, braking=True."""
+        g = GridGuard()
+        r = self._eval(g, grid_w=2050)
+        assert r.status == "CRITICAL"
+        assert r.braking is True
+
+    def test_brake_status_not_triggered_above_warn(self):
+        """Projected 1.8 kW (>85% tak) → WARNING (not BRAKE) — existing WARN takes precedence."""
+        g = GridGuard()
+        r = self._eval(g, grid_w=1800)
+        assert r.status == "WARNING"
+        assert r.braking is True  # braking flag still set

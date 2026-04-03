@@ -19,6 +19,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from custom_components.carmabox.const import (
+    GRID_GUARD_BRAKE_RELEASE_PCT,
+    GRID_GUARD_BRAKE_THRESHOLD_PCT,
+)
+
 ACTION_LADDER_HYSTERESIS_S: float = 60.0  # PLAT-1164: min seconds between escalations
 
 _EV_ACTIVE_MIN_W = 100  # W — minimum EV power to consider it actually charging
@@ -42,6 +47,8 @@ class GridGuardConfig:
     fallback_grid_w: float = 2000.0
     ev_min_amps: int = 6
     ladder_cooldown_s: float = ACTION_LADDER_HYSTERESIS_S  # PLAT-1164
+    brake_threshold_pct: float = GRID_GUARD_BRAKE_THRESHOLD_PCT  # IT-2064
+    brake_release_pct: float = GRID_GUARD_BRAKE_RELEASE_PCT  # IT-2064
 
 
 @dataclass
@@ -84,6 +91,7 @@ class GridGuardResult:
     reason: str = ""
     invariant_violations: list[str] = field(default_factory=list)
     replan_needed: bool = False
+    braking: bool = False  # IT-2064: proactive grid-import braking active
 
 
 class GridGuard:
@@ -102,6 +110,7 @@ class GridGuard:
         self._last_known_grid_w: float = 0.0
         self._last_projected_kw: float = 0.0  # PLAT-1162: init to avoid AttributeError
         self._last_ladder_ts: float = 0.0  # PLAT-1164: cooldown between escalations
+        self._braking: bool = False  # IT-2064: proactive braking state
 
     # ── Public API ──────────────────────────────────────────────
 
@@ -156,7 +165,18 @@ class GridGuard:
         vikt = self._weight(hour)
         projected_kw = self._project(viktat_timmedel_kw, grid_import_w, vikt, minute)
 
-        # 3-level thresholds
+        # IT-2064: braking thresholds (80% / 70% hysteresis)
+        brake_limit = self.config.tak_kw * self.config.brake_threshold_pct
+        brake_release_limit = self.config.tak_kw * self.config.brake_release_pct
+
+        # Update braking hysteresis state
+        if projected_kw >= brake_limit:
+            self._braking = True
+        elif projected_kw < brake_release_limit:
+            self._braking = False
+        # else: keep current _braking state (70-80% hysteresis band)
+
+        # 3-level thresholds (plus BRAKE between OK and WARN)
         warn_limit = self.config.tak_kw * self.config.margin  # tak * 0.85
         stop_limit = self.config.tak_kw  # tak * 1.0
         emergency_limit = self.config.tak_kw * self.config.emergency_factor  # tak * 1.1
@@ -169,13 +189,15 @@ class GridGuard:
                 f"Huvudsäkring: {grid_import_w:.0f}W > {main_fuse_w * 0.9:.0f}W (90%)"
             )
 
-        # Determine escalation level
+        # Determine escalation level (IT-2064: BRAKE inserted between OK and WARN)
         if projected_kw > emergency_limit:
             level = "EMERGENCY"
         elif projected_kw > stop_limit:
             level = "STOP"
         elif projected_kw > warn_limit:
             level = "WARN"
+        elif self._braking:
+            level = "BRAKE"  # 80-85% zone or hysteresis hold
         else:
             level = "OK"
 
@@ -185,8 +207,9 @@ class GridGuard:
             inv_result.projected_kw = projected_kw
             inv_result.viktat_timmedel_kw = viktat_timmedel_kw
             inv_result.replan_needed = True
+            inv_result.braking = self._braking  # IT-2064
             # ALSO run action ladder if over limit
-            if level != "OK":
+            if level not in ("OK", "BRAKE"):
                 inv_result.status = "CRITICAL"
                 if ts - self._last_ladder_ts >= self.config.ladder_cooldown_s:
                     overshoot_w = abs(headroom_kw) * 1000 / max(0.01, vikt)
@@ -206,7 +229,7 @@ class GridGuard:
             return inv_result
 
         # Headroom OK — no projection breach
-        if level == "OK":
+        if level in ("OK", "BRAKE"):
             if self._status == "RECOVERY":
                 if ts - self._recovery_start >= self.config.recovery_hold_s:
                     self._status = "OK"
@@ -216,12 +239,30 @@ class GridGuard:
                 self._status = "RECOVERY"
                 self._recovery_start = ts
 
+            # IT-2064: BRAKE overrides OK but not RECOVERY — recovery takes priority
+            # so the coordinator can distinguish "calming down after incident" from
+            # "proactive braking with no prior breach".
+            effective_status = (
+                "BRAKE" if level == "BRAKE" and self._status == "OK" else self._status
+            )
+            brake_commands: list[dict] = (
+                [{"action": "limit_grid_charging"}] if self._braking else []
+            )
+            if effective_status == "BRAKE":
+                brake_reason = f"Broms: {projected_kw:.2f} kW ≥ {brake_limit:.2f} kW (80% tak)"
+            elif self._status == "OK":
+                brake_reason = "OK"
+            else:
+                brake_reason = "Recovering"
+
             return GridGuardResult(
-                status=self._status,
+                status=effective_status,
                 headroom_kw=headroom_kw,
                 projected_kw=projected_kw,
                 viktat_timmedel_kw=viktat_timmedel_kw,
-                reason="OK" if self._status == "OK" else "Recovering",
+                commands=brake_commands,
+                reason=brake_reason,
+                braking=self._braking,
             )
 
         # OVER LIMIT — action ladder with escalation level
@@ -250,6 +291,7 @@ class GridGuard:
             viktat_timmedel_kw=viktat_timmedel_kw,
             commands=commands,
             reason=reason,
+            braking=self._braking,
         )
 
     @property
