@@ -10,7 +10,7 @@ DEFAULT_EV_NIGHT_TARGET_SOC = 75.0
 DEFAULT_EV_FULL_CHARGE_DAYS = 7
 DEFAULT_EV_MIN_AMPS = 6
 DEFAULT_EV_MAX_AMPS = 10  # 16A spräcker säkring + timmedel
-MAX_EV_CURRENT: int = 10  # Hard current limit (A): 10A × 3ph × 230V = 6.9 kW
+MAX_EV_CURRENT: int = 10  # Hard current limit (A): 10A x 3ph x 230V = 6.9 kW
 DEFAULT_FALLBACK_PRICE_ORE = 100.0
 
 # Ellevio defaults
@@ -454,12 +454,6 @@ SCENARIO_MIN_COUNT: int = 5  # Min antal scenarios för meningsfull jämförelse
 # ── PLAT-1226: Night Planner ────────────────────────────────────────────────
 MAX_NIGHTLY_SOC_DELTA_PCT: int = 20  # Max EV SoC increase per night (%)
 
-# ── PLAT-1227: Surplus Planner ─────────────────────────────────────────────
-MAX_SURPLUS_SWITCHES_PER_WINDOW: int = 2  # Max switch events per rate-limit window
-SURPLUS_SWITCH_WINDOW_MIN: int = 30  # Rate-limit window (minutes)
-SURPLUS_START_THRESHOLD_KW: float = 1.0  # Min surplus to start consumers (kW)
-SURPLUS_STOP_THRESHOLD_KW: float = 0.5  # Surplus below this → stop consumers (kW)
-
 # ── PLAT-1229: Plan Feedback ───────────────────────────────────────────────
 FEEDBACK_RETENTION_DAYS: int = 30  # Keep HourRecords for this many days
 OUTLIER_STD_FACTOR: float = 2.0  # Reject EV sample if > mean + N*std
@@ -470,3 +464,12 @@ FEEDBACK_PLANNED_FLOOR_KWH: float = 0.1  # Floor for planned_kwh in accuracy div
 # Grid Guard braking thresholds (IT-2064)
 GRID_GUARD_BRAKE_THRESHOLD_PCT: float = 0.80  # Braking activates at 80% of tak
 GRID_GUARD_BRAKE_RELEASE_PCT: float = 0.70  # Braking releases at 70% of tak (hysteresis)
+
+# ── PLAT-1221: QC constants ─────────────────────────────────────────────────
+EV_CAPACITY_KWH: float = 82.0  # EV battery capacity (kWh)
+EV_PHASE_COUNT: int = 3  # EV charger phase count
+GOODWE_KONTOR_CHARGE_KW: float = 3.6  # GoodWe kontor max charge rate (kW)
+GOODWE_FORRAD_CHARGE_KW: float = 1.8  # GoodWe förråd max charge rate (kW)
+DEFAULT_BATTERY_TARGET_SOC: float = 80.0  # Default battery target SoC (%)
+NIGHT_DEFER_PRICE_FACTOR: float = 0.9  # Defer if tomorrow night <= factor x tonight
+EV_TACTICAL_DELTA_PCT: float = 5.0  # SoC delta for tactical trajectory estimate (%)
