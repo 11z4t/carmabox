@@ -15,6 +15,7 @@ from ..const import (
     DEFAULT_BATTERY_EFFICIENCY,
     ELLEVIO_RATE_KR_PER_KW_MONTH,
 )
+from ..core.planner import calculate_ellevio_peak_cost
 from ..optimizer.grid_logic import ellevio_weight
 
 if TYPE_CHECKING:
@@ -199,10 +200,10 @@ class CostModel:
     ) -> float:
         """Calculate Ellevio capacity tariff penalty from new monthly peak.
 
-        For each slot, projects the Ellevio-weighted peak (power x weight).
-        Combines with existing top-3 peaks; if the new average exceeds
-        current month_peak_kw, the delta x ELLEVIO_RATE_KR_PER_KW_MONTH
-        is the penalty.
+        Delegates to calculate_ellevio_peak_cost() from core/planner.py
+        for the actual top-N peak calculation. This method projects the
+        weighted peak per slot-hour and feeds the highest to the shared
+        function.
 
         Night hours (22-06) are weighted x 0.5 per Ellevio tariff.
         """
@@ -210,25 +211,24 @@ class CostModel:
             return 0.0
 
         # Project maximum weighted peak per hour across all slots
-        projected: dict[int, float] = {}
+        max_weighted_kw = 0.0
         for slot in slots:
             w = ellevio_weight(slot.hour)
             weighted_kw = slot.power_kw * w
-            projected[slot.hour] = max(projected.get(slot.hour, 0.0), weighted_kw)
+            max_weighted_kw = max(max_weighted_kw, weighted_kw)
 
-        # Combine new projections with existing top-3 and find new top-3
-        existing = list(ellevio_state.top3_weighted_hours)
-        combined = existing + list(projected.values())
-        new_top3 = sorted(combined, reverse=True)[:3]
-
-        if not new_top3:
+        if max_weighted_kw <= 0.0:
             return 0.0
 
-        new_avg = sum(new_top3) / len(new_top3)
-        if new_avg > ellevio_state.month_peak_kw:
-            return (new_avg - ellevio_state.month_peak_kw) * ELLEVIO_RATE_KR_PER_KW_MONTH
+        # Delegate to shared Ellevio peak cost calculation
+        result = calculate_ellevio_peak_cost(
+            current_peaks_kw=list(ellevio_state.top3_weighted_hours),
+            new_peak_kw=max_weighted_kw,
+            cost_per_kw=ELLEVIO_RATE_KR_PER_KW_MONTH,
+        )
 
-        return 0.0
+        increase = result["monthly_cost_increase"]
+        return max(0.0, float(increase))
 
     def _calc_deferred_cost(
         self,
