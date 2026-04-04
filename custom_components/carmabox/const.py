@@ -529,7 +529,7 @@ ML_UNCERTAINTY_P90_PERCENTILE: float = 90.0  # P90 percentile
 # ── Uncertainty Model (PLAT-1230) ────────────────────────────────────────────
 UNCERTAINTY_LOAD_VARIATION_PCT: float = 0.20  # Load baseline ±20% (AC3)
 UNCERTAINTY_SOC_VARIATION_PCT: float = 2.0  # Battery SoC ±2% (AC4)
-UNCERTAINTY_PV_FACTOR_SPREAD: float = 0.10  # PV cloud_factor Gaussian σ (AC2)
+UNCERTAINTY_PV_FACTOR_SPREAD: float = 0.10  # PV cloud_factor Gaussian sigma (AC2)
 UNCERTAINTY_PRICE_P10_QUANTILE: float = 0.10  # P10 quantile for price CDF
 UNCERTAINTY_PRICE_P90_QUANTILE: float = 0.90  # P90 quantile for price CDF
 UNCERTAINTY_SOC_MIN_PCT: float = 0.0  # Minimum allowed SoC sample

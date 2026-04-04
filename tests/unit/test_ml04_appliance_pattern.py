@@ -42,9 +42,9 @@ class TestML04AppliancePattern:
             pred.add_appliance_event("disk", 1.8, 21, 0)
 
         boosted_21 = pred.predict_24h(start_hour=0, weekday=0, month=4)[21]
-        assert (
-            boosted_21 > baseline_21
-        ), f"Prediction should be higher with appliance history: {boosted_21} vs {baseline_21}"
+        assert boosted_21 > baseline_21, (
+            f"Prediction should be higher with appliance history: {boosted_21} vs {baseline_21}"
+        )
 
     def test_appliance_contribution_only_at_recorded_hour(self) -> None:
         """Appliance at h=21 should NOT boost prediction at h=10."""

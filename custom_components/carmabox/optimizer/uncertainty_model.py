@@ -136,9 +136,7 @@ class UncertaintyModel:
         Returns:
             Configured UncertaintyModel.
         """
-        predictions = predictor.predict_24h_with_uncertainty(
-            start_hour, weekday, month, rng=rng
-        )
+        predictions = predictor.predict_24h_with_uncertainty(start_hour, weekday, month, rng=rng)
         base_load_kw = predictions[0].p50 if predictions else 2.0
         return cls(
             price_p10=price_p10,
@@ -186,9 +184,7 @@ class UncertaintyModel:
     def _sample_pv_factor(self) -> float:
         """Sample PV correction factor from Gaussian distribution."""
         raw = self._rng.gauss(self.pv_factor_central, UNCERTAINTY_PV_FACTOR_SPREAD)
-        return round(
-            max(UNCERTAINTY_PV_FACTOR_MIN, min(UNCERTAINTY_PV_FACTOR_MAX, raw)), 3
-        )
+        return round(max(UNCERTAINTY_PV_FACTOR_MIN, min(UNCERTAINTY_PV_FACTOR_MAX, raw)), 3)
 
     def _sample_load(self) -> float:
         """Sample house load from Uniform(base * (1 - variation), base * (1 + variation))."""

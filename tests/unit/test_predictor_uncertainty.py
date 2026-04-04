@@ -136,9 +136,9 @@ class TestUncertaintyBootstrap:
         # p50 should be near the point prediction from predict_24h
         point_result = p.predict_24h(0, 0, 9)
         for i, hp in enumerate(result):
-            assert (
-                abs(hp.p50 - point_result[i]) < 0.5
-            ), f"hour {hp.hour}: p50={hp.p50} vs point={point_result[i]}"
+            assert abs(hp.p50 - point_result[i]) < 0.5, (
+                f"hour {hp.hour}: p50={hp.p50} vs point={point_result[i]}"
+            )
 
     def test_bootstrap_non_deterministic_without_rng(self) -> None:
         """Two calls with no rng may differ (randomness is present)."""

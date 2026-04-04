@@ -252,9 +252,7 @@ class ConsumptionPredictor:
             appl = self._estimate_appliance_kw(h, d)
             correction = self.get_correction_factor(h)
             temp_adj = (
-                self.get_temp_adjustment(h, outdoor_temp_c)
-                if outdoor_temp_c is not None
-                else 1.0
+                self.get_temp_adjustment(h, outdoor_temp_c) if outdoor_temp_c is not None else 1.0
             )
             base_month = 9
             base_factor = self.seasonal_factor.get(base_month, 1.0)

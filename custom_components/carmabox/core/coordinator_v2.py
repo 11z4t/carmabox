@@ -26,6 +26,8 @@ from ..const import (
     DEFAULT_NIGHT_START,
     MAX_EV_CURRENT,
 )
+from ..optimizer.bayesian_tuner import BayesianTuner, TunerParams
+from ..optimizer.plan_feedback import PlanFeedback
 from .battery_balancer import BatteryInfo, calculate_proportional_discharge
 from .grid_guard import BatteryState, GridGuard, GridGuardConfig
 from .law_guardian import GuardianState, LawGuardian
@@ -134,11 +136,28 @@ class CoordinatorV2:
         self.replan_deviation_count: int = 0
         self._startup_confirmed: bool = False
         self._restored_state: StartupState | None = None
+        # ── PLAT-1234: BayesianTuner ────────────────────────────
+        self._tuner: BayesianTuner = BayesianTuner()
+        self._tuner_params: TunerParams = self._tuner.get_params()
+        self._plan_feedback: PlanFeedback = PlanFeedback()
+        self._runtime_dirty: bool = False
 
     def set_restored_state(self, state: StartupState) -> None:
         """Restore state from persistent storage after restart."""
         self._restored_state = state
         self.night_ev_active = state.night_ev_active
+
+    def restore_tuner_state(self, data: dict[str, Any]) -> None:
+        """Restore persisted TunerParams from a dict (e.g. loaded from storage)."""
+        try:
+            self._tuner_params = TunerParams(
+                constraint_margin=float(data["constraint_margin"]),
+                discharge_median_factor=float(data["discharge_median_factor"]),
+                aggressive_median_factor=float(data["aggressive_median_factor"]),
+                battery_budget_low_ratio=float(data["battery_budget_low_ratio"]),
+            )
+        except (KeyError, ValueError, TypeError):
+            _LOGGER.debug("restore_tuner_state: invalid data, keeping defaults")
 
     def cycle(self, state: SystemState) -> CycleResult:
         """Run one 30s cycle. Returns commands to execute."""
@@ -262,6 +281,11 @@ class CoordinatorV2:
         self.plan_counter += 1
         if self.plan_counter >= cfg.plan_interval_cycles:
             self.plan_counter = 0
+            # At night: let BayesianTuner suggest optimised hyperparameters
+            if is_night:
+                self._tuner_params = self._tuner.tune()
+                self._apply_tuner_params()
+                self._runtime_dirty = True
             # Plan generation delegeras till caller (behöver HA adapters)
             reason_parts.append("plan_due")
 
@@ -292,6 +316,14 @@ class CoordinatorV2:
             )
             exec_cmd = execute_plan_hour(planned, exec_state, exec_cfg)
             reason_parts.append(f"exec:{exec_cmd.battery_action}")
+
+            # ── PLAT-1234: record actual outcome → update tuner ──
+            planned_kw = planned.grid_kw if planned is not None else 0.0
+            actual_kw = max(0.0, state.grid_import_w / 1000.0)
+            self._plan_feedback.record_actual(state.hour, "grid", planned_kw, actual_kw)
+            self._tuner.update_from_feedback(
+                self._tuner_params, self._plan_feedback.get_feedback_data()
+            )
 
             # ── 6. BATTERY BALANCER ─────────────────────────────
             if exec_cmd.battery_action == "discharge" and exec_cmd.battery_discharge_w > 0:
@@ -462,20 +494,32 @@ class CoordinatorV2:
             notifications=guardian_report.notifications,
         )
 
+    def _apply_tuner_params(self) -> None:
+        """Apply current TunerParams to live config and grid_guard."""
+        self.config.grid_guard_margin = self._tuner_params.constraint_margin
+        self.grid_guard.config.margin = self._tuner_params.constraint_margin
+
     def get_persistent_state(self) -> dict[str, Any]:
         """State to persist for restart survival."""
+        p = self._tuner_params
         return {
             "night_ev_active": self.night_ev_active,
             "plan": [
                 {
-                    "hour": p.hour,
-                    "action": p.action,
-                    "battery_kw": p.battery_kw,
-                    "grid_kw": p.grid_kw,
-                    "price": p.price,
-                    "battery_soc": p.battery_soc,
-                    "ev_soc": p.ev_soc,
+                    "hour": pa.hour,
+                    "action": pa.action,
+                    "battery_kw": pa.battery_kw,
+                    "grid_kw": pa.grid_kw,
+                    "price": pa.price,
+                    "battery_soc": pa.battery_soc,
+                    "ev_soc": pa.ev_soc,
                 }
-                for p in self.plan
+                for pa in self.plan
             ],
+            "tuner_params": {
+                "constraint_margin": p.constraint_margin,
+                "discharge_median_factor": p.discharge_median_factor,
+                "aggressive_median_factor": p.aggressive_median_factor,
+                "battery_budget_low_ratio": p.battery_budget_low_ratio,
+            },
         }
