@@ -75,7 +75,7 @@ P10_DISCHARGE_MODERATE_KW = 1.0  # low confidence → moderate urladdning
 P10_DISCHARGE_NORMAL_KW = 2.0  # normal confidence → full urladdning
 
 DEFAULT_MAX_GRID_CHARGE_KW = 3.0
-DEFAULT_GRID_CHARGE_PRICE_THRESHOLD = 15.0
+DEFAULT_GRID_CHARGE_PRICE_THRESHOLD = 60.0
 DEFAULT_GRID_CHARGE_MAX_SOC = 90.0
 
 # Planning horizon (PLAT-969: Multi-day planning)
