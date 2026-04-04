@@ -476,6 +476,25 @@ FEEDBACK_PLANNED_FLOOR_KWH: float = 0.1  # Floor for planned_kwh in accuracy div
 GRID_GUARD_BRAKE_THRESHOLD_PCT: float = 0.80  # Braking activates at 80% of tak
 GRID_GUARD_BRAKE_RELEASE_PCT: float = 0.70  # Braking releases at 70% of tak (hysteresis)
 
+# ── PLAT-1232: BayesianTuner ─────────────────────────────────────────────────
+BAYES_GP_KERNEL_SIGMA: float = 1.0  # GP RBF kernel signal variance (sigma_f)
+BAYES_GP_LENGTH_SCALE: float = 0.3  # GP RBF kernel length scale (l)
+BAYES_GP_NOISE_SIGMA: float = 0.1  # GP observation noise (sigma_n)
+BAYES_N_INIT_SAMPLES: int = 5  # Random exploration samples before GP exploitation
+BAYES_MAX_OBSERVATIONS: int = 50  # Rolling window for GP training data
+BAYES_EI_XI: float = 0.01  # EI exploration parameter (ξ)
+BAYES_RAND_CANDIDATES: int = 200  # Random candidates for acquisition maximisation
+
+# Tunable hyperparameter bounds [min, max]
+BAYES_CONSTRAINT_MARGIN_MIN: float = 0.70
+BAYES_CONSTRAINT_MARGIN_MAX: float = 0.95
+BAYES_DISCHARGE_MEDIAN_FACTOR_MIN: float = 0.70
+BAYES_DISCHARGE_MEDIAN_FACTOR_MAX: float = 1.10
+BAYES_AGGRESSIVE_MEDIAN_FACTOR_MIN: float = 1.00
+BAYES_AGGRESSIVE_MEDIAN_FACTOR_MAX: float = 1.80
+BAYES_BATTERY_BUDGET_LOW_RATIO_MIN: float = 0.10
+BAYES_BATTERY_BUDGET_LOW_RATIO_MAX: float = 0.50
+
 # ── PLAT-1221: QC constants ─────────────────────────────────────────────────
 EV_CAPACITY_KWH: float = 82.0  # EV battery capacity (kWh)
 EV_PHASE_COUNT: int = 3  # EV charger phase count
