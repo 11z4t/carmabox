@@ -18,7 +18,6 @@ from ..const import (
     DEFAULT_MIN_GRID_CHARGE_KW,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_TARGET_WEIGHTED_KW,
-    DISK_ACTIVE_THRESHOLD_W,
     EV_PHASE_COUNT,
     MAX_EV_CURRENT,
     NIGHT_SAFETY_MARGIN_KW,
@@ -36,7 +35,7 @@ class NightLoadBudget:
     """Maximum raw kW battery MAY charge from grid this cycle."""
 
     ev_amps: int
-    """Maximum amps EV MAY draw this cycle."""
+    """Maximum total amps EV MAY draw this cycle (includes current draw)."""
 
     disk_kw: float
     """Current dishwasher draw in raw kW (informational, never curtailed)."""
@@ -62,53 +61,57 @@ def calculate_night_budget(
 ) -> NightLoadBudget:
     """Calculate how much power bat and EV may consume without breaching target.
 
-    viktat_grid_kw already includes ALL current loads (house + bat + disk + EV),
-    multiplied by the night weight factor.  The function works out what the
-    battery alone may draw given everything else that is running.
+    viktat_grid_kw includes ALL current loads (house + bat + disk + EV) already
+    weighted by night_weight.  Each budget is computed by removing that device's
+    current contribution from viktat, then allocating the remaining headroom.
 
     Args:
-        viktat_grid_kw:     Current weighted grid import (e.g. from
-                            sensor.ellevio_viktad_timmedel_pagaende).
+        viktat_grid_kw:     Current weighted grid import (ellevio_viktad_timmedel).
         disk_w:             Raw dishwasher power in W (sensor.98_shelly_plug_s_power).
-        ev_power_w:         Raw EV charger power in W.
+        ev_power_w:         Raw EV charger power in W (sensor.easee_home_*_power).
         bat_charge_kw:      Current battery charge power in raw kW
                             (sensor.v6_battery_charge_total_kw).
         target_kw:          Weighted grid import target (default 2.0 kW).
         night_weight:       Night tariff weight factor (default 0.5).
-        max_grid_charge_kw: Hard ceiling on bat charge in raw kW (default 0.5,
-                            caller should pass actual value e.g. 3.0).
+        max_grid_charge_kw: Hard ceiling on bat charge in raw kW.
         phase_count:        EV charger phase count (default 3).
         max_ev_amps:        Hard ceiling on EV amps (default 10A).
 
     Returns:
         NightLoadBudget with safe bat_charge_kw and ev_amps for this cycle.
     """
-    # ── Battery budget ────────────────────────────────────────────────────
-    # viktat_grid_kw includes bat contribution: bat_charge_kw * night_weight
-    # Remove bat contribution to get non-bat weighted load:
-    bat_viktat = bat_charge_kw * night_weight
-    non_bat_viktat = max(0.0, viktat_grid_kw - bat_viktat)
+    safe_weight = max(night_weight, 0.01)
 
-    # How much weighted kW is available for battery alone:
-    bat_budget_viktat = target_kw - non_bat_viktat - NIGHT_SAFETY_MARGIN_KW
-
-    # Convert back to raw kW and cap at hardware ceiling:
-    bat_budget_raw_kw = max(0.0, bat_budget_viktat / max(night_weight, 0.01))
-    bat_budget_raw_kw = min(bat_budget_raw_kw, max_grid_charge_kw)
-
-    # ── EV budget ─────────────────────────────────────────────────────────
-    # EV budget = headroom after safety margin and disk, bat takes remainder.
+    # ── Shared: headroom after safety margin ──────────────────────────────
+    # viktat_grid_kw already includes all running loads.
+    # available_kw = how much MORE weighted kW we could add right now.
     headroom_kw = target_kw - viktat_grid_kw
     available_kw = headroom_kw - NIGHT_SAFETY_MARGIN_KW
 
-    disk_kw_raw = disk_w / 1000.0
-    disk_viktat = disk_kw_raw * night_weight if disk_w > DISK_ACTIVE_THRESHOLD_W else 0.0
+    # ── Battery budget ────────────────────────────────────────────────────
+    # Remove bat's current contribution from viktat to find non-bat load.
+    # Bat gets: target - non_bat_viktat - margin (symmetric with EV below).
+    bat_viktat = bat_charge_kw * night_weight
+    non_bat_viktat = max(0.0, viktat_grid_kw - bat_viktat)
+    bat_budget_viktat = target_kw - non_bat_viktat - NIGHT_SAFETY_MARGIN_KW
+    bat_budget_raw_kw = max(0.0, bat_budget_viktat / safe_weight)
+    bat_budget_raw_kw = min(bat_budget_raw_kw, max_grid_charge_kw)
 
-    ev_budget_viktat = max(0.0, available_kw - disk_viktat)
-    ev_budget_raw_kw = ev_budget_viktat / max(night_weight, 0.01)
+    # ── EV budget ─────────────────────────────────────────────────────────
+    # Remove EV's current contribution from viktat to find non-EV load.
+    # EV TOTAL budget = how much EV can draw in total (not just additional).
+    # Disk is NOT re-subtracted here — it is already captured in viktat_grid_kw,
+    # so available_kw already reflects disk being active (fixes double-count bug).
+    ev_raw_kw = ev_power_w / 1000.0
+    ev_viktat = ev_raw_kw * night_weight
+    non_ev_viktat = max(0.0, viktat_grid_kw - ev_viktat)
+    ev_budget_viktat = target_kw - non_ev_viktat - NIGHT_SAFETY_MARGIN_KW
+    ev_budget_raw_kw = max(0.0, ev_budget_viktat / safe_weight)
     w_per_amp = 230.0 * phase_count
     ev_amps = int(min(ev_budget_raw_kw * 1000.0 / w_per_amp, max_ev_amps))
     ev_amps = max(0, ev_amps)
+
+    disk_kw_raw = disk_w / 1000.0
 
     return NightLoadBudget(
         available_kw=round(available_kw, 3),

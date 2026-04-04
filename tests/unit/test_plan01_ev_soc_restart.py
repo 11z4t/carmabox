@@ -60,7 +60,9 @@ class TestPlan01EvSocRestart:
         age_s = time.time() - stored_unix
         assert 29 * 60 < age_s < 31 * 60  # ~30 min
 
-        mono_now = time.monotonic()
+        # Use a fixed monotonic value (7200s = 2h uptime) to avoid flakiness
+        # on systems with low uptime where mono_now - age_s would be negative.
+        mono_now = 7200.0  # stable fixture: 2h uptime
         restored_monotonic = mono_now - age_s
         # Restored monotonic should be in the past (positive but smaller than now)
         assert 0 < restored_monotonic < mono_now

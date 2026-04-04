@@ -793,8 +793,10 @@ class TestAsyncFetchBenchmarking:
     @pytest.mark.asyncio
     async def test_fetches_data_when_interval_elapsed(self) -> None:
         """Interval elapsed + hub available → fetch called."""
+        import time as _time
+
         coord = _make_coord()
-        coord._benchmark_last_fetch = 0.0
+        coord._benchmark_last_fetch = _time.monotonic() - 3601  # 1h+1s elapsed
         coord.benchmark_data = None
 
         hub = MagicMock()

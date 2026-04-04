@@ -76,7 +76,7 @@ class ZaptecAdapter(EVAdapter):
         self.device_id = device_id
         self.prefix = entity_prefix
         self.installation_prefix = installation_prefix or entity_prefix
-        self._last_current_change: float = 0.0
+        self._last_current_change: float = -_CURRENT_CHANGE_COOLDOWN_S
 
     def _state(self, suffix: str, default: float = 0.0) -> float:
         """Read float state from sensor.{prefix}_{suffix}."""
