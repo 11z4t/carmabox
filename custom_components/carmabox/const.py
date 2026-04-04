@@ -507,6 +507,17 @@ ML_UNCERTAINTY_FALLBACK_SPREAD: float = 0.25  # ±25% spread when insufficient s
 ML_UNCERTAINTY_P10_PERCENTILE: float = 10.0  # P10 percentile
 ML_UNCERTAINTY_P90_PERCENTILE: float = 90.0  # P90 percentile
 
+# ── Uncertainty Model (PLAT-1230) ────────────────────────────────────────────
+UNCERTAINTY_LOAD_VARIATION_PCT: float = 0.20  # Load baseline ±20% (AC3)
+UNCERTAINTY_SOC_VARIATION_PCT: float = 2.0  # Battery SoC ±2% (AC4)
+UNCERTAINTY_PV_FACTOR_SPREAD: float = 0.10  # PV cloud_factor Gaussian σ (AC2)
+UNCERTAINTY_PRICE_P10_QUANTILE: float = 0.10  # P10 quantile for price CDF
+UNCERTAINTY_PRICE_P90_QUANTILE: float = 0.90  # P90 quantile for price CDF
+UNCERTAINTY_SOC_MIN_PCT: float = 0.0  # Minimum allowed SoC sample
+UNCERTAINTY_SOC_MAX_PCT: float = 100.0  # Maximum allowed SoC sample
+UNCERTAINTY_PV_FACTOR_MIN: float = 0.0  # Minimum PV factor (no negative production)
+UNCERTAINTY_PV_FACTOR_MAX: float = 2.0  # Maximum PV factor (cap overperformance)
+
 # ── Night Load Manager (PLAT-1240) ───────────────────────────────────────────
 NIGHT_SAFETY_MARGIN_KW: float = 0.3  # Safety headroom kept free at all times (weighted kW)
 DEFAULT_MIN_GRID_CHARGE_KW: float = 0.5  # Minimum useful grid charge; below → defer_bat=True
