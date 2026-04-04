@@ -20,6 +20,7 @@ from ..const import (
     SCENARIO_MAX_COUNT,
     SCENARIO_MIN_COUNT,
 )
+from ..optimizer.cost_model import EllevioState
 from ..optimizer.device_profiles import (
     DeviceProfile,
     LoadSlot,
@@ -27,7 +28,8 @@ from ..optimizer.device_profiles import (
 )
 
 if TYPE_CHECKING:
-    from ..optimizer.cost_model import CostModel, EllevioState
+    from ..optimizer.cost_model import CostModel
+    from ..optimizer.uncertainty_model import UncertaintyModel
 
 __all__ = ["ScenarioEngine"]
 
@@ -128,8 +130,82 @@ class ScenarioEngine:
 
     profiles: dict[str, DeviceProfile]
     cost_model: CostModel
+    uncertainty_model: UncertaintyModel | None = None
 
-    def generate_scenarios(self, state: dict[str, Any]) -> list[Scenario]:
+    def generate_scenarios(self, state: dict[str, Any], n_scenarios: int = 10) -> list[Scenario]:
+        """Generate scheduling scenarios, optionally using UncertaintyModel sampling.
+
+        When an UncertaintyModel is injected, samples n_scenarios stochastic inputs,
+        generates one scenario per sample, scores each with CostModel, and returns
+        the list ranked cheapest-first.
+
+        When no UncertaintyModel is set, falls back to the deterministic template
+        approach (n_scenarios is ignored in that case).
+
+        Args:
+            state: Dict with keys:
+                battery_soc        -- current battery SoC 0-100
+                ev_soc             -- current EV SoC 0-100, -1 if disconnected
+                ev_target_soc      -- desired EV SoC (default 75)
+                battery_target_soc -- desired battery SoC from PV forecast
+                hours              -- available scheduling hours e.g. [22,23,0..5]
+                prices_ore         -- 24-element Nordpool price list (öre/kWh)
+                pv_tomorrow_kwh    -- Solcast PV forecast for tomorrow (kWh)
+                ellevio_state      -- optional EllevioState for cost scoring
+            n_scenarios: Number of stochastic scenarios to generate (probabilistic
+                mode only). n_scenarios=0 returns an empty list.
+
+        Returns:
+            Probabilistic mode: list[Scenario] sorted by total_cost_kr ascending,
+                length == n_scenarios (or 0 if n_scenarios <= 0).
+            Template mode: list[Scenario] sorted by name, length in [5, 15].
+        """
+        if self.uncertainty_model is not None:
+            return self._generate_probabilistic(state, n_scenarios)
+        return self._generate_template(state)
+
+    def _generate_probabilistic(self, state: dict[str, Any], n_scenarios: int) -> list[Scenario]:
+        """Generate n_scenarios stochastic scenarios via UncertaintyModel sampling."""
+        if n_scenarios <= 0:
+            return []
+
+        assert self.uncertainty_model is not None
+        samples = self.uncertainty_model.sample_inputs(n_scenarios)
+
+        base_prices: list[float] = list(state.get("prices_ore", [50.0] * 24))
+        base_pv: float = float(state.get("pv_tomorrow_kwh", 0.0))
+        base_p50: float = self.uncertainty_model.price_p50
+
+        ellevio_st_raw = state.get("ellevio_state")
+        ellevio_st: EllevioState = (
+            ellevio_st_raw
+            if isinstance(ellevio_st_raw, EllevioState)
+            else EllevioState(month_peak_kw=0.0)
+        )
+
+        scenarios: list[Scenario] = []
+        for idx, inp in enumerate(samples):
+            scale = inp.price_ore / base_p50 if base_p50 > 0.0 else 1.0
+            perturbed_prices = [max(0.0, p * scale) for p in base_prices]
+            perturbed: dict[str, Any] = {
+                **state,
+                "battery_soc": inp.soc_pct,
+                "prices_ore": perturbed_prices,
+                "pv_tomorrow_kwh": base_pv * inp.pv_factor,
+            }
+
+            templates = self._generate_template(perturbed)
+            sc = next(
+                (s for s in templates if s.name == "balanced"),
+                templates[0] if templates else self._generate_fallback(),
+            )
+
+            cost = self.cost_model.calculate_scenario_cost(sc, perturbed_prices, ellevio_st)
+            scenarios.append(replace(sc, name=f"stochastic_{idx}", total_cost_kr=cost.total_kr))
+
+        return sorted(scenarios, key=lambda s: s.total_cost_kr)
+
+    def _generate_template(self, state: dict[str, Any]) -> list[Scenario]:
         """Generate SCENARIO_MIN_COUNT-SCENARIO_MAX_COUNT scheduling scenarios.
 
         Five base templates (ev_heavy, battery_heavy, balanced, minimal,
