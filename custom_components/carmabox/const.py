@@ -500,6 +500,13 @@ ML_DEFAULT_TEMPERATURE_C: float = 15.0  # Default ambient temp when not measured
 ML_PRESSURE_HIGH_HPA: float = 1015.0  # High pressure threshold for PV correction
 ML_PRESSURE_LOW_HPA: float = 1005.0  # Low pressure threshold for PV correction
 
+# ── ML Uncertainty (PLAT-1231) ───────────────────────────────────────────────
+ML_UNCERTAINTY_BOOTSTRAP_N: int = 200  # Bootstrap iterations for P10/P50/P90
+ML_UNCERTAINTY_MIN_SAMPLES: int = 5  # Min samples for bootstrap (else use spread)
+ML_UNCERTAINTY_FALLBACK_SPREAD: float = 0.25  # ±25% spread when insufficient samples
+ML_UNCERTAINTY_P10_PERCENTILE: float = 10.0  # P10 percentile
+ML_UNCERTAINTY_P90_PERCENTILE: float = 90.0  # P90 percentile
+
 # ── Night Load Manager (PLAT-1240) ───────────────────────────────────────────
 NIGHT_SAFETY_MARGIN_KW: float = 0.3  # Safety headroom kept free at all times (weighted kW)
 DEFAULT_MIN_GRID_CHARGE_KW: float = 0.5  # Minimum useful grid charge; below → defer_bat=True

@@ -16,14 +16,33 @@ from __future__ import annotations
 
 import logging
 import math
+import random
 from dataclasses import dataclass, field
 from typing import Any
+
+from ..const import (
+    ML_UNCERTAINTY_BOOTSTRAP_N,
+    ML_UNCERTAINTY_FALLBACK_SPREAD,
+    ML_UNCERTAINTY_MIN_SAMPLES,
+    ML_UNCERTAINTY_P10_PERCENTILE,
+    ML_UNCERTAINTY_P90_PERCENTILE,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
 # Minimum samples before prediction is trusted
 MIN_TRAINING_SAMPLES = 24  # 1 day x 24 hours
 TRAINING_THRESHOLD_SAMPLES = MIN_TRAINING_SAMPLES  # ML-03: named alias
+
+
+@dataclass
+class HourlyPrediction:
+    """Hourly forecast with P10/P50/P90 confidence intervals (PLAT-1231)."""
+
+    hour: int
+    p10: float
+    p50: float
+    p90: float
 
 
 @dataclass
@@ -183,6 +202,123 @@ class ConsumptionPredictor:
             )
             predicted = (base + appl) * correction * temp_adj
             result.append(round(max(0.3, predicted), 2))
+        return result
+
+    def predict_24h_with_uncertainty(
+        self,
+        start_hour: int,
+        weekday: int,
+        month: int,
+        fallback_profile: list[float] | None = None,
+        outdoor_temp_c: float | None = None,
+        rng: random.Random | None = None,
+    ) -> list[HourlyPrediction]:
+        """Predict 24h consumption with P10/P50/P90 confidence intervals.
+
+        Uses bootstrap resampling from historical per-slot samples to estimate
+        the uncertainty distribution. When fewer than ML_UNCERTAINTY_MIN_SAMPLES
+        exist for a slot, falls back to a fixed spread around the point estimate.
+
+        Backward compatible — predict_24h() is unchanged.
+
+        Args:
+            start_hour: Current hour (0-23).
+            weekday: Current weekday (0=Monday).
+            month: Current month (1-12).
+            fallback_profile: Static 24h profile used when untrained.
+            outdoor_temp_c: Current outdoor temperature for adjustment.
+            rng: Optional random.Random instance (for deterministic tests).
+
+        Returns list of 24 HourlyPrediction with p10/p50/p90 fields.
+        """
+        _rng = rng if rng is not None else random.Random()
+
+        result: list[HourlyPrediction] = []
+        for i in range(24):
+            h = (start_hour + i) % 24
+            d = (weekday + (1 if start_hour + i >= 24 else 0)) % 7
+
+            # Collect raw historical samples for this slot
+            key = f"{d}_{h}"
+            raw_samples = list(self.history.get(key, []))
+            if not raw_samples:
+                for offset in (1, -1, 2, -2):
+                    alt = list(self.history.get(f"{(d + offset) % 7}_{h}", []))
+                    if alt:
+                        raw_samples = alt
+                        break
+
+            # Build multipliers that mirror predict_24h adjustments
+            appl = self._estimate_appliance_kw(h, d)
+            correction = self.get_correction_factor(h)
+            temp_adj = (
+                self.get_temp_adjustment(h, outdoor_temp_c)
+                if outdoor_temp_c is not None
+                else 1.0
+            )
+            base_month = 9
+            base_factor = self.seasonal_factor.get(base_month, 1.0)
+            current_factor = self.seasonal_factor.get(month, 1.0)
+            seasonal_adj = current_factor / base_factor if base_factor > 0 else 1.0
+
+            _sa, _ap, _co, _ta = seasonal_adj, appl, correction, temp_adj
+
+            def _apply(
+                base_kw: float,
+                sa: float = _sa,
+                ap: float = _ap,
+                co: float = _co,
+                ta: float = _ta,
+            ) -> float:
+                return round(max(0.3, (base_kw * sa + ap) * co * ta), 2)
+
+            if (
+                self.total_samples >= MIN_TRAINING_SAMPLES
+                and len(raw_samples) >= ML_UNCERTAINTY_MIN_SAMPLES
+            ):
+                # Bootstrap: resample with replacement and compute percentiles
+                weights = [math.exp(j * 0.1) for j in range(len(raw_samples))]
+                total_w = sum(weights)
+                cum: list[float] = []
+                running = 0.0
+                for w in weights:
+                    running += w / total_w
+                    cum.append(running)
+
+                bootstrap_vals: list[float] = []
+                for _ in range(ML_UNCERTAINTY_BOOTSTRAP_N):
+                    r = _rng.random()
+                    idx = 0
+                    for ci, cv in enumerate(cum):
+                        if r <= cv:
+                            idx = ci
+                            break
+                    bootstrap_vals.append(_apply(raw_samples[idx]))
+
+                bootstrap_vals.sort()
+                n = len(bootstrap_vals)
+                p10 = bootstrap_vals[max(0, int(n * ML_UNCERTAINTY_P10_PERCENTILE / 100))]
+                p50 = bootstrap_vals[int(n * 0.5)]
+                p90 = bootstrap_vals[min(n - 1, int(n * ML_UNCERTAINTY_P90_PERCENTILE / 100))]
+            else:
+                # Fallback: fixed spread around point estimate
+                if self.total_samples >= MIN_TRAINING_SAMPLES:
+                    fallback_kw = 2.0
+                    if fallback_profile and len(fallback_profile) >= 24:
+                        fallback_kw = sum(fallback_profile) / len(fallback_profile)
+                    point = self.predict_hour(d, h, month, fallback_kw)
+                else:
+                    if fallback_profile and len(fallback_profile) >= 24:
+                        idx = (start_hour + i) % 24
+                        point = fallback_profile[idx]
+                    else:
+                        point = 2.0
+                spread = point * ML_UNCERTAINTY_FALLBACK_SPREAD
+                p10 = round(max(0.3, point - spread), 2)
+                p50 = round(max(0.3, point), 2)
+                p90 = round(max(0.3, point + spread), 2)
+
+            result.append(HourlyPrediction(hour=h, p10=p10, p50=p50, p90=p90))
         return result
 
     def _estimate_appliance_kw(self, hour: int, weekday: int) -> float:
