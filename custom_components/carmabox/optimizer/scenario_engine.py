@@ -178,32 +178,49 @@ class ScenarioEngine:
     def _generate_probabilistic(
         self, state: dict[str, Any], n_scenarios: int
     ) -> list[Scenario]:
-        """Sample N stochastic futures and return the best plan for each, ranked.
+        """Sample N stochastic futures and return one scored plan per sample, ranked.
 
         For each ScenarioInputs sample:
+          - Scale base prices proportionally to sample.price_ore / price_p50
           - Override battery_soc with sample.soc_pct
           - Scale pv_tomorrow_kwh by sample.pv_factor
-          - Use flat price list [sample.price_ore] * 24 for scheduling + scoring
-        Then return all N best plans sorted by total_cost_kr ascending.
+          - Generate templates, pick "balanced" (or first), score with ONE
+            CostModel call, name it stochastic_{idx}
+        Returns list sorted by total_cost_kr ascending.
         """
         if n_scenarios <= 0:
             return []
         samples = self.uncertainty_model.sample_inputs(n_scenarios)  # type: ignore[union-attr]
-        base_pv = float(state.get("pv_tomorrow_kwh", 5.0))
-        ellevio_zero = EllevioState(month_peak_kw=0.0, top3_weighted_hours=[])
+        base_prices: list[float] = list(state.get("prices_ore", [50.0] * 24))
+        base_pv: float = float(state.get("pv_tomorrow_kwh", 0.0))
+        base_p50: float = self.uncertainty_model.price_p50  # type: ignore[union-attr]
+
+        ellevio_st_raw = state.get("ellevio_state")
+        ellevio_st: EllevioState = (
+            ellevio_st_raw
+            if isinstance(ellevio_st_raw, EllevioState)
+            else EllevioState(month_peak_kw=0.0)
+        )
 
         result: list[Scenario] = []
-        for sample in samples:
-            stoch_state: dict[str, Any] = dict(state)
-            stoch_state["battery_soc"] = sample.soc_pct
-            stoch_state["prices_ore"] = [sample.price_ore] * 24
-            stoch_state["pv_tomorrow_kwh"] = base_pv * sample.pv_factor
+        for idx, sample in enumerate(samples):
+            scale = sample.price_ore / base_p50 if base_p50 > 0.0 else 1.0
+            perturbed_prices = [max(0.0, p * scale) for p in base_prices]
+            perturbed: dict[str, Any] = {
+                **state,
+                "battery_soc": sample.soc_pct,
+                "prices_ore": perturbed_prices,
+                "pv_tomorrow_kwh": base_pv * sample.pv_factor,
+            }
 
-            det_scenarios = self._generate_parametric(stoch_state)
-            scored = self.score_scenarios(
-                det_scenarios, [sample.price_ore] * 24, ellevio_zero
+            templates = self._generate_parametric(perturbed)
+            sc = next(
+                (s for s in templates if s.name == "balanced"),
+                templates[0] if templates else self._generate_fallback(),
             )
-            result.append(self.select_best(scored))
+
+            cost = self.cost_model.calculate_scenario_cost(sc, perturbed_prices, ellevio_st)
+            result.append(replace(sc, name=f"stochastic_{idx}", total_cost_kr=cost.total_kr))
 
         return sorted(result, key=lambda s: s.total_cost_kr)
 
