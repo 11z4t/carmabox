@@ -541,3 +541,13 @@ UNCERTAINTY_PV_FACTOR_MAX: float = 2.0  # Maximum PV factor (cap overperformance
 NIGHT_SAFETY_MARGIN_KW: float = 0.3  # Safety headroom kept free at all times (weighted kW)
 DEFAULT_MIN_GRID_CHARGE_KW: float = 0.5  # Minimum useful grid charge; below → defer_bat=True
 DISK_ACTIVE_THRESHOLD_W: float = 50.0  # Dishwasher considered active above this threshold (W)
+
+# ── PV Surplus Allocation (EXP-11) ───────────────────────────────────────────
+PV_BATTERY_FILL_MARGIN_KWH: float = 1.0  # Extra kWh margin for "battery fills from PV"
+BATTERY_NEAR_FULL_PCT: float = 95.0  # SoC threshold: battery considered "nearly full"
+BATTERY_LOW_NEED_KWH: float = 1.0  # Below this kWh need → EV gets priority over battery
+MIN_BATTERY_CHARGE_SURPLUS_W: int = 300  # Min surplus watts to start battery charge
+MIN_CONSUMER_SURPLUS_W: int = 200  # Min surplus watts to activate controllable consumers
+MIN_EXPORT_THRESHOLD_W: int = 50  # Below this watts → not considered meaningful export
+DEFAULT_ELLEVIO_TAK_W: float = 2000.0  # Default Ellevio peak cap (W) for surplus calculations
+PV_SURPLUS_BAT_MAX_CHARGE_W: int = 5000  # Max battery charge rate in PV surplus mode (W)

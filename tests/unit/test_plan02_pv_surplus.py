@@ -36,8 +36,8 @@ class TestPlanChargesWhenPvSurplus:
         assert plan[0].action == "c"
 
     def test_plan_idle_when_no_surplus(self) -> None:
-        """With PV=1kW and load=2kW: net=+1kW, price high but load < target → idle."""
-        plan = _plan(pv_kw=[1.0], load_kw=[2.0], prices=[30.0])
+        """With PV=1kW and load=2kW: net=+1kW, price above threshold → idle."""
+        plan = _plan(pv_kw=[1.0], load_kw=[2.0], prices=[80.0])
         assert plan[0].action in ("i", "d")
 
     def test_plan_charges_with_large_surplus(self) -> None:

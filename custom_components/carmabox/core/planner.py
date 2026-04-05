@@ -19,6 +19,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..const import (
+    BATTERY_LOW_NEED_KWH,
+    BATTERY_NEAR_FULL_PCT,
+    DEFAULT_ELLEVIO_TAK_W,
     DEFAULT_EV_MIN_AMPS,
     DEFAULT_PEAK_COST_PER_KW,
     DEFAULT_PEAK_TOP_N,
@@ -28,20 +31,17 @@ from ..const import (
     DEFAULT_VOLTAGE,
     GRID_LIMIT_DEFAULT_KW,
     MAX_EV_CURRENT,
+    MIN_BATTERY_CHARGE_SURPLUS_W,
+    MIN_CONSUMER_SURPLUS_W,
+    MIN_EXPORT_THRESHOLD_W,
     P10_DISCHARGE_CONSERVATIVE_KW,
     P10_DISCHARGE_MODERATE_KW,
     P10_DISCHARGE_NORMAL_KW,
+    PV_BATTERY_FILL_MARGIN_KWH,
+    PV_SURPLUS_BAT_MAX_CHARGE_W,
 )
 from ..optimizer.planner import generate_plan
 from .plan_executor import PlanAction
-
-# EXP-11: Named constants for allocate_pv_surplus policy values
-PV_BATTERY_FILL_MARGIN_KWH = 1.0  # Extra kWh margin for "battery fills from PV"
-BATTERY_NEAR_FULL_PCT = 95.0  # SoC threshold: battery considered "nearly full"
-BATTERY_LOW_NEED_KWH = 1.0  # Below this kWh need → EV gets priority
-MIN_BATTERY_CHARGE_SURPLUS_W = 300  # Min surplus watts to start battery charge
-MIN_CONSUMER_SURPLUS_W = 200  # Min surplus watts to activate consumers
-MIN_EXPORT_THRESHOLD_W = 50  # Below this → not considered export
 
 # Named constants — replaces magic numbers in if-statements
 _SOLAR_INACTIVE_START_HOUR = 6  # Hours before this = no solar production
@@ -355,8 +355,8 @@ def allocate_pv_surplus(
     ev_min_amps: int = DEFAULT_EV_MIN_AMPS,
     ev_max_amps: int = MAX_EV_CURRENT,
     voltage: float = DEFAULT_VOLTAGE,
-    ellevio_tak_w: float = 2000.0,
-    battery_max_charge_w: float = 5000,
+    ellevio_tak_w: float = DEFAULT_ELLEVIO_TAK_W,
+    battery_max_charge_w: float = PV_SURPLUS_BAT_MAX_CHARGE_W,
 ) -> PVSurplusAllocation:
     """Real-time PV surplus allocation — called every 30s cycle.
 

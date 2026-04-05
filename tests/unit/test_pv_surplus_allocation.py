@@ -6,6 +6,16 @@ Tests the real-time PV allocation priority stack:
 
 from __future__ import annotations
 
+from custom_components.carmabox.const import (
+    BATTERY_LOW_NEED_KWH,
+    BATTERY_NEAR_FULL_PCT,
+    DEFAULT_ELLEVIO_TAK_W,
+    MIN_BATTERY_CHARGE_SURPLUS_W,
+    MIN_CONSUMER_SURPLUS_W,
+    MIN_EXPORT_THRESHOLD_W,
+    PV_BATTERY_FILL_MARGIN_KWH,
+    PV_SURPLUS_BAT_MAX_CHARGE_W,
+)
 from custom_components.carmabox.core.planner import allocate_pv_surplus
 
 
@@ -169,6 +179,53 @@ class TestExportPrevention:
             hourly_pv_remaining_kw=[6.0, 6.0, 5.0, 4.0, 3.0, 2.0],
         )
         assert "PV" in r.reason
+
+
+class TestConstantsFromConst:
+    """EXP-11: Named constants from const.py are used in allocate_pv_surplus."""
+
+    def test_constants_have_expected_values(self) -> None:
+        """Verify all EXP-11 constants match the policy values."""
+        assert PV_BATTERY_FILL_MARGIN_KWH == 1.0
+        assert BATTERY_NEAR_FULL_PCT == 95.0
+        assert BATTERY_LOW_NEED_KWH == 1.0
+        assert MIN_BATTERY_CHARGE_SURPLUS_W == 300
+        assert MIN_CONSUMER_SURPLUS_W == 200
+        assert MIN_EXPORT_THRESHOLD_W == 50
+        assert DEFAULT_ELLEVIO_TAK_W == 2000.0
+        assert PV_SURPLUS_BAT_MAX_CHARGE_W == 5000
+
+    def test_battery_nearly_full_triggers_ev_priority(self) -> None:
+        """battery_soc >= BATTERY_NEAR_FULL_PCT → EV gets priority."""
+        r = _alloc(
+            pv_now_w=6000,
+            house_consumption_w=1000,
+            battery_soc_pct=BATTERY_NEAR_FULL_PCT,
+            ev_connected=True,
+            ev_soc_pct=50,
+            is_workday=True,  # Workday → normally battery first, but near-full overrides
+        )
+        assert r.ev_action == "charge"
+
+    def test_min_battery_charge_surplus_boundary(self) -> None:
+        """Surplus exactly at MIN_BATTERY_CHARGE_SURPLUS_W threshold charges battery."""
+        r = _alloc(
+            pv_now_w=1500 + MIN_BATTERY_CHARGE_SURPLUS_W + 1,
+            house_consumption_w=1500,
+            ev_connected=False,
+            battery_soc_pct=50,
+        )
+        assert r.battery_action == "charge"
+
+    def test_below_min_battery_charge_surplus_no_charge(self) -> None:
+        """Surplus below MIN_BATTERY_CHARGE_SURPLUS_W → battery stays on hold."""
+        r = _alloc(
+            pv_now_w=1500 + MIN_BATTERY_CHARGE_SURPLUS_W - 1,
+            house_consumption_w=1500,
+            ev_connected=False,
+            battery_soc_pct=50,
+        )
+        assert r.battery_action == "hold"
 
 
 class TestEdgeCases:

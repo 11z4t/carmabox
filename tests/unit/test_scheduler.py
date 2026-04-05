@@ -154,7 +154,7 @@ class TestBatteryScheduling:
         result = _schedule_battery(
             num_hours=24,
             start_hour=0,
-            hourly_prices=[50.0] * 24,
+            hourly_prices=[80.0] * 24,  # Above grid_charge threshold — prevents early fill
             hourly_pv=[0] * 6 + [3, 5, 7, 8, 8, 7, 5, 3] + [0] * 10,
             hourly_loads=[1.5] * 24,
             hourly_ev=[0.0] * 24,

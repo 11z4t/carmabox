@@ -2800,8 +2800,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             grid_charge_threshold = max(_gc_static, max(5.0, _gc_dynamic))
 
             # PLAT-1237 FIX 4: Night charge awareness
-            # If tomorrow PV forecast is poor AND battery not full → expand threshold for cheap night
-            _tomorrow_pv_kwh = getattr(solcast, "tomorrow_kwh", 0.0) or 0.0
+            # If tomorrow PV forecast is poor AND battery not full → expand threshold
+            _raw_pv = getattr(solcast, "tomorrow_kwh", 0.0)
+            _tomorrow_pv_kwh = float(_raw_pv) if isinstance(_raw_pv, (int, float)) else 0.0
             if _tomorrow_pv_kwh < 5.0 and state.total_battery_soc < 80.0 and prices:
                 _night_hours = {22, 23, 0, 1, 2, 3, 4, 5}
                 _night_prices = sorted(
@@ -3497,7 +3498,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._cfg.get("grid_charge_price_threshold", DEFAULT_GRID_CHARGE_PRICE_THRESHOLD)
         )
         # PLAT-1237: Dynamic threshold = max(static, daily_avg * 0.4)
-        # Ensures threshold NEVER drops below static (IT-2077 min() was wrong — made threshold worse)
+        # Ensures threshold NEVER drops below static (IT-2077 min() was wrong)
         dynamic_threshold = self._daily_avg_price * 0.4 if self._daily_avg_price > 0 else 999
         grid_charge_threshold = max(static_threshold, max(5.0, dynamic_threshold))
 
