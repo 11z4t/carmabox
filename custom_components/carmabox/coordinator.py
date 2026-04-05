@@ -239,6 +239,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._last_feedback_hour: int = -1
         self._peak_hour_samples: list[tuple[float, float]] = []
         self._peak_last_hour: int = -1
+        self._last_hour_avg_weighted_kw: float = 0.0
+        self._last_hour_avg_baseline_kw: float = 0.0
         # _MAX_CORRECTIONS and _MAX_HOUR_SAMPLES are class-level constants (defined below)
         # Grid Guard — LAG 1 enforcement (runs FIRST every cycle)
         from .core.grid_guard import GridGuard, GridGuardConfig
@@ -2802,7 +2804,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # PLAT-1237 FIX 4: Night charge awareness
             # If tomorrow PV forecast is poor AND battery not full → expand threshold
             _raw_pv = getattr(solcast, "tomorrow_kwh", 0.0)
-            _tomorrow_pv_kwh = float(_raw_pv) if isinstance(_raw_pv, (int, float)) else 0.0
+            _tomorrow_pv_kwh = float(_raw_pv) if isinstance(_raw_pv, int | float) else 0.0
             if _tomorrow_pv_kwh < 5.0 and state.total_battery_soc < 80.0 and prices:
                 _night_hours = {22, 23, 0, 1, 2, 3, 4, 5}
                 _night_prices = sorted(
@@ -6052,6 +6054,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 avg_actual = sum(s[0] for s in self._peak_hour_samples) / n
                 avg_baseline = sum(s[1] for s in self._peak_hour_samples) / n
                 record_peak(self.savings, avg_actual, avg_baseline)
+                self._last_hour_avg_weighted_kw = avg_actual
+                self._last_hour_avg_baseline_kw = avg_baseline
             self._peak_hour_samples = []
             self._peak_last_hour = hour
         self._peak_hour_samples.append((weighted_kw, baseline_kw))
@@ -6111,8 +6115,8 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         # Record daily sample for monthly report
         sample = DailySample(
             date=today,
-            peak_kw=weighted_kw,
-            baseline_peak_kw=baseline_kw,
+            peak_kw=getattr(self, "_last_hour_avg_weighted_kw", 0.0) or weighted_kw,
+            baseline_peak_kw=getattr(self, "_last_hour_avg_baseline_kw", 0.0) or baseline_kw,
             discharge_kwh=self._daily_discharge_kwh,
             safety_blocks=self._daily_safety_blocks,
             plans_generated=self._daily_plans,

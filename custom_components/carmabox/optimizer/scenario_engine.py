@@ -140,9 +140,7 @@ class ScenarioEngine:
     cost_model: CostModel
     uncertainty_model: UncertaintyModel | None = field(default=None, compare=False)
 
-    def generate_scenarios(
-        self, state: dict[str, Any], n_scenarios: int = 10
-    ) -> list[Scenario]:
+    def generate_scenarios(self, state: dict[str, Any], n_scenarios: int = 10) -> list[Scenario]:
         """Generate scheduling scenarios.
 
         Without uncertainty_model: produces SCENARIO_MIN_COUNT-SCENARIO_MAX_COUNT
@@ -175,9 +173,7 @@ class ScenarioEngine:
 
     # ── Probabilistic path (PLAT-1233) ─────────────────────────────────────
 
-    def _generate_probabilistic(
-        self, state: dict[str, Any], n_scenarios: int
-    ) -> list[Scenario]:
+    def _generate_probabilistic(self, state: dict[str, Any], n_scenarios: int) -> list[Scenario]:
         """Sample N stochastic futures and return one scored plan per sample, ranked.
 
         For each ScenarioInputs sample:

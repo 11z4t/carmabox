@@ -171,9 +171,7 @@ def test_generate_probabilistic_high_price_increases_cost() -> None:
 
 def test_generate_probabilistic_high_soc_reduces_slots() -> None:
     """High base SoC (fewer slots needed) should not raise and must return n scenarios."""
-    eng = _engine_with_uncertainty(
-        _uncertainty_model(soc=98.0, rng=random.Random(5))
-    )
+    eng = _engine_with_uncertainty(_uncertainty_model(soc=98.0, rng=random.Random(5)))
     state = _base_state()
     state["battery_target_soc"] = 80.0  # already near full
     result = eng.generate_scenarios(state, n_scenarios=5)
@@ -182,9 +180,7 @@ def test_generate_probabilistic_high_soc_reduces_slots() -> None:
 
 def test_generate_probabilistic_pv_factor_scales_pv_tomorrow() -> None:
     """Verify that scenarios are generated (PV factor is forwarded without error)."""
-    eng = _engine_with_uncertainty(
-        _uncertainty_model(rng=random.Random(3))
-    )
+    eng = _engine_with_uncertainty(_uncertainty_model(rng=random.Random(3)))
     state = _base_state()
     state["pv_tomorrow_kwh"] = 20.0
     result = eng.generate_scenarios(state, n_scenarios=4)

@@ -42,9 +42,9 @@ def test_ha_login(page: Page) -> None:
     """Login should redirect to dashboard."""
     _login(page)
     url = page.url
-    assert any(x in url for x in ["lovelace", "onboarding", "config", "states"]), (
-        f"Unexpected URL after login: {url}"
-    )
+    assert any(
+        x in url for x in ["lovelace", "onboarding", "config", "states"]
+    ), f"Unexpected URL after login: {url}"
 
 
 # ── CARMA Box integration tests ──────────────────────────────

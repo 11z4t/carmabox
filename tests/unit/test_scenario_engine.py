@@ -88,9 +88,9 @@ def test_all_scenarios_respect_can_coexist() -> None:
                 for b in devices[i + 1 :]:
                     prof_a = profiles[a]
                     prof_b = profiles[b]
-                    assert can_coexist(prof_a, prof_b), (
-                        f"Scenario '{sc.name}' hour {hour}: {a} and {b} cannot coexist"
-                    )
+                    assert can_coexist(
+                        prof_a, prof_b
+                    ), f"Scenario '{sc.name}' hour {hour}: {a} and {b} cannot coexist"
 
 
 def test_no_hour_has_two_heavy_loads() -> None:
@@ -103,9 +103,9 @@ def test_no_hour_has_two_heavy_loads() -> None:
             hour_power.setdefault(slot.hour, []).append(slot.power_kw)
         for hour, powers in hour_power.items():
             heavy = [p for p in powers if p > heavy_kw]
-            assert len(heavy) <= 1, (
-                f"Scenario '{sc.name}' hour {hour} has {len(heavy)} heavy loads: {powers}"
-            )
+            assert (
+                len(heavy) <= 1
+            ), f"Scenario '{sc.name}' hour {hour} has {len(heavy)} heavy loads: {powers}"
 
 
 # ── 3. Template slot distributions ────────────────────────────────────────
@@ -319,9 +319,9 @@ def test_all_scenarios_have_battery_target_soc() -> None:
     state["battery_target_soc"] = 70.0
     scenarios = _engine().generate_scenarios(state)
     for sc in scenarios:
-        assert sc.battery_target_soc == pytest.approx(70.0), (
-            f"Scenario '{sc.name}' has wrong battery_target_soc"
-        )
+        assert sc.battery_target_soc == pytest.approx(
+            70.0
+        ), f"Scenario '{sc.name}' has wrong battery_target_soc"
 
 
 def test_ev_soc_above_75_battery_heavy_has_no_ev_slots() -> None:

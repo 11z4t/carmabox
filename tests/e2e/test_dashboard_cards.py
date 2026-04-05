@@ -269,9 +269,9 @@ def test_api_plan_status_has_plan_attribute(ha_api_token):
     data = _api_state(ha_api_token, "sensor.carma_box_plan_status")
     assert data, "sensor.carma_box_plan_status finns ej i HA"
     attrs = data.get("attributes", {})
-    assert "plan" in attrs, (
-        f"plan_status saknar 'plan'-attribut. Tillgängliga: {list(attrs.keys())}"
-    )
+    assert (
+        "plan" in attrs
+    ), f"plan_status saknar 'plan'-attribut. Tillgängliga: {list(attrs.keys())}"
 
 
 def test_api_nordpool_price_is_positive_number(ha_api_token):
@@ -311,9 +311,9 @@ def test_api_unauthenticated_request_returns_401():
         f"{HA_URL}/api/states/sensor.house_grid_power",
         timeout=10,
     )
-    assert r.status_code == 401, (
-        f"Förväntat 401 (Unauthorized), fick {r.status_code}. HA verkar exponera API publikt!"
-    )
+    assert (
+        r.status_code == 401
+    ), f"Förväntat 401 (Unauthorized), fick {r.status_code}. HA verkar exponera API publikt!"
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -368,9 +368,9 @@ async def test_tab1_battery_kontor_visible(tab_just_nu):
 async def test_tab1_battery_forrad_visible(tab_just_nu):
     """Batteri-SoC förråd ska visas på Tab 1."""
     body = await _shadow_text(tab_just_nu)
-    assert "förråd" in body.lower() or "forrad" in body.lower(), (
-        "Batteri-etikett 'Förråd' saknas på Tab 1"
-    )
+    assert (
+        "förråd" in body.lower() or "forrad" in body.lower()
+    ), "Batteri-etikett 'Förråd' saknas på Tab 1"
 
 
 async def test_tab1_decision_not_ingen_data(tab_just_nu):
@@ -439,9 +439,9 @@ async def test_tab2_nordpool_price_visible(tab_varfor):
     Priset används för att förklara laddnings-/urladdningsbeslut.
     """
     body = await _shadow_text(tab_varfor)
-    assert "öre" in body.lower() or "nordpool" in body.lower(), (
-        "Tab 2 Nordpool-prissektion saknar öre/nordpool-text"
-    )
+    assert (
+        "öre" in body.lower() or "nordpool" in body.lower()
+    ), "Tab 2 Nordpool-prissektion saknar öre/nordpool-text"
 
 
 async def test_tab2_plan_chart_or_plan_text_present(tab_varfor):
@@ -464,9 +464,9 @@ async def test_tab2_effekt_live_has_values(tab_varfor):
     Visar realtids-effekt för sol, batteri, nät och förbrukning.
     """
     body = await _shadow_text(tab_varfor)
-    assert "effekt" in body.lower() or " w" in body.lower(), (
-        "Tab 2 effekt live-sektion saknar watt-värden"
-    )
+    assert (
+        "effekt" in body.lower() or " w" in body.lower()
+    ), "Tab 2 effekt live-sektion saknar watt-värden"
 
 
 async def test_tab2_health_section_renders(tab_varfor):
@@ -549,9 +549,9 @@ async def test_tab4_no_ingen_data(tab_regler):
     är offline eller har en template-bugg.
     """
     body = await _shadow_text(tab_regler)
-    assert "ingen data" not in body.lower(), (
-        "Tab 4 visar 'Ingen data' — rule_flow-sensor troligen offline"
-    )
+    assert (
+        "ingen data" not in body.lower()
+    ), "Tab 4 visar 'Ingen data' — rule_flow-sensor troligen offline"
 
 
 async def test_tab4_no_critical_load_errors(tab_regler):
