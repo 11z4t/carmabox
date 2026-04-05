@@ -162,7 +162,7 @@ class ScenarioEngine:
                 prices_ore         -- 24-element Nordpool price list (ore/kWh)
                 pv_tomorrow_kwh    -- Solcast PV forecast for tomorrow (kWh)
             n_scenarios: Number of stochastic scenarios (used only when
-                uncertainty_model is set, clamped to >= 1).
+                uncertainty_model is set). n_scenarios <= 0 returns [].
 
         Returns:
             Parametric path: list of Scenario objects, length in [5, 15].
@@ -186,7 +186,9 @@ class ScenarioEngine:
           - Use flat price list [sample.price_ore] * 24 for scheduling + scoring
         Then return all N best plans sorted by total_cost_kr ascending.
         """
-        samples = self.uncertainty_model.sample_inputs(max(1, n_scenarios))  # type: ignore[union-attr]
+        if n_scenarios <= 0:
+            return []
+        samples = self.uncertainty_model.sample_inputs(n_scenarios)  # type: ignore[union-attr]
         base_pv = float(state.get("pv_tomorrow_kwh", 5.0))
         ellevio_zero = EllevioState(month_peak_kw=0.0, top3_weighted_hours=[])
 

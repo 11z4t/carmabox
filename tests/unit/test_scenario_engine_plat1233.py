@@ -107,11 +107,11 @@ def test_generate_probabilistic_n1_returns_one() -> None:
     assert len(result) == 1
 
 
-def test_generate_probabilistic_n0_returns_one() -> None:
-    """n_scenarios=0 is clamped to 1 — caller protection."""
+def test_generate_probabilistic_n0_returns_empty() -> None:
+    """n_scenarios=0 returns empty list — aligns with PLAT-1235 contract."""
     eng = _engine_with_uncertainty(_uncertainty_model())
     result = eng.generate_scenarios(_base_state(), n_scenarios=0)
-    assert len(result) == 1
+    assert result == []
 
 
 def test_generate_probabilistic_large_n() -> None:
