@@ -1,0 +1,47 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Select Asset",
+        "data": {
+          "asset_id": "Asset ID"
+        }
+      },
+      "entity": {
+        "title": "Entity Configuration",
+        "data": {
+          "typical_drag_w": "Typical power draw (W)",
+          "switch_entity": "Switch entity ID",
+          "season_active_entity": "Season active entity (optional)"
+        }
+      },
+      "advanced": {
+        "title": "Hysteresis & Dwell Settings",
+        "data": {
+          "min_dwell_s": "Minimum dwell time (seconds)",
+          "hysteresis_on_pct": "Turn-on threshold (% of typical W)",
+          "hysteresis_off_pct": "Turn-off threshold (% of typical W)"
+        }
+      }
+    },
+    "error": {
+      "invalid_asset_id": "Invalid asset ID — must be pool_vp, pool_elv, or miner",
+      "on_pct_must_exceed_off_pct": "Turn-on threshold must be greater than turn-off threshold"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Hysteresis & Dwell Settings",
+        "data": {
+          "min_dwell_s": "Minimum dwell time (seconds)",
+          "hysteresis_on_pct": "Turn-on threshold (% of typical W)",
+          "hysteresis_off_pct": "Turn-off threshold (% of typical W)"
+        }
+      }
+    },
+    "error": {
+      "on_pct_must_exceed_off_pct": "Turn-on threshold must be greater than turn-off threshold"
+    }
+  }
+}
