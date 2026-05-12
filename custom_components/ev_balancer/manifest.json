@@ -1,0 +1,12 @@
+{
+  "domain": "ev_balancer",
+  "name": "CARMA EV Balancer",
+  "codeowners": ["@carma"],
+  "config_flow": true,
+  "documentation": "https://github.com/11z4t/ha-config/wiki/ev_balancer",
+  "iot_class": "local_polling",
+  "version": "3.1.0",
+  "requirements": [],
+  "homeassistant": "2024.4.0",
+  "integration_type": "service"
+}

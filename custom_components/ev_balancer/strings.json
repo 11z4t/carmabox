@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EV Balancer",
+        "description": "Sets up the EV Balancer smart charger controller. Configuration is managed via input_number/boolean helpers."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one EV Balancer instance is allowed."
+    }
+  }
+}

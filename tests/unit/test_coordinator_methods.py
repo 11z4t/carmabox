@@ -164,9 +164,15 @@ class TestCheckDailyGoals:
 
     def test_breach_escalation_critical_3_breaches(self) -> None:
         """3+ breaches in 7 days → escalation level 2 (lines 6083-6088)."""
+        from datetime import datetime, timedelta
+
+        today = datetime.now().date()
+        d1 = (today - timedelta(days=2)).isoformat()
+        d2 = (today - timedelta(days=3)).isoformat()
+        d3 = (today - timedelta(days=4)).isoformat()
         coord = _make_coordinator(cfg={"target_kw_day": 2.0})
-        # Pre-fill breach history with 3 recent dates
-        coord._breach_history = {"ellevio": ["2026-03-29", "2026-03-30", "2026-03-31"]}
+        # Pre-fill with 3 recent dates (relative, avoids 7-day window expiry)
+        coord._breach_history = {"ellevio": [d1, d2, d3]}
         ell_max = _make_state(state="5.5")  # breaches ellevio goal
         coord.hass.states.get = lambda eid: ell_max if "ellevio_dagens_max" in eid else None
         state = _make_carmabox_state()

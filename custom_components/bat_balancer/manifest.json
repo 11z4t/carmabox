@@ -1,0 +1,12 @@
+{
+  "domain": "bat_balancer",
+  "name": "CARMA Battery Balancer",
+  "version": "3.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/11z4t/ha-config/blob/main/custom_components/bat_balancer/README.md",
+  "issue_tracker": "https://github.com/11z4t/ha-config/issues",
+  "dependencies": [],
+  "codeowners": ["@carma"],
+  "iot_class": "local_polling",
+  "requirements": []
+}

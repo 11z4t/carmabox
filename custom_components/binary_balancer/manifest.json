@@ -1,7 +1,7 @@
 {
   "domain": "binary_balancer",
-  "name": "Binary Balancer",
-  "codeowners": ["@4recon"],
+  "name": "CARMA Power Balancer",
+  "codeowners": ["@carma"],
   "config_flow": true,
   "documentation": "",
   "issue_tracker": "",

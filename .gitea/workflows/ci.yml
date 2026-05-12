@@ -1,0 +1,54 @@
+name: CARMA Box CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Lint + Test + Manifest
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[dev]" 2>/dev/null || pip install -r requirements-dev.txt
+          pip install ruff pytest pytest-cov
+
+      - name: Ruff lint
+        run: ruff check custom_components/ tests/
+
+      - name: Ruff format check
+        run: ruff format --check custom_components/ tests/
+
+      - name: Pytest
+        run: pytest tests/ -q --tb=short
+
+      - name: Manifest validation
+        run: |
+          python - << 'PYEOF'
+          import json, pathlib, sys
+          ok = True
+          for mf in pathlib.Path("custom_components").rglob("manifest.json"):
+              data = json.loads(mf.read_text())
+              name = data.get("name", "")
+              domain = data.get("domain", "")
+              owners = data.get("codeowners", [])
+              if not name.startswith("CARMA "):
+                  print(f"FAIL {mf}: name '{name}' must start with 'CARMA '")
+                  ok = False
+              if "@carma" not in owners:
+                  print(f"FAIL {mf}: codeowners must include '@carma'")
+                  ok = False
+              print(f"OK   {domain}: '{name}' {owners}")
+          sys.exit(0 if ok else 1)
+          PYEOF

@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "EV Balancer",
+        "description": "Sets up the EV Balancer smart charger controller. Tuning is done via input_number helpers (cycle_s, headroom_a, pause_dwell_s etc)."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Only one EV Balancer instance is allowed."
+    }
+  }
+}
