@@ -209,6 +209,17 @@ def translate_target_to_action(
     # ── P9c: Hard cap at physical fuse ───────────────────────────────────
     desired_a = min(desired_a, int(snap.ev_max_physical_fuse_a), snap.max_a)
 
+    # ── P9c+: Brain-offer invariant clamp ────────────────────────────────
+    # Balancer NEVER commands more than brain_target_ev_w + 100W.
+    # brain_target_ev_w is already zeroed upstream if stale (coordinator).
+    _brain_cap_a = max(
+        0, int((snap.brain_target_ev_w + 100.0) / max(1.0, snap.line_voltage * snap.phase_count))
+    )
+    if desired_a > _brain_cap_a:
+        _clamped_w = (desired_a - _brain_cap_a) * snap.phase_count * snap.line_voltage
+        rejected_w += _clamped_w
+        desired_a = _brain_cap_a
+
     # ── P9d: If soft-fuse cap is below min_a → HOLD (cannot safely charge) ──
     if 0 < desired_a < snap.min_a:
         return EvDecision(
@@ -250,8 +261,10 @@ def translate_target_to_action(
 
     # ── P9f: R4 — ramp up at most 1A per min_dwell_s period ──────────────
     current_a = state.last_dynamic_a
-    max_step = desired_a  # no ramp cap within a single cycle; dwell enforces rate
-    target_a = max_step  # ramp: coordinator enforces min_dwell between writes
+    # 1A-per-dwell ramp up; ramp down is immediate (safety)
+    target_a = (
+        min(current_a + 1, desired_a) if current_a > 0 and desired_a > current_a else desired_a
+    )
 
     # ── P8c: Amp dwell hold (between consecutive amp changes) ────────────
     if target_a != current_a:

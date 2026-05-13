@@ -15,6 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import (
+    BRAIN_STALE_THRESHOLD_S,
     DEFAULT_CYCLE_S,
     DOMAIN,
     ENTITY_BRAIN_TARGET_EV_W,
@@ -78,6 +79,7 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
         self._last_tick_ts: float = 0.0
 
         # Metric tracking (timestamps of events in last 24h)
+        self._invariant_breach_ts: list[float] = []  # brain-offer clamp fires
         self._amp_change_ts: list[float] = []
         self._pause_resume_ts: list[float] = []
         self._fault_ts: list[float] = []
@@ -143,10 +145,29 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
         self.async_set_updated_data(self._state)
 
     def _build_snapshot(self) -> SensorSnapshot:
+        # Staleness guard: treat brain offer as 0 if entity not updated in 60s
+        _brain_target_ev_w = 0.0
+        _brain_state = self.hass.states.get(ENTITY_BRAIN_TARGET_EV_W)
+        if _brain_state is not None and _brain_state.state not in ("unknown", "unavailable", ""):
+            from homeassistant.util import dt as _dt
+
+            _age_s = (_dt.utcnow() - _brain_state.last_changed).total_seconds()
+            if _age_s <= BRAIN_STALE_THRESHOLD_S:
+                try:
+                    _brain_target_ev_w = float(_brain_state.state)
+                except (ValueError, TypeError):
+                    _brain_target_ev_w = 0.0
+            else:
+                _LOGGER.warning(
+                    "ev_balancer: brain_target_ev_w stale %.0fs > %ds — clamping to 0",
+                    _age_s,
+                    BRAIN_STALE_THRESHOLD_S,
+                )
+                self._invariant_breach_ts.append(time.time())
         return SensorSnapshot(
-            brain_target_ev_w=self._read_float(ENTITY_BRAIN_TARGET_EV_W, 0.0),
+            brain_target_ev_w=_brain_target_ev_w,
             ev_soc=self._read_float(ENTITY_EV_SOC_FILTERED, 0.0),
-            ev_target_soc=self._read_float(ENTITY_EV_TARGET_SOC, 90.0),
+            ev_target_soc=self._read_float(ENTITY_EV_TARGET_SOC, 100.0),
             ev_min_start_soc=self._read_float(ENTITY_EV_MIN_START_SOC, 0.0),
             easee_status=self._read_str(ENTITY_EASEE_STATUS, "disconnected"),
             easee_phase_mode=self._read_str(ENTITY_EASEE_PHASE_MODE, "unknown"),
@@ -251,6 +272,7 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
 
     def _purge_old_metrics(self) -> None:
         cutoff = time.time() - _24H_S
+        self._invariant_breach_ts = [t for t in self._invariant_breach_ts if t > cutoff]
         self._amp_change_ts = [t for t in self._amp_change_ts if t > cutoff]
         self._pause_resume_ts = [t for t in self._pause_resume_ts if t > cutoff]
         self._fault_ts = [t for t in self._fault_ts if t > cutoff]
@@ -285,6 +307,11 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
         return state.state == "on"
 
     # ── Public properties (used by sensor.py) ─────────────────────────────────
+
+    @property
+    def invariant_breach_count_24h(self) -> int:
+        """Number of brain-offer clamp or stale events in last 24h."""
+        return len(self._invariant_breach_ts)
 
     @property
     def dwell_remaining_s(self) -> float:

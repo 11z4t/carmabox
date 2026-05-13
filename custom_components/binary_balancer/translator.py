@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from .const import BRAIN_STALE_THRESHOLD_S
 from .models import (
     ActionMessage,
     AssetConfig,
@@ -55,33 +56,28 @@ def translate(
             cap_engage=False,
         )
 
-    # 2. No action (Brain silent)
+    # 2. No action (Brain silent) — FAIL SAFE: off (invariant requires explicit ON)
     if action is None:
-        return TranslateResult(
-            action=SwitchAction.HOLD,
-            reason="no_action",
-            fault_state=FaultState.OFFLINE,
-            fault_detail="No ACTION from Brain",
-            actual_w=config.typical_drag_w if state.switch_on else 0.0,
-            rejected_w=0.0,
-            rejected_reason="",
-            stale_action=True,
-            cap_engage=False,
+        return _force_off(
+            config=config,
+            state=state,
+            now_ts=now_ts,
+            reason="no_action_brain_silent",
+            rejected_reason="brain_silent",
+            rejected_w=config.typical_drag_w if state.switch_on else 0.0,
         )
 
-    # 3. Stale action
-    stale = sensors.action_age_s > action.deadline_s
+    # 3. Stale action — FAIL SAFE: off. Universal 60s cap regardless of action.deadline_s.
+    stale = sensors.action_age_s > min(action.deadline_s, BRAIN_STALE_THRESHOLD_S)
     if stale:
-        return TranslateResult(
-            action=SwitchAction.HOLD,
-            reason="stale_action",
-            fault_state=FaultState.OK,
-            fault_detail="",
-            actual_w=config.typical_drag_w if state.switch_on else 0.0,
-            rejected_w=0.0,
-            rejected_reason="",
+        return _force_off(
+            config=config,
+            state=state,
+            now_ts=now_ts,
+            reason=f"stale_action_age={sensors.action_age_s:.0f}s",
+            rejected_reason="stale_action",
+            rejected_w=config.typical_drag_w if state.switch_on else 0.0,
             stale_action=True,
-            cap_engage=True,
         )
 
     # 4. mode == "off" — Brain explicitly says off
@@ -215,6 +211,7 @@ def _force_off(
     reason: str,
     rejected_reason: str,
     rejected_w: float,
+    stale_action: bool = False,
 ) -> TranslateResult:
     """Build a TURN_OFF result, respecting min_dwell if device is currently on."""
     if state.switch_on:
@@ -229,7 +226,7 @@ def _force_off(
                 actual_w=config.typical_drag_w,
                 rejected_w=0.0,
                 rejected_reason="",
-                stale_action=False,
+                stale_action=stale_action,
                 cap_engage=False,
             )
     return TranslateResult(
@@ -240,7 +237,7 @@ def _force_off(
         actual_w=0.0,
         rejected_w=rejected_w,
         rejected_reason=rejected_reason,
-        stale_action=False,
+        stale_action=stale_action,
         cap_engage=False,
     )
 

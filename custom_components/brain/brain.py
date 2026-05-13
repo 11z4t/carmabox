@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from .const import (
+    BINARY_ACTION_TMPL,
+    BINARY_ASSET_IDS,
     BUFFER_WRITE_EPSILON_KWH,
     DEADBAND_W,
     DEFAULT_BAT_CAPACITY_KWH,
@@ -40,6 +42,7 @@ from .const import (
     DEFAULT_NIGHT_END_HOUR,
     DEFAULT_NIGHT_START_HOUR,
     DEFAULT_NON_CARMA_ANTICIPATION_W,
+    DEFAULT_PER_PHASE_WARNING_A,
     EASEE_CONNECTED_STATES,
     ENTITY_BAT_AVG_SOC_PCT,
     ENTITY_BAT_BALANCER_CAPABILITY,
@@ -51,6 +54,7 @@ from .const import (
     ENTITY_BRAIN_NON_CARMA_ANTICIPATION_W,
     ENTITY_BRAIN_PV_BUFFER_KWH,
     ENTITY_BRAIN_PV_SURPLUS_REMAINING_KWH,
+    ENTITY_BRAIN_SKIP_NIGHT_CHARGE,
     ENTITY_BRAIN_STRATEGY,
     ENTITY_BUFFER_GATE_ENABLED,
     ENTITY_CASCADE_REASON,
@@ -65,9 +69,13 @@ from .const import (
     ENTITY_FORCE_EV_AMPS,
     ENTITY_GRID_POWER,
     ENTITY_HOUSE_BASELINE_KW,
+    ENTITY_HOUSE_L1_CURRENT_A,
+    ENTITY_HOUSE_L2_CURRENT_A,
+    ENTITY_HOUSE_L3_CURRENT_A,
     ENTITY_HOUSE_TOTAL_W,
     ENTITY_NIGHT_CHARGE_END,
     ENTITY_NIGHT_CHARGE_START,
+    ENTITY_PER_PHASE_FUSE_WARNING_A,
     ENTITY_PS2_PEAK_SHAVING_LIMIT,
     ENTITY_PV2_MANUAL_MODE_FORRAD,
     ENTITY_PV2_MANUAL_MODE_KONTOR,
@@ -140,6 +148,20 @@ class BrainInput:
     non_carma_load_w: float = 0.0  # measured: house_total - ev_actual; 0=unknown
     non_carma_anticipation_w: float = DEFAULT_NON_CARMA_ANTICIPATION_W
 
+    # ── v0.4.1 binary-asset + operator fields ────────────────────────────────
+    ev_priority_operator: bool = False  # input_boolean.brain_ev_priority: bypass buffer gate
+
+    # ── v0.6a: NO_CHARGE operator gate ──────────────────────────────────────────
+    skip_night_charge: bool = (
+        True  # conservative: block night grid-charge unless explicitly allowed
+    )
+
+    # ── v0.4.2 fields: per-phase fuse gate ────────────────────────────────────
+    l1_current_a: float = 0.0
+    l2_current_a: float = 0.0
+    l3_current_a: float = 0.0
+    per_phase_fuse_warning_a: float = 14.0
+
 
 @dataclass(frozen=True)
 class BrainOutput:
@@ -153,6 +175,7 @@ class BrainOutput:
     target_ev_w: float
     target_bat_w: float
     reason: str
+    surplus_w: float = 0.0  # PV anti-export surplus available for binary assets
 
 
 def _night_window_active(current: time, start: time, end: time) -> bool:
@@ -219,7 +242,7 @@ class BrainController:
       - pv2_manual_mode_{kontor,forrad} → mapped from target_bat_w + ev_connected
 
     v0.4: buffer snapshot computed before cascade, 4 buffer outputs published.
-    All writes are idempotent (skip if value unchanged). Manual pv2 override is
+    target_ev_w and target_bat_w write every cycle (v0.4.2-P3 — no skip). Manual pv2 override is
     respected (Brain does not overwrite when sensor.pv2_reason contains 'Manuellt').
     """
 
@@ -254,6 +277,7 @@ class BrainController:
         # v0.4.1-B: EV plug-in cooldown state
         self._ev_plugin_detected_at: float | None = None
         self._prev_ev_connected: bool | None = None  # None = first tick (no history)
+        self._cycle_id: int = 0  # monotonic counter for binary action cycle_id
         self._unsub: Any = None
 
     def start(self) -> None:  # pragma: no cover
@@ -289,7 +313,46 @@ class BrainController:
         await self._async_write_cascade_reason(out.reason)
         await self._async_write_pv2_mode(out.target_bat_w, inp.ev_connected)
         await self._async_write_buffer_outputs(snapshot)
+        self._cycle_id += 1
+        await self._async_write_binary_actions(out.surplus_w, out.target_ev_w, out.reason)
         self._append_decision_log(out.target_ev_w, out.reason, out.target_bat_w, snapshot)
+
+    async def _async_write_binary_actions(
+        self, surplus_w: float, target_ev_w: float, reason: str
+    ) -> None:
+        """Publish Brain ACTION JSON to binary_balancer input_text helpers.
+
+        binary_target_w = surplus_w - target_ev_w (remaining PV after EV allocation).
+        Writes compact ActionMessage JSON consumed by binary_balancer coordinator.
+        Assets: miner, pool_vp, pool_elv (const.BINARY_ASSET_IDS).
+        """
+        binary_target_w = max(0.0, surplus_w - target_ev_w)
+        mode = "on" if binary_target_w > 0.0 else "off"
+        ts = datetime.now(tz=UTC).isoformat(timespec="seconds")
+        for asset_id in BINARY_ASSET_IDS:
+            entity_id = BINARY_ACTION_TMPL.format(asset_id=asset_id)
+            payload = json.dumps(
+                {
+                    "a": asset_id,
+                    "w": round(binary_target_w, 1),
+                    "m": mode,
+                    "dl": 120,
+                    "r": reason[:60],
+                    "c": self._cycle_id,
+                    "s": "brain",
+                    "t": ts,
+                },
+                separators=(",", ":"),
+            )
+            try:
+                await self._hass.services.async_call(
+                    "input_text",
+                    "set_value",
+                    {"entity_id": entity_id, "value": payload},
+                    blocking=True,
+                )
+            except Exception as err:
+                _LOGGER.warning("Brain: failed to write %s - %s", entity_id, err)
 
     def _compute_buffer_snapshot(self) -> BufferSnapshot:
         """Compute PV-buffer snapshot from current HA state."""
@@ -398,7 +461,7 @@ class BrainController:
                 (self._state_float_or_none(ENTITY_HOUSE_TOTAL_W) or 0.0)
                 - max(0.0, self._last_target_w or 0.0),
             ),
-            ellevio_tak_w=self._state_float_or_none(ENTITY_ELLEVIO_DYNAMISKT_TAK) or 0.0,
+            ellevio_tak_w=(self._state_float_or_none(ENTITY_ELLEVIO_DYNAMISKT_TAK) or 0.0) * 1000.0,
             ps2_limit_w=self._state_float_or_none(ENTITY_PS2_PEAK_SHAVING_LIMIT) or 0.0,
             grid_safety_margin_w=self._state_float(
                 ENTITY_BRAIN_GRID_SAFETY_MARGIN_W, DEFAULT_GRID_SAFETY_MARGIN_W
@@ -407,6 +470,16 @@ class BrainController:
             ev_plugin_cooldown_remaining_s=_ev_cooldown[1],
             non_carma_anticipation_w=self._state_float(
                 ENTITY_BRAIN_NON_CARMA_ANTICIPATION_W, DEFAULT_NON_CARMA_ANTICIPATION_W
+            ),
+            ev_priority_operator=self._state_bool("input_boolean.brain_ev_priority", default=False),
+            # ── v0.6a NO_CHARGE operator gate ───────────────────────────────
+            skip_night_charge=self._state_bool(ENTITY_BRAIN_SKIP_NIGHT_CHARGE, default=True),
+            # ── v0.4.2 per-phase fuse gate ──────────────────────────────────
+            l1_current_a=self._state_float(ENTITY_HOUSE_L1_CURRENT_A, 0.0),
+            l2_current_a=self._state_float(ENTITY_HOUSE_L2_CURRENT_A, 0.0),
+            l3_current_a=self._state_float(ENTITY_HOUSE_L3_CURRENT_A, 0.0),
+            per_phase_fuse_warning_a=self._state_float(
+                ENTITY_PER_PHASE_FUSE_WARNING_A, DEFAULT_PER_PHASE_WARNING_A
             ),
         )
 
@@ -445,10 +518,11 @@ class BrainController:
             setattr(self, last_ref, prev)
 
     async def _async_write_target(self, target_w: float, reason: str) -> None:
-        """Write target_ev_w to HA helper — skips if identical (idempotent)."""
-        if self._last_target_w == target_w:
-            return
+        """Write target_ev_w to HA helper every cycle (no skip — ensures HA reflects Brain).
 
+        v0.4.2-P3: Always write regardless of previous value. HA state can be
+        changed externally (manual set, restart) — Brain must re-assert each cycle.
+        """
         prev = self._last_target_w
         self._last_target_w = target_w
 
@@ -472,10 +546,10 @@ class BrainController:
         _LOGGER.info("Brain -> target_ev_w=%.0fW  reason=%s", target_w, reason)
 
     async def _async_write_bat_target(self, target_bat_w: float, reason: str) -> None:
-        """Write target_bat_w to HA helper — skips if identical (idempotent)."""
-        if self._last_bat_w == target_bat_w:
-            return
+        """Write target_bat_w to HA helper every cycle (no skip — ensures HA reflects Brain).
 
+        v0.4.2-P3: Always write regardless of previous value.
+        """
         prev = self._last_bat_w
         self._last_bat_w = target_bat_w
 

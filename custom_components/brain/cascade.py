@@ -79,12 +79,17 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
     Returns:
         BrainOutput(target_ev_w, target_bat_w, reason).
     """
+    # Pre-compute raw surplus (anti-export W available this tick; 0 if inside deadband).
+    # Used in early returns so binary assets always get their share of leftover PV.
+    _raw_surplus_w: float = max(0.0, -inp.grid_w) if inp.grid_w <= -inp.deadband_w else 0.0
+
     # ── P0: FORCE OVERRIDE ──────────────────────────────────────────────────
     if inp.force_active:
         target_ev_w = inp.force_a * PHASES * VOLTAGE_V
         return BrainOutput(
             target_ev_w=target_ev_w,
             target_bat_w=0.0,
+            surplus_w=_raw_surplus_w,
             reason=f"FORCE_OVERRIDE amps={inp.force_a:.1f}",
         )
 
@@ -93,6 +98,7 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=0.0,
             target_bat_w=0.0,
+            surplus_w=_raw_surplus_w,
             reason="EV_NOT_CONNECTED",
         )
 
@@ -100,6 +106,7 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=0.0,
             target_bat_w=0.0,
+            surplus_w=_raw_surplus_w,
             reason=f"SOC_TARGET_REACHED soc={inp.ev_soc:.1f}%",
         )
 
@@ -109,7 +116,20 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=0.0,
             target_bat_w=0.0,
+            surplus_w=_raw_surplus_w,
             reason=f"EV_PLUGIN_COOLDOWN remaining_s={inp.ev_plugin_cooldown_remaining_s:.0f}",
+        )
+
+    # ── P1.5: NO_CHARGE OPERATOR TOGGLE (v0.6a) ─────────────────────────────
+    # Operator blocks night grid-charging without force-override.
+    # Bypasses P2 NIGHT_CHARGE when skip_night_charge=on + in_night_window.
+    # Daytime surplus (P3) is NOT blocked — gate is night-only.
+    if inp.in_night_window and inp.skip_night_charge:
+        return BrainOutput(
+            target_ev_w=0.0,
+            target_bat_w=0.0,
+            surplus_w=_raw_surplus_w,
+            reason="NO_CHARGE_OPERATOR_TOGGLE ev_w=0",
         )
 
     # ── P2: NIGHT WINDOW — grid charges EV, bat IDLE ────────────────────────
@@ -117,7 +137,28 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=inp.ev_min_charge_w,
             target_bat_w=0.0,
+            surplus_w=0.0,
             reason=f"NIGHT_CHARGE ev_w={inp.ev_min_charge_w:.0f}",
+        )
+
+    # ── P_PER_PHASE_FUSE: Per-fas strömskydd (v0.4.2-F) ─────────────────────
+    # Protects against tripping 16A fuse on any single phase.
+    # Live incident 2026-05-12 18:08: Brain had no per-phase guard.
+    # Threshold configurable (default 14A = 2A below 16A fuse).
+    _max_phase_a = max(inp.l1_current_a, inp.l2_current_a, inp.l3_current_a)
+    if _max_phase_a >= inp.per_phase_fuse_warning_a:
+        return BrainOutput(
+            target_ev_w=0.0,
+            target_bat_w=0.0,
+            reason=(
+                f"PER_PHASE_FUSE_PROTECT"
+                f" max_a={_max_phase_a:.1f}A"
+                f" limit={inp.per_phase_fuse_warning_a:.0f}A"
+                f" L1={inp.l1_current_a:.1f}"
+                f" L2={inp.l2_current_a:.1f}"
+                f" L3={inp.l3_current_a:.1f}"
+            ),
+            surplus_w=_raw_surplus_w,
         )
 
     # ── P_ELLEVIO: Ellevio-tak pre-gate (v0.4.1-A) ──────────────────────────
@@ -146,24 +187,34 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
                     f" tak={inp.ellevio_tak_w:.0f}W"
                     f" import={_current_import_w:.0f}W"
                 ),
+                surplus_w=0.0,
             )
 
     # ── P3-BUFFER-GATE (v0.4) ───────────────────────────────────────────────
     # Determines whether bat-supplement (P3c) is allowed this tick.
     # P3b ANTI_EXPORT (direct-sol >= ev_min) ALWAYS passes — direct solar
     # power never competes with bat charge target.
-    if inp.buffer_gate_enabled and inp.buffer_strategy in (
+    # ev_priority_operator (v0.4.1-E): operator-override bypasses buffer gate.
+    # Ellevio gate (above) still applies and cannot be overridden.
+    if inp.ev_priority_operator:
+        bat_supplement_allowed = True
+        _ev_prio_prefix = "EV_PRIORITY_OPERATOR_"
+    elif inp.buffer_gate_enabled and inp.buffer_strategy in (
         STRATEGY_BAT_PRIORITY,
         STRATEGY_NO_SUN,
         STRATEGY_FORECAST_UNAVAILABLE,
     ):
         bat_supplement_allowed = False
+        _ev_prio_prefix = ""
     else:
         bat_supplement_allowed = True  # BUFFER_AVAILABLE, BAT_FULL, or gate disabled
+        _ev_prio_prefix = ""
+
+    # Pre-compute daytime surplus (moved here from P3 body for reuse in all P3 returns)
+    surplus_w = _raw_surplus_w
 
     # ── P3: DAYTIME ─────────────────────────────────────────────────────────
-    # surplus_w: anti-export power available (zero if grid is inside deadband)
-    surplus_w = max(0.0, -inp.grid_w) if inp.grid_w <= -inp.deadband_w else 0.0
+    # surplus_w computed above (shared between gate and P3 allocations)
 
     if not inp.bat_support_enabled:
         # P3a: v0.1 fallback — anti-export only, no bat supplement.
@@ -173,11 +224,13 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
             return BrainOutput(
                 target_ev_w=surplus_w,
                 target_bat_w=0.0,
+                surplus_w=surplus_w,
                 reason=f"ANTI_EXPORT_NO_BAT grid_w={inp.grid_w:.0f}W",
             )
         return BrainOutput(
             target_ev_w=0.0,
             target_bat_w=0.0,
+            surplus_w=surplus_w,
             reason=f"NO_SURPLUS_NO_BAT grid_w={inp.grid_w:.0f}W",
         )
 
@@ -187,6 +240,7 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=surplus_w,
             target_bat_w=0.0,
+            surplus_w=surplus_w,
             reason=f"ANTI_EXPORT grid_w={inp.grid_w:.0f}W",
         )
 
@@ -206,8 +260,9 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=inp.ev_min_charge_w,
             target_bat_w=target_bat_w,
+            surplus_w=surplus_w,
             reason=(
-                f"BAT_SUPPLEMENT_BUFFER_OK"
+                f"{_ev_prio_prefix}BAT_SUPPLEMENT_BUFFER_OK"
                 f" ev_w={inp.ev_min_charge_w:.0f}W"
                 f" sun={surplus_w:.0f}W"
                 f" bat={target_bat_w:.0f}W"
@@ -220,6 +275,7 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
         return BrainOutput(
             target_ev_w=0.0,
             target_bat_w=0.0,
+            surplus_w=surplus_w,
             reason=f"BAT_PRIORITY_BUFFER_BLOCK strategy={inp.buffer_strategy}",
         )
 
@@ -227,5 +283,6 @@ def compute_targets(inp: BrainInput) -> BrainOutput:
     return BrainOutput(
         target_ev_w=0.0,
         target_bat_w=0.0,
-        reason=f"BAT_CANNOT_SUPPORT {reason}",
+        surplus_w=surplus_w,
+        reason=f"{_ev_prio_prefix}BAT_CANNOT_SUPPORT {reason}",
     )

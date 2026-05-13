@@ -578,21 +578,23 @@ class TestTranslateGuardianSafeState:
 
 
 class TestTranslateNoAction:
-    def test_returns_hold_with_offline(self) -> None:
+    def test_returns_turn_off_when_brain_silent(self) -> None:
+        # action=None (brain silent) → fail-safe TURN_OFF
         cfg = _cfg()
         snap = _snap()
         st = _state()
         result = translate(None, cfg, snap, st, NOW_TS)
-        assert result.action == SwitchAction.HOLD
-        assert result.fault_state == FaultState.OFFLINE
-        assert result.stale_action is True
+        assert result.action == SwitchAction.TURN_OFF
+        assert result.fault_state == FaultState.OK
+        assert result.stale_action is False
 
     def test_actual_w_when_switch_on(self) -> None:
+        # action=None, switch_on=True, dwell expired (last_change_ts=0) → TURN_OFF → actual_w=0
         cfg = _cfg(typical_drag_w=2500.0)
         snap = _snap(switch_is_on=True)
         st = _state(switch_on=True)
         result = translate(None, cfg, snap, st, NOW_TS)
-        assert result.actual_w == pytest.approx(2500.0)
+        assert result.actual_w == pytest.approx(0.0)
 
     def test_actual_w_when_switch_off(self) -> None:
         cfg = _cfg(typical_drag_w=2500.0)
@@ -608,20 +610,22 @@ class TestTranslateNoAction:
 
 
 class TestTranslateStaleAction:
-    def test_stale_action_returns_hold(self) -> None:
+    def test_stale_action_returns_turn_off(self) -> None:
+        # stale (>60s universal cap) with switch_off → TURN_OFF immediately
         cfg = _cfg()
         action = _action(deadline_s=120)
-        snap = _snap(action_age_s=121.0)  # older than deadline
+        snap = _snap(action_age_s=121.0)  # older than 60s universal threshold
         st = _state()
         result = translate(action, cfg, snap, st, NOW_TS)
-        assert result.action == SwitchAction.HOLD
+        assert result.action == SwitchAction.TURN_OFF
         assert result.stale_action is True
-        assert result.cap_engage is True
+        assert result.cap_engage is False
 
-    def test_not_stale_exactly_at_deadline(self) -> None:
+    def test_not_stale_exactly_at_universal_threshold(self) -> None:
+        # Universal 60s threshold: exactly at 60s is NOT stale (> not >=)
         cfg = _cfg()
         action = _action(deadline_s=120)
-        snap = _snap(action_age_s=120.0)  # exactly at deadline — NOT stale
+        snap = _snap(action_age_s=60.0)  # exactly at BRAIN_STALE_THRESHOLD_S — NOT stale
         st = _state(switch_on=False)
         result = translate(action, cfg, snap, st, NOW_TS)
         assert result.stale_action is False
@@ -634,12 +638,13 @@ class TestTranslateStaleAction:
         assert result.fault_state == FaultState.OK
 
     def test_stale_actual_w_when_on(self) -> None:
+        # stale + switch_on + dwell expired (last_change_ts=0) → TURN_OFF → actual_w=0
         cfg = _cfg(typical_drag_w=3000.0)
         action = _action(deadline_s=120)
         snap = _snap(action_age_s=200.0)
         st = _state(switch_on=True)
         result = translate(action, cfg, snap, st, NOW_TS)
-        assert result.actual_w == pytest.approx(3000.0)
+        assert result.actual_w == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -1188,13 +1193,13 @@ class TestReasonStrings:
 
     def test_no_action_reason(self) -> None:
         result = translate(None, _cfg(), _snap(), _state(), NOW_TS)
-        assert result.reason == "no_action"
+        assert result.reason == "no_action_brain_silent"
 
     def test_stale_action_reason(self) -> None:
         action = _action(deadline_s=120)
         snap = _snap(action_age_s=200.0)
         result = translate(action, _cfg(), snap, _state(), NOW_TS)
-        assert result.reason == "stale_action"
+        assert result.reason.startswith("stale_action_age=")
 
     def test_mode_off_reason(self) -> None:
         action = _action(mode="off")
@@ -1258,11 +1263,12 @@ class TestCapEngageAndFaultPaths:
         result = translate(None, _cfg(), snap, _state(), NOW_TS)
         assert result.cap_engage is False
 
-    def test_cap_engage_true_for_stale(self) -> None:
+    def test_cap_engage_false_for_stale(self) -> None:
+        # stale action → TURN_OFF → cap_engage=False (turn-off is the cap, not engage-cap)
         action = _action(deadline_s=60)
         snap = _snap(action_age_s=70.0)
         result = translate(action, _cfg(), snap, _state(), NOW_TS)
-        assert result.cap_engage is True
+        assert result.cap_engage is False
 
     def test_cap_engage_false_for_mode_off(self) -> None:
         action = _action(mode="off")

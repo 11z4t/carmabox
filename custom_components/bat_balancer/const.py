@@ -62,6 +62,10 @@ DECISION_LOG_MAX_AGE_DAYS = 7
 DECISION_LOG_RATE_LIMIT_S = 60
 
 
+BRAIN_STALE_THRESHOLD_S: int = 60  # seconds
+BRAIN_OFFER_TOLERANCE_W: float = 100.0  # balancer sum ≤ brain_offer + this
+
+
 class BatBalancerStatus(StrEnum):
     OK = "ok"
     OFFLINE_BANK = "offline_bank"
@@ -79,3 +83,4 @@ class RejectedReason(StrEnum):
     OVERFLOW_UNRESOLVED = "overflow_unresolved"
     BRAIN_UNAVAILABLE = "brain_unavailable"
     DISTRIBUTION_ERROR = "distribution_error"
+    BRAIN_OFFER_CLAMP = "brain_offer_clamp"

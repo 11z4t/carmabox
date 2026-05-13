@@ -17,6 +17,8 @@ EV_MIN_CHARGE_W = EV_MIN_A * PHASE_COUNT_DEFAULT * LINE_VOLTAGE_DEFAULT  # 4140 
 
 # Default tuning parameters (Borje 2026-05-09)
 DEFAULT_CYCLE_S = 5
+BRAIN_STALE_THRESHOLD_S: int = 60  # seconds — brain offer treated as 0 if older
+BRAIN_OFFER_TOLERANCE_W: float = 100.0  # balancer may not exceed brain offer by more than this
 DEFAULT_PHASE_HEADROOM_A = 6
 DEFAULT_PAUSE_DWELL_S = 120
 DEFAULT_FAULT_COOLDOWN_S = 60
@@ -62,9 +64,9 @@ EASEE_STATUS_ERROR = "error"  # E-state
 EASEE_STATUS_READY_TO_CHARGE = "ready_to_charge"
 
 # House current sensors (brand-agnostic) — phase 1/2/3 in Amperes
-ENTITY_HOUSE_PHASE_A_1 = "sensor.house_phase_a_l1"
-ENTITY_HOUSE_PHASE_A_2 = "sensor.house_phase_a_l2"
-ENTITY_HOUSE_PHASE_A_3 = "sensor.house_phase_a_l3"
+ENTITY_HOUSE_PHASE_A_1 = "sensor.house_l1_current_a"
+ENTITY_HOUSE_PHASE_A_2 = "sensor.house_l2_current_a"
+ENTITY_HOUSE_PHASE_A_3 = "sensor.house_l3_current_a"
 # Actual charger current (for BMS-limit detection)
 ENTITY_EASEE_ACTUAL_A = "sensor.easee_home_actual_current"
 ENTITY_EASEE_POWER_W = "sensor.easee_home_power"

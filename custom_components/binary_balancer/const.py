@@ -43,3 +43,5 @@ DECISION_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB rotation
 
 # Update interval
 COORDINATOR_INTERVAL_S = 10
+
+BRAIN_STALE_THRESHOLD_S: int = 60  # universal max age for brain action

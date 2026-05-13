@@ -159,6 +159,23 @@ def distribute_target_to_banks(
                 scale,
             )
 
+    # --- 4.5. Brain-offer invariant clamp ---
+    # Sum of |per-bank targets| must not exceed |brain_target_bat_w| + 100W.
+    # Prevents distribution bias / rounding from exceeding the brain's mandate.
+    # Note: stale brain target must be zeroed UPSTREAM (coordinator, not yet implemented).
+    _sigma_pre_clamp = sum(abs(targets.get(bc.id, 0.0)) for bc in online)
+    _brain_offer_cap_w = abs(target_w) + 100.0
+    if _sigma_pre_clamp > _brain_offer_cap_w + _FLOAT_TOL:
+        _scale = _brain_offer_cap_w / _sigma_pre_clamp
+        for bc in online:
+            targets[bc.id] = targets[bc.id] * _scale
+        _LOGGER.warning(
+            "bat_balancer: brain-offer clamp — sigma=%.0fW offer=%.0fW+100 scale=%.4f",
+            _sigma_pre_clamp,
+            abs(target_w),
+            _scale,
+        )
+
     # --- 5. Offline banks → 0 ---
     for bid in all_bank_ids:
         if bid not in targets:
