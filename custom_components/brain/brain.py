@@ -26,6 +26,8 @@ from pathlib import Path
 from typing import Any
 
 from .const import (
+    BAT_LOAN_MIN_SOC_PCT,
+    BAT_MAX_DISCHARGE_FALLBACK_W,
     BINARY_ACTION_TMPL,
     BINARY_ASSET_IDS,
     BUFFER_WRITE_EPSILON_KWH,
@@ -786,17 +788,21 @@ class BrainController:
         _LOGGER.info("Brain -> %s=%s", mode_entity, mode)
 
     def _bat_can_engage(self) -> bool:
-        """Read can_engage attribute from bat_balancer_capability sensor."""
+        """Read can_engage from bat_balancer_capability; fallback to SoC guard."""
         state = self._hass.states.get(ENTITY_BAT_BALANCER_CAPABILITY)
         if state is None or state.state in ("unavailable", "unknown"):
-            return False
+            # bat_balancer unavailable — use SoC as proxy (bat can engage if charged)
+            soc = self._state_float(ENTITY_BAT_AVG_SOC_PCT, 0.0)
+            return soc > BAT_LOAN_MIN_SOC_PCT
         return bool(state.attributes.get("can_engage", False))
 
     def _bat_max_discharge_w_now(self) -> float:
-        """Read max_w_now attribute from bat_balancer_capability sensor."""
+        """Read max_w_now from bat_balancer_capability; fallback to SoC-gated constant."""
         state = self._hass.states.get(ENTITY_BAT_BALANCER_CAPABILITY)
         if state is None or state.state in ("unavailable", "unknown"):
-            return 0.0
+            # bat_balancer unavailable — use constant when SoC allows discharge
+            soc = self._state_float(ENTITY_BAT_AVG_SOC_PCT, 0.0)
+            return BAT_MAX_DISCHARGE_FALLBACK_W if soc > BAT_LOAN_MIN_SOC_PCT else 0.0
         try:
             return float(state.attributes.get("max_w_now", 0.0))
         except (TypeError, ValueError):

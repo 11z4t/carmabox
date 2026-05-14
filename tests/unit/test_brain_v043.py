@@ -391,3 +391,43 @@ class TestComputeBatGridTargetCharge:
     def test_zero_within_export_deadband(self):
         inp = _inp(grid_w=-99.0)
         assert _compute_bat_grid_target(inp) == 0.0
+
+
+# ── S20: Bat-support in Ellevio available_w (PRIO-FIX 2026-05-14) ──────────
+
+
+class TestS20BatSupportEllevioGate:
+    def test_bat_fallback_allows_ev_when_bat_balancer_unavailable(self):
+        """S20: bat_max_discharge_w_now=4000 (fallback) + PV export → Ellevio gate passes."""
+        out = compute_targets(
+            _inp(
+                grid_w=-1936.0,
+                ev_connected=True,
+                ev_soc=50.0,
+                bat_avg_soc_pct=83.0,
+                bat_max_discharge_w_now=4000.0,  # fallback when bat_balancer unavailable
+                bat_can_engage=True,
+                ellevio_tak_w=3860.0,
+                ps2_limit_w=0.0,
+                ev_min_charge_w=4140.0,
+                ev_priority_operator=True,  # morning EV priority bypasses buffer gate
+            )
+        )
+        assert out.target_ev_w == 4140.0, f"EV should charge: got {out.target_ev_w}"
+
+    def test_bat_fallback_zero_when_soc_low(self):
+        """S20b: Low SoC → bat_can_engage=False → bat support unavailable → no EV."""
+        out = compute_targets(
+            _inp(
+                grid_w=-1936.0,
+                ev_connected=True,
+                ev_soc=50.0,
+                bat_avg_soc_pct=30.0,
+                bat_max_discharge_w_now=0.0,  # bat unavailable (low soc)
+                bat_can_engage=False,
+                ellevio_tak_w=3860.0,
+                ps2_limit_w=0.0,
+                ev_min_charge_w=4140.0,
+            )
+        )
+        assert out.target_ev_w == 0.0, "EV should NOT charge: bat too low"
