@@ -28,7 +28,7 @@ from custom_components.binary_balancer.models import (
     SensorSnapshot as BinSensorSnapshot,
 )
 from custom_components.binary_balancer.translator import translate
-from custom_components.ev_balancer.const import EvAction
+from custom_components.ev_balancer.const import EvAction, RefusalReason
 from custom_components.ev_balancer.models import EvBalancerState, SensorSnapshot
 from custom_components.ev_balancer.translation_logic import translate_target_to_action
 
@@ -377,3 +377,39 @@ class TestBatBalancerBrainOfferClamp:
         assert (
             total <= 2000.0 + 100.0 + 0.01
         ), f"Brain-offer invariant breach after equalization: total={total:.1f}W > 2100W"
+
+
+# ── T6: Brain v3 single authority — ev_balancer_disable does not block Brain target ──
+
+
+class TestBrainV3SingleAuthority:
+    def test_disabled_balancer_with_brain_target_passes_through(self) -> None:
+        """T6a: ev_balancer_disable=on + brain_target_ev_w > 0 → Brain target passes through P1."""
+        snap = _ev_snap(brain_target_ev_w=4500.0, balancer_disabled=True)
+        state = _ev_state(last_dynamic_a=0, last_action=None)
+        decision = translate_target_to_action(snap, state, FakeCooldowns())
+        assert (
+            decision.action != EvAction.HOLD or decision.reason != RefusalReason.BALANCER_DISABLED
+        )
+        assert decision.action in (EvAction.SET_DYNAMIC, EvAction.RESUME)
+        assert decision.dynamic_a >= 6
+
+    def test_disabled_balancer_with_zero_brain_target_holds(self) -> None:
+        """T6b: ev_balancer_disable=on + brain_target_ev_w == 0 → HOLD (shadow mode)."""
+        snap = _ev_snap(brain_target_ev_w=0.0, balancer_disabled=True)
+        state = _ev_state(last_dynamic_a=6, last_action=EvAction.SET_DYNAMIC)
+        decision = translate_target_to_action(snap, state, FakeCooldowns())
+        assert decision.action == EvAction.HOLD
+        assert decision.reason == RefusalReason.BALANCER_DISABLED
+
+    def test_disabled_balancer_brain_target_respects_fuse_cap(self) -> None:
+        """T6c: Fuse cap still enforced even when balancer disabled + Brain has target."""
+        snap = _ev_snap(
+            brain_target_ev_w=4500.0,
+            balancer_disabled=True,
+            house_phase_a_l1=20.0,
+        )
+        state = _ev_state(last_dynamic_a=6, last_action=EvAction.SET_DYNAMIC)
+        decision = translate_target_to_action(snap, state, FakeCooldowns())
+        if decision.action == EvAction.SET_DYNAMIC:
+            assert decision.dynamic_a <= 25

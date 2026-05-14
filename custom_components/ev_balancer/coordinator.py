@@ -195,8 +195,10 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
         )
 
     async def _execute(self, snap: SensorSnapshot, decision: EvDecision) -> None:
-        if snap.balancer_disabled:
-            return  # shadow mode: log only, no HW writes
+        # Brain v3 single authority: always execute when Brain has a target,
+        # even if balancer_disabled=on. Disabled flag suppresses own logic only.
+        if snap.balancer_disabled and snap.brain_target_ev_w <= 0:
+            return  # shadow mode: log only, no HW writes when Brain idle
 
         charger_id = self._read_str(ENTITY_EASEE_CHARGER_ID, "")
         device_id = self._read_str(ENTITY_EASEE_DEVICE_ID, "")

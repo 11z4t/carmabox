@@ -75,7 +75,10 @@ def translate_target_to_action(
     from .const import CooldownType  # local import avoids circular
 
     # ── P1: Shadow / disabled ─────────────────────────────────────────────
-    if snap.balancer_disabled:
+    # Brain v3 is single authority: if brain_target_ev_w > 0, pass through
+    # regardless of balancer_disabled flag. The flag only suppresses the
+    # coordinator's own balancing logic when Brain has no target.
+    if snap.balancer_disabled and snap.brain_target_ev_w <= 0:
         return EvDecision(
             action=EvAction.HOLD,
             reason=RefusalReason.BALANCER_DISABLED,
