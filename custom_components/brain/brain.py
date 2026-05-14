@@ -31,6 +31,9 @@ from .const import (
     BUFFER_WRITE_EPSILON_KWH,
     DEADBAND_W,
     DEFAULT_BAT_CAPACITY_KWH,
+    DEFAULT_BAT_FLOOR_DAY_PCT,
+    DEFAULT_BAT_FLOOR_EVENING_PCT,
+    DEFAULT_BAT_SOC_CHARGE_CEILING_PCT,
     DEFAULT_DEADBAND_W,
     DEFAULT_EV_BAT_SUPPORT_MIN_SOC,
     DEFAULT_EV_MIN_CHARGE_W,
@@ -39,15 +42,20 @@ from .const import (
     DEFAULT_FORCE_EV_AMPS,
     DEFAULT_GRID_SAFETY_MARGIN_W,
     DEFAULT_HOUSE_BASELINE_KW,
+    DEFAULT_HOUSE_LOAD_COMP_MARGIN_W,
     DEFAULT_NIGHT_END_HOUR,
     DEFAULT_NIGHT_START_HOUR,
     DEFAULT_NON_CARMA_ANTICIPATION_W,
+    DEFAULT_PER_PHASE_BOOST_A,
     DEFAULT_PER_PHASE_WARNING_A,
     EASEE_CONNECTED_STATES,
+    ENTITY_BAT_ACTIVE_BUFFER_ENABLED,
     ENTITY_BAT_AVG_SOC_PCT,
     ENTITY_BAT_BALANCER_CAPABILITY,
     ENTITY_BAT_CAPACITY_FORRAD,
     ENTITY_BAT_CAPACITY_KONTOR,
+    ENTITY_BAT_FLOOR_DAY_PCT,
+    ENTITY_BAT_FLOOR_EVENING_PCT,
     ENTITY_BAT_SUPPORT_ENABLED,
     ENTITY_BRAIN_BAT_NEED_KWH,
     ENTITY_BRAIN_GRID_SAFETY_MARGIN_W,
@@ -161,6 +169,16 @@ class BrainInput:
     l2_current_a: float = 0.0
     l3_current_a: float = 0.0
     per_phase_fuse_warning_a: float = 14.0
+
+    # ── v0.4.3 fields: house load compensation (bat-as-active-buffer) ──────────
+    bat_active_buffer_enabled: bool = True  # DEFAULT ON — Borje 2026-05-13
+    bat_floor_day_pct: float = 50.0  # min SoC for bat discharge daytime
+    bat_floor_evening_pct: float = 30.0  # min SoC for bat discharge evening (17-22)
+    in_evening_window: bool = False  # True = 17:00-21:59 local time
+    house_load_comp_margin_w: float = 500.0  # bat engages only when grid_import > this
+    per_phase_boost_a: float = 13.0  # phase-boost threshold (A)
+    bat_soc_charge_ceiling_pct: float = 95.0  # bat stops absorbing surplus above this SoC
+    bat_max_charge_w_now: float = 0.0  # BMS charge cap (conservative fail-safe: 0)
 
 
 @dataclass(frozen=True)
@@ -481,6 +499,23 @@ class BrainController:
             per_phase_fuse_warning_a=self._state_float(
                 ENTITY_PER_PHASE_FUSE_WARNING_A, DEFAULT_PER_PHASE_WARNING_A
             ),
+            # ── v0.4.3 bat-active-buffer ────────────────────────────────────
+            bat_active_buffer_enabled=self._state_bool(
+                ENTITY_BAT_ACTIVE_BUFFER_ENABLED, default=True
+            ),
+            bat_floor_day_pct=self._state_float(
+                ENTITY_BAT_FLOOR_DAY_PCT, DEFAULT_BAT_FLOOR_DAY_PCT
+            ),
+            bat_floor_evening_pct=self._state_float(
+                ENTITY_BAT_FLOOR_EVENING_PCT, DEFAULT_BAT_FLOOR_EVENING_PCT
+            ),
+            in_evening_window=self._in_evening_window(),
+            house_load_comp_margin_w=self._state_float(
+                ENTITY_BRAIN_GRID_SAFETY_MARGIN_W, DEFAULT_HOUSE_LOAD_COMP_MARGIN_W
+            ),
+            per_phase_boost_a=DEFAULT_PER_PHASE_BOOST_A,
+            bat_soc_charge_ceiling_pct=DEFAULT_BAT_SOC_CHARGE_CEILING_PCT,
+            bat_max_charge_w_now=self._bat_max_charge_w_now(),
         )
 
     async def _async_write_input_number(
@@ -767,6 +802,19 @@ class BrainController:
         except (TypeError, ValueError):
             return 0.0
 
+    def _bat_max_charge_w_now(self) -> float:
+        """Read max_charge_w_now from bat_balancer_capability; fallback to discharge cap."""
+        state = self._hass.states.get(ENTITY_BAT_BALANCER_CAPABILITY)
+        if state is None or state.state in ("unavailable", "unknown"):
+            return 0.0
+        try:
+            val = state.attributes.get("max_charge_w_now")
+            if val is not None:
+                return float(val)
+            return float(state.attributes.get("max_w_now", 0.0))
+        except (TypeError, ValueError):
+            return 0.0
+
     def _ev_connected(self) -> bool:
         """Return True if an EV cable is physically connected."""
         state = self._hass.states.get(self._ev_status_entity)
@@ -806,6 +854,10 @@ class BrainController:
             if remaining > 0.0:
                 return True, remaining
         return False, 0.0
+
+    def _in_evening_window(self) -> bool:
+        """Return True if current local time is in evening window (17:00-21:59)."""
+        return 17 <= datetime.now().hour < 22
 
     def _in_night_window(self) -> bool:
         """Return True if the current wall-clock time falls inside the night window."""

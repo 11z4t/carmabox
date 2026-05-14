@@ -54,7 +54,7 @@ DEADBAND_W: float = 100.0
 NIGHT_CHARGE_W: float = 4140.0
 
 # Fallback defaults (used when HA entity is unavailable)
-DEFAULT_EV_TARGET_SOC: float = 80.0
+DEFAULT_EV_TARGET_SOC: float = 100.0
 DEFAULT_FORCE_EV_AMPS: float = 6.0
 
 # Decision log (inside HA /config for persistence across restarts)
@@ -167,3 +167,37 @@ DEFAULT_EV_PLUGIN_COOLDOWN_S: float = 30.0
 ENTITY_HOUSE_TOTAL_W: str = "sensor.house_total_power_w"
 ENTITY_BRAIN_NON_CARMA_ANTICIPATION_W: str = "input_number.brain_non_carma_anticipation_w"
 DEFAULT_NON_CARMA_ANTICIPATION_W: float = 2500.0
+
+# ── v0.4.1-D: Binary asset action publishing ────────────────────────────────
+BINARY_ASSET_IDS: tuple[str, ...] = ("miner", "pool_elv")
+BINARY_ACTION_TMPL: str = "input_text.brain_action_{asset_id}_json"
+
+# ── v0.4.1-E: EV Priority Operator override ──────────────────────────────────
+ENTITY_EV_PRIORITY: str = "input_boolean.brain_ev_priority"
+
+# ── v0.6 prep: EV safe min SoC (NO_CHARGE threshold) ────────────────────────
+ENTITY_EV_SAFE_MIN_SOC: str = "input_number.brain_ev_safe_min_soc"
+DEFAULT_EV_SAFE_MIN_SOC: float = 30.0
+
+# ── v0.4.2-F: Per-phase fuse gate ─────────────────────────────────────────────
+ENTITY_HOUSE_L1_CURRENT_A: str = "sensor.house_l1_current_a"
+ENTITY_HOUSE_L2_CURRENT_A: str = "sensor.house_l2_current_a"
+ENTITY_HOUSE_L3_CURRENT_A: str = "sensor.house_l3_current_a"
+ENTITY_PER_PHASE_FUSE_WARNING_A: str = "input_number.per_phase_fuse_warning_a"
+DEFAULT_PER_PHASE_WARNING_A: float = 14.0
+
+# ── v0.6a: NO_CHARGE operator gate ─────────────────────────────────────────────
+ENTITY_BRAIN_SKIP_NIGHT_CHARGE: str = "input_boolean.brain_skip_night_charge"
+
+# ── v0.4.3: Bat-as-active-buffer (house load compensation) ─────────────────
+ENTITY_BAT_ACTIVE_BUFFER_ENABLED: str = "input_boolean.brain_bat_active_buffer_enabled"
+ENTITY_BAT_FLOOR_DAY_PCT: str = "input_number.brain_bat_floor_day_pct"
+ENTITY_BAT_FLOOR_EVENING_PCT: str = "input_number.brain_bat_floor_evening_pct"
+ENTITY_BAT_MIN_DAILY_CYCLES_TARGET: str = "input_number.brain_bat_min_daily_cycles_target"
+DEFAULT_HOUSE_LOAD_COMP_MARGIN_W: float = 500.0
+DEFAULT_BAT_FLOOR_DAY_PCT: float = 50.0
+DEFAULT_BAT_FLOOR_EVENING_PCT: float = 30.0
+DEFAULT_PER_PHASE_BOOST_A: float = 13.0
+BAT_PHASE_BOOST_W: float = 2000.0
+BAT_EXPORT_DEADBAND_W: float = 100.0
+DEFAULT_BAT_SOC_CHARGE_CEILING_PCT: float = 95.0
