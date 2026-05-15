@@ -19,6 +19,7 @@ import logging
 import math
 
 from .const import (
+    BANK_SOC_CHARGE_CEILING_PCT,
     INV23_TOLERANCE_FRACTION,
     BatBalancerStatus,
     RejectedReason,
@@ -74,10 +75,13 @@ def distribute_target_to_banks(
     for bc in online:
         bs = bank_states.get(bc.id, BankState(bc.id))
         if charging:
-            w = max(0.0, (100.0 - bs.current_soc)) * bc.capacity_kwh
+            # v0.4.3.3: banks at SoC ceiling get 0 charge weight
+            if bs.current_soc >= BANK_SOC_CHARGE_CEILING_PCT:
+                weights[bc.id] = 0.0
+            else:
+                weights[bc.id] = max(0.0, (100.0 - bs.current_soc)) * bc.capacity_kwh
         else:
-            w = max(0.0, (bs.current_soc - bc.min_soc_pct)) * bc.capacity_kwh
-        weights[bc.id] = w
+            weights[bc.id] = max(0.0, (bs.current_soc - bc.min_soc_pct)) * bc.capacity_kwh
 
     total_weight = sum(weights.values()) or 1.0
     targets: dict[str, float] = {bc.id: target_w * weights[bc.id] / total_weight for bc in online}
@@ -125,6 +129,18 @@ def distribute_target_to_banks(
                 targets[bc.id] *= scale
 
         equalization_bias_max_w = max(abs(b) for b in biases.values())
+
+    # --- 2.6. SoC-ceiling re-enforcement (charging only, overrides equalization) ---
+    if charging:
+        for bc in online:
+            bs = bank_states.get(bc.id, BankState(bc.id))
+            if bs.current_soc >= BANK_SOC_CHARGE_CEILING_PCT and targets.get(bc.id, 0.0) > 0:
+                _LOGGER.debug(
+                    "bat_balancer: SoC-ceiling bank=%s soc=%.1f%% → 0W",
+                    bc.id,
+                    bs.current_soc,
+                )
+                targets[bc.id] = 0.0
 
     # --- 3. BMS-cap + overflow-redistribution ---
     overflow_redistributed = False
@@ -288,6 +304,8 @@ def _has_headroom(
     charging: bool,
 ) -> bool:
     """Return True if bank still has capacity to absorb more power."""
+    if charging and bs.current_soc >= BANK_SOC_CHARGE_CEILING_PCT:
+        return False
     cap = _effective_cap(bc, bs, charging)
     return abs(targets.get(bc.id, 0.0)) < cap - _FLOAT_TOL
 

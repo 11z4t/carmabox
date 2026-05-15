@@ -52,7 +52,7 @@ ENTITY_BAT_CHARGE_MAX_W = "sensor.bat_charge_max_w_{bank_id}"
 ENTITY_BAT_DISCHARGE_MAX_W = "sensor.bat_discharge_max_w_{bank_id}"
 ENTITY_BAT_BATTERY_MODE = "sensor.bat_battery_mode_{bank_id}"
 ENTITY_GOODWE_POWER_LIMIT = "number.goodwe_{bank_id}_ems_power_limit"
-ENTITY_HOUSE_GRID_POWER = "sensor.house_grid_power_w"
+ENTITY_HOUSE_GRID_POWER = "sensor.house_grid_power"
 
 # Decision-log
 DECISION_LOG_SUBDIR = "logs"
@@ -84,3 +84,7 @@ class RejectedReason(StrEnum):
     BRAIN_UNAVAILABLE = "brain_unavailable"
     DISTRIBUTION_ERROR = "distribution_error"
     BRAIN_OFFER_CLAMP = "brain_offer_clamp"
+
+
+# v0.4.3.3: per-bank SoC charge ceiling (charging only)
+BANK_SOC_CHARGE_CEILING_PCT: float = 95.0
