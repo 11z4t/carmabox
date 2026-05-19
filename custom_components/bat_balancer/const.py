@@ -52,6 +52,9 @@ ENTITY_BAT_CHARGE_MAX_W = "sensor.bat_charge_max_w_{bank_id}"
 ENTITY_BAT_DISCHARGE_MAX_W = "sensor.bat_discharge_max_w_{bank_id}"
 ENTITY_BAT_BATTERY_MODE = "sensor.bat_battery_mode_{bank_id}"
 ENTITY_GOODWE_POWER_LIMIT = "number.goodwe_{bank_id}_ems_power_limit"
+ENTITY_GOODWE_OPERATION_MODE = "select.goodwe_inverter_operation_mode_{bank_id}"
+GOODWE_MODE_PEAK_SHAVING = "peak_shaving"
+GOODWE_MODE_BATTERY_STANDBY = "battery_standby"
 ENTITY_HOUSE_GRID_POWER = "sensor.house_grid_power"
 
 # Decision-log

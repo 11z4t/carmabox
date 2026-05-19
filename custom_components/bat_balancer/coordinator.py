@@ -18,12 +18,15 @@ from .const import (
     ENTITY_BAT_DISCHARGE_MAX_W,
     ENTITY_BAT_SOC,
     ENTITY_BRAIN_TARGET_BAT_W,
+    ENTITY_GOODWE_OPERATION_MODE,
     ENTITY_GOODWE_POWER_LIMIT,
     ENTITY_HOUSE_GRID_POWER,
     ENTITY_MIN_SOC_BUFFER_PCT,
     ENTITY_SHADOW_MODE,
     ENTITY_SOC_EQ_MAX_BIAS_W,
     ENTITY_SOC_EQ_THRESHOLD_PCT,
+    GOODWE_MODE_BATTERY_STANDBY,
+    GOODWE_MODE_PEAK_SHAVING,
     HW_STALE_THRESHOLD_S,
     SOC_EQ_MAX_BIAS_DEFAULT_W,
     SOC_EQ_THRESHOLD_DEFAULT_PCT,
@@ -59,6 +62,8 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         }
         self._state = BatBalancerState()
         self._last_brain_write_ts: float = 0.0
+        self._last_goodwe_modes: dict[str, str | None] = {bid: None for bid in BANKS}
+        self._last_goodwe_modes: dict[str, str | None] = {bid: None for bid in BANKS}
 
     # ── Public API (read by sensor.py) ──────────────────────────────────────
 
@@ -211,27 +216,42 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             result.status,
         )
 
-    async def _write_power_limit(self, bank_id: str, target_w: float) -> None:
-        """Write signed target_w to GoodWe EMS power limit.
+    async def _set_goodwe_mode(self, bank_id: str, mode: str) -> None:
+        """Write GoodWe inverter operation mode — idempotent, fire-and-forget."""
+        if self._last_goodwe_modes.get(bank_id) == mode:
+            return
+        prev = self._last_goodwe_modes.get(bank_id)
+        self._last_goodwe_modes[bank_id] = mode
+        entity_id = ENTITY_GOODWE_OPERATION_MODE.format(bank_id=bank_id)
+        try:
+            await self.hass.services.async_call(
+                "select",
+                "select_option",
+                {"entity_id": entity_id, "option": mode},
+                blocking=False,
+            )
+            _LOGGER.debug("bat_balancer: goodwe_mode %s -> %s", bank_id, mode)
+        except Exception as exc:
+            _LOGGER.warning("bat_balancer: failed to set mode %s=%s: %s", entity_id, mode, exc)
+            self._last_goodwe_modes[bank_id] = prev
 
-        GoodWe EMS power_limit is always positive (magnitude).
-        The sign is communicated via GoodWe operation mode:
-          - discharge: battery_standby mode + positive limit = discharge
-          - charge: force_charge_from_pv / peak_shaving mode + positive limit = charge
-        For v0.4.3.1 we only write the magnitude; GoodWe operates in peak_shaving
-        mode autonomously and will self-regulate direction. The Brain sets target_bat_w
-        negative (discharge) so we write abs(target_w) as the EMS limit.
+    async def _write_power_limit(self, bank_id: str, target_w: float) -> None:
+        """Write signed target_w to GoodWe: set operation mode then EMS power limit.
+
+        Discharge (target_w < 0): battery_standby mode + abs(target_w) EMS limit.
+        Charge/idle (target_w >= 0): peak_shaving mode + abs(target_w) EMS limit.
+        Mode written BEFORE EMS limit. Mode writes are idempotent.
         """
+        mode = GOODWE_MODE_BATTERY_STANDBY if target_w < 0 else GOODWE_MODE_PEAK_SHAVING
+        await self._set_goodwe_mode(bank_id, mode)
+
         entity_id = ENTITY_GOODWE_POWER_LIMIT.format(bank_id=bank_id)
         magnitude = abs(target_w)
         try:
             await self.hass.services.async_call(
                 "number",
                 "set_value",
-                {
-                    "entity_id": entity_id,
-                    "value": round(magnitude, 0),
-                },
+                {"entity_id": entity_id, "value": round(magnitude, 0)},
                 blocking=False,
             )
         except Exception as exc:
