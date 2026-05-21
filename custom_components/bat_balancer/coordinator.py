@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import time
 from datetime import timedelta
@@ -138,44 +137,39 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
     async def _tick(self) -> None:
         shadow = self._bool_state(ENTITY_SHADOW_MODE, default=True)
 
-        # --- read operator override mode (AC80 three-mode) ---
-        mode_state = self.hass.states.get(ENTITY_BAT_BALANCER_MODE)
-        balancer_mode = "AUTO"
-        if mode_state and mode_state.state not in ("unavailable", "unknown", None):
-            balancer_mode = mode_state.state
-        if balancer_mode == "SHADOW":
+        # B25: operator mode branch (AC80 three-mode)
+        mode = self._str_state(ENTITY_BAT_BALANCER_MODE, "AUTO")
+
+        if mode == "MANUAL":
+            target_w = self._float_helper(ENTITY_BAT_BALANCER_TARGET_MANUAL_W, 0.0)
+            target_available = True
+            _LOGGER.debug("bat_balancer MANUAL: target_w=%.1f", target_w)
+        elif mode == "SHADOW":
+            target_w = 0.0
+            target_available = False
             shadow = True
+        else:  # AUTO — default + backwards compat
+            brain_entity = self.hass.states.get(ENTITY_BRAIN_TARGET_BAT_W)
+            target_w = 0.0
+            target_available = False
+            if brain_entity and brain_entity.state not in (
+                "unavailable",
+                "unknown",
+                None,
+            ):
+                try:
+                    target_w = float(brain_entity.state)
+                    target_available = True
+                    self._last_brain_write_ts = time.monotonic()
+                except (TypeError, ValueError):
+                    pass
 
-        # --- read brain target ---
-        brain_entity = self.hass.states.get(ENTITY_BRAIN_TARGET_BAT_W)
-        brain_available = False
-        brain_target_w = 0.0
-        if brain_entity and brain_entity.state not in ("unavailable", "unknown", None):
-            try:
-                brain_target_w = float(brain_entity.state)
-                brain_available = True
-                self._last_brain_write_ts = time.monotonic()
-            except (TypeError, ValueError):
-                pass
-
-        # stale brain target → zero
-        if brain_available:
-            age = time.monotonic() - self._last_brain_write_ts
-            if age > BRAIN_STALE_THRESHOLD_S:
-                brain_target_w = 0.0
-                brain_available = False
-
-        # --- AC80: resolve effective target based on mode ---
-        if balancer_mode == "MANUAL":
-            manual_state = self.hass.states.get(ENTITY_BAT_BALANCER_TARGET_MANUAL_W)
-            effective_target_w = 0.0
-            if manual_state and manual_state.state not in ("unavailable", "unknown", None):
-                with contextlib.suppress(TypeError, ValueError):
-                    effective_target_w = float(manual_state.state)
-            effective_available = True
-        else:  # AUTO (or SHADOW — distribute 0 via shadow gate below)
-            effective_target_w = brain_target_w
-            effective_available = brain_available
+            # stale brain target → zero
+            if target_available:
+                age = time.monotonic() - self._last_brain_write_ts
+                if age > BRAIN_STALE_THRESHOLD_S:
+                    target_w = 0.0
+                    target_available = False
 
         # --- read bank states ---
         bank_states: dict[str, BankState] = {bid: self._read_bank_state(bid) for bid in BANKS}
@@ -195,7 +189,7 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
 
         # --- build snapshot ---
         snapshot = SensorSnapshot(
-            brain_target_bat_w=brain_target_w,
+            brain_target_bat_w=target_w,
             banks=bank_states,
             house_grid_w=self._float_state(ENTITY_HOUSE_GRID_POWER, float("nan")),
             soc_equalization_threshold_pct=self._float_helper(
@@ -205,10 +199,10 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
                 ENTITY_SOC_EQ_MAX_BIAS_W, SOC_EQ_MAX_BIAS_DEFAULT_W
             ),
             shadow_mode=shadow,
-            brain_target_available=brain_available,
+            brain_target_available=target_available,
         )
 
-        if not effective_available:
+        if not target_available:
             self._state.status = BatBalancerStatus.OK
             self._state.last_target_w = 0.0
             if not shadow:
@@ -220,24 +214,22 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
 
         # --- distribute ---
         result = distribute_target_to_banks(
-            effective_target_w,
+            target_w,
             self._bank_configs,
             bank_states,
             snapshot,
         )
 
-        self._state.status = (
-            BatBalancerStatus.MANUAL_MODE if balancer_mode == "MANUAL" else result.status
-        )
-        self._state.last_target_w = effective_target_w
+        self._state.status = BatBalancerStatus.MANUAL_MODE if mode == "MANUAL" else result.status
+        self._state.last_target_w = target_w
         self._state.last_distribution = result.targets
         self._state.equalization_active = result.equalization_active
 
         if shadow:
             self._state.status = BatBalancerStatus.SHADOW_MODE
             _LOGGER.debug(
-                "bat_balancer: SHADOW — brain=%.0fW dist=%s",
-                brain_target_w,
+                "bat_balancer: SHADOW — target=%.0fW dist=%s",
+                target_w,
                 {k: round(v) for k, v in result.targets.items()},
             )
             return
@@ -249,10 +241,9 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             await self._write_power_limit(bid, ticked)
 
         _LOGGER.debug(
-            "bat_balancer: tick mode=%s brain=%.0fW effective=%.0fW targets=%s status=%s",
-            balancer_mode,
-            brain_target_w,
-            effective_target_w,
+            "bat_balancer: tick mode=%s target=%.0fW targets=%s status=%s",
+            mode,
+            target_w,
             {k: round(v) for k, v in result.targets.items()},
             result.status,
         )
