@@ -54,10 +54,13 @@ from .const import (
     ENTITY_BAT_ACTIVE_BUFFER_ENABLED,
     ENTITY_BAT_AVG_SOC_PCT,
     ENTITY_BAT_BALANCER_CAPABILITY,
+    ENTITY_BAT_BALANCER_MODE,
+    ENTITY_BAT_BALANCER_TARGET_MANUAL_W,
     ENTITY_BAT_CAPACITY_FORRAD,
     ENTITY_BAT_CAPACITY_KONTOR,
     ENTITY_BAT_FLOOR_DAY_PCT,
     ENTITY_BAT_FLOOR_EVENING_PCT,
+    ENTITY_BAT_OFFER_SOURCE,
     ENTITY_BAT_SUPPORT_ENABLED,
     ENTITY_BRAIN_BAT_NEED_KWH,
     ENTITY_BRAIN_GRID_SAFETY_MARGIN_W,
@@ -284,6 +287,7 @@ class BrainController:
         self._decision_log_path = decision_log_path
         self._last_target_w: float | None = None
         self._last_bat_w: float | None = None
+        self._last_bat_offer_source: str | None = None
         self._last_cascade_reason: str | None = None
         self._last_pv2_modes: dict[str, str | None] = {
             ENTITY_PV2_MANUAL_MODE_KONTOR: None,
@@ -328,10 +332,12 @@ class BrainController:
         snapshot = self._compute_buffer_snapshot()
         inp = self._read_inputs(snapshot)
         out = compute_targets(inp)
+        bat_offer_w, bat_offer_source = self._bat_mode_routing(out.target_bat_w)
         await self._async_write_target(out.target_ev_w, out.reason)
-        await self._async_write_bat_target(out.target_bat_w, out.reason)
+        await self._async_write_bat_target(bat_offer_w, out.reason)
         await self._async_write_cascade_reason(out.reason)
-        await self._async_write_pv2_mode(out.target_bat_w, inp.ev_connected)
+        await self._async_write_pv2_mode(bat_offer_w, inp.ev_connected)
+        await self._async_write_bat_offer_source(bat_offer_source)
         await self._async_write_buffer_outputs(snapshot)
         self._cycle_id += 1
         await self._async_write_binary_actions(out.surplus_w, out.target_ev_w, out.reason)
@@ -581,6 +587,53 @@ class BrainController:
             return
 
         _LOGGER.info("Brain -> target_ev_w=%.0fW  reason=%s", target_w, reason)
+
+    def _bat_mode_routing(self, computed_bat_w: float) -> tuple[float, str]:
+        """Route bat offer_w based on bat_balancer_mode (Phase 1 — Brain owns mode).
+
+        MANUAL  -> pass through input_number.bat_balancer_target_manual_w unchanged.
+        SHADOW  -> offer = 0 (no distribution).
+        AUTO    -> use cascade-computed target (existing behaviour).
+        Unknown/unavailable mode -> safe-default AUTO.
+        """
+        mode_state = self._hass.states.get(ENTITY_BAT_BALANCER_MODE)
+        if mode_state and mode_state.state not in ("unknown", "unavailable"):
+            mode = mode_state.state
+        else:
+            mode = "AUTO"
+
+        if mode == "MANUAL":
+            target_state = self._hass.states.get(ENTITY_BAT_BALANCER_TARGET_MANUAL_W)
+            if target_state and target_state.state not in ("unknown", "unavailable"):
+                try:
+                    return float(target_state.state), "MANUAL"
+                except (TypeError, ValueError):
+                    pass
+            return 0.0, "MANUAL"  # unavailable helper -> fail-safe 0
+
+        if mode == "SHADOW":
+            return 0.0, "SHADOW"
+
+        return computed_bat_w, "AUTO"
+
+    async def _async_write_bat_offer_source(self, source: str) -> None:
+        """Write offer-source label (AUTO/MANUAL/SHADOW) to HA — idempotent."""
+        if self._last_bat_offer_source == source:
+            return
+        prev = self._last_bat_offer_source
+        self._last_bat_offer_source = source
+        try:
+            await self._hass.services.async_call(
+                "input_text",
+                "set_value",
+                {"entity_id": ENTITY_BAT_OFFER_SOURCE, "value": source},
+                blocking=False,
+            )
+        except Exception as err:
+            _LOGGER.warning(
+                "Brain: failed to write %s=%s - %s", ENTITY_BAT_OFFER_SOURCE, source, err
+            )
+            self._last_bat_offer_source = prev
 
     async def _async_write_bat_target(self, target_bat_w: float, reason: str) -> None:
         """Write target_bat_w to HA helper every cycle (no skip — ensures HA reflects Brain).

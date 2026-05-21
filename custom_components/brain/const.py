@@ -203,3 +203,7 @@ BAT_EXPORT_DEADBAND_W: float = 100.0
 DEFAULT_BAT_SOC_CHARGE_CEILING_PCT: float = 95.0
 BAT_LOAN_MIN_SOC_PCT: float = 50.0
 BAT_MAX_DISCHARGE_FALLBACK_W: float = 4000.0
+# ── Phase 1: bat_balancer mode-routing (Brain owns mode, bat_balancer = slave) ──
+ENTITY_BAT_BALANCER_MODE: str = "input_select.bat_balancer_mode"
+ENTITY_BAT_BALANCER_TARGET_MANUAL_W: str = "input_number.bat_balancer_target_manual_w"
+ENTITY_BAT_OFFER_SOURCE: str = "input_text.brain_bat_offer_source"
