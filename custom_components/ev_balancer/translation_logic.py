@@ -74,6 +74,43 @@ def translate_target_to_action(
     """
     from .const import CooldownType  # local import avoids circular
 
+    # ── P0: MANUAL_FIXED — operator override, bypasses Brain entirely ─────
+    if snap.balancer_mode == "MANUAL_FIXED":
+        target_a = max(0, min(int(snap.target_manual_a), int(snap.ev_max_physical_fuse_a)))
+        if target_a == 0:
+            if state.last_dynamic_a > 0:
+                return EvDecision(
+                    action=EvAction.PAUSE,
+                    dynamic_a=0,
+                    status=EvBalancerStatus.PAUSED,
+                    status_detail="MANUAL_FIXED stop (target=0A)",
+                )
+            return EvDecision(
+                action=EvAction.HOLD,
+                status=EvBalancerStatus.PAUSED,
+                status_detail="MANUAL_FIXED holding stopped",
+            )
+        if target_a != state.last_dynamic_a:
+            return EvDecision(
+                action=EvAction.SET_DYNAMIC,
+                dynamic_a=target_a,
+                status=EvBalancerStatus.OK,
+                status_detail=f"MANUAL_FIXED {target_a}A",
+            )
+        return EvDecision(
+            action=EvAction.HOLD,
+            status=EvBalancerStatus.OK,
+            status_detail=f"MANUAL_FIXED holding {target_a}A",
+        )
+
+    # ── P0b: SHADOW mode — no HW writes ────────────────────────────
+    if snap.balancer_mode == "SHADOW":
+        return EvDecision(
+            action=EvAction.HOLD,
+            status=EvBalancerStatus.SHADOW_MODE,
+            status_detail="SHADOW mode: no HW writes",
+        )
+
     # ── P1: Shadow / disabled ─────────────────────────────────────────────
     # Brain v3 is single authority: if brain_target_ev_w > 0, pass through
     # regardless of balancer_disabled flag. The flag only suppresses the

@@ -26,6 +26,8 @@ from .const import (
     ENTITY_EASEE_POWER_W,
     ENTITY_EASEE_STATUS,
     ENTITY_EV_BALANCER_DISABLE,
+    ENTITY_EV_BALANCER_MODE,
+    ENTITY_EV_BALANCER_TARGET_MANUAL_A,
     ENTITY_EV_CYCLE_S,
     ENTITY_EV_FAULT_COOLDOWN_S,
     ENTITY_EV_LINE_VOLTAGE,
@@ -151,7 +153,11 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
         if _brain_state is not None and _brain_state.state not in ("unknown", "unavailable", ""):
             from homeassistant.util import dt as _dt
 
-            _age_s = (_dt.utcnow() - _brain_state.last_changed).total_seconds()
+            # v0.4.5.6 (Borje 2026-05-15 19:10): byt last_changed → last_reported.
+            # last_changed uppdateras BARA vid värdeändring; om Brain skriver samma
+            # value (target=0) varje cycle blir last_changed stale → ev_balancer
+            # tror Brain dött. last_reported uppdateras per write (idempotent OK).
+            _age_s = (_dt.utcnow() - _brain_state.last_reported).total_seconds()
             if _age_s <= BRAIN_STALE_THRESHOLD_S:
                 try:
                     _brain_target_ev_w = float(_brain_state.state)
@@ -192,6 +198,8 @@ class EvBalancerCoordinator(DataUpdateCoordinator):
             ),
             post_pause_cooldown_s=self._read_float(ENTITY_EV_POST_PAUSE_COOLDOWN_S, 30.0),
             balancer_disabled=self._read_bool(ENTITY_EV_BALANCER_DISABLE, False),
+            balancer_mode=self._read_str(ENTITY_EV_BALANCER_MODE, "AUTO"),
+            target_manual_a=self._read_float(ENTITY_EV_BALANCER_TARGET_MANUAL_A, 0.0),
         )
 
     async def _execute(self, snap: SensorSnapshot, decision: EvDecision) -> None:

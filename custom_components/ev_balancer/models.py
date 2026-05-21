@@ -65,6 +65,10 @@ class SensorSnapshot:
     # Shadow-deploy gate
     balancer_disabled: bool = False
 
+    # Operator override mode (AC81)
+    balancer_mode: str = "AUTO"  # AUTO | MANUAL_FIXED | MANUAL_DYNAMIC_NO_IMPORT | SHADOW
+    target_manual_a: float = 0.0  # amps for MANUAL_FIXED mode (0 = stop)
+
     @property
     def cable_connected(self) -> bool:
         return self.easee_status not in ("disconnected", "error", "offline")
