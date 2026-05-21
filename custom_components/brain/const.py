@@ -150,6 +150,10 @@ STRATEGY_BUFFER_AVAILABLE: str = "BUFFER_AVAILABLE"
 STRATEGY_BAT_PRIORITY: str = "BAT_PRIORITY"
 STRATEGY_NO_SUN: str = "NO_SUN"
 STRATEGY_FORECAST_UNAVAILABLE: str = "FORECAST_UNAVAILABLE"
+# Period string constants (cascade.py v0.4.4+ period-aware dispatch)
+PERIOD_AFTER_SURPLUS: str = "AFTER_SURPLUS"
+PERIOD_MORNING: str = "MORNING"
+PERIOD_NIGHT: str = "NIGHT"
 
 # ── v0.4.1 additions ────────────────────────────────────────────────────────
 
