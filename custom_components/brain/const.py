@@ -204,11 +204,14 @@ DEFAULT_BAT_SOC_CHARGE_CEILING_PCT: float = 95.0
 BAT_LOAN_MIN_SOC_PCT: float = 50.0
 BAT_MAX_DISCHARGE_FALLBACK_W: float = 4000.0
 
-# ── F2 cascade-ramp control (cascade.py:25-29 imports) ──────────────────────
+# ── F2 cascade-ramp control (cascade.py imports) ────────────────────────────
 # F2_KP: proportional gain for grid-null delta scaling (delta_scaled = K_p × delta_raw)
 # F2_DELTA_CAP_W: max ramp per cycle (clamp delta to ±300W to avoid step changes)
+# F2_STEP_CAP_W: anti-windup ramp limit (Brain target step ±1500W per cycle) — prevents
+#                Brain from outpacing bat_balancer's ramp-up
 F2_KP: float = 0.2
 F2_DELTA_CAP_W: float = 300.0
+F2_STEP_CAP_W: float = 1500.0
 
 # ── Phase 1: bat_balancer mode-routing (Brain owns mode, bat_balancer = slave) ──
 ENTITY_BAT_BALANCER_MODE: str = "input_select.bat_balancer_mode"
