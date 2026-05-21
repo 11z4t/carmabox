@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import time
 from datetime import timedelta
@@ -9,10 +10,13 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
+from homeassistant.util import dt as dt_util
 
 from .const import (
     BANKS,
     BRAIN_STALE_THRESHOLD_S,
+    ENTITY_BAT_BALANCER_MODE,
+    ENTITY_BAT_BALANCER_TARGET_MANUAL_W,
     ENTITY_BAT_BATTERY_MODE,
     ENTITY_BAT_CHARGE_MAX_W,
     ENTITY_BAT_DISCHARGE_MAX_W,
@@ -63,7 +67,7 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         self._state = BatBalancerState()
         self._last_brain_write_ts: float = 0.0
         self._last_goodwe_modes: dict[str, str | None] = {bid: None for bid in BANKS}
-        self._last_goodwe_modes: dict[str, str | None] = {bid: None for bid in BANKS}
+        self._bank_was_online: dict[str, bool] = {bid: True for bid in BANKS}
 
     # ── Public API (read by sensor.py) ──────────────────────────────────────
 
@@ -134,6 +138,14 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
     async def _tick(self) -> None:
         shadow = self._bool_state(ENTITY_SHADOW_MODE, default=True)
 
+        # --- read operator override mode (AC80 three-mode) ---
+        mode_state = self.hass.states.get(ENTITY_BAT_BALANCER_MODE)
+        balancer_mode = "AUTO"
+        if mode_state and mode_state.state not in ("unavailable", "unknown", None):
+            balancer_mode = mode_state.state
+        if balancer_mode == "SHADOW":
+            shadow = True
+
         # --- read brain target ---
         brain_entity = self.hass.states.get(ENTITY_BRAIN_TARGET_BAT_W)
         brain_available = False
@@ -153,8 +165,33 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
                 brain_target_w = 0.0
                 brain_available = False
 
+        # --- AC80: resolve effective target based on mode ---
+        if balancer_mode == "MANUAL":
+            manual_state = self.hass.states.get(ENTITY_BAT_BALANCER_TARGET_MANUAL_W)
+            effective_target_w = 0.0
+            if manual_state and manual_state.state not in ("unavailable", "unknown", None):
+                with contextlib.suppress(TypeError, ValueError):
+                    effective_target_w = float(manual_state.state)
+            effective_available = True
+        else:  # AUTO (or SHADOW — distribute 0 via shadow gate below)
+            effective_target_w = brain_target_w
+            effective_available = brain_available
+
         # --- read bank states ---
         bank_states: dict[str, BankState] = {bid: self._read_bank_state(bid) for bid in BANKS}
+
+        # Warn when a bank transitions online→offline (or offline→online).
+        for bid, bs in bank_states.items():
+            was = self._bank_was_online.get(bid, True)
+            if was and not bs.is_online:
+                _LOGGER.warning(
+                    "bat_balancer: bank %s went OFFLINE — all charge/discharge "
+                    "redirected to remaining banks. Check GoodWe SoC sensor.",
+                    bid,
+                )
+            elif not was and bs.is_online:
+                _LOGGER.info("bat_balancer: bank %s back ONLINE.", bid)
+            self._bank_was_online[bid] = bs.is_online
 
         # --- build snapshot ---
         snapshot = SensorSnapshot(
@@ -171,7 +208,7 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             brain_target_available=brain_available,
         )
 
-        if not brain_available:
+        if not effective_available:
             self._state.status = BatBalancerStatus.OK
             self._state.last_target_w = 0.0
             if not shadow:
@@ -183,14 +220,16 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
 
         # --- distribute ---
         result = distribute_target_to_banks(
-            brain_target_w,
+            effective_target_w,
             self._bank_configs,
             bank_states,
             snapshot,
         )
 
-        self._state.status = result.status
-        self._state.last_target_w = brain_target_w
+        self._state.status = (
+            BatBalancerStatus.MANUAL_MODE if balancer_mode == "MANUAL" else result.status
+        )
+        self._state.last_target_w = effective_target_w
         self._state.last_distribution = result.targets
         self._state.equalization_active = result.equalization_active
 
@@ -210,8 +249,10 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             await self._write_power_limit(bid, ticked)
 
         _LOGGER.debug(
-            "bat_balancer: tick brain=%.0fW targets=%s status=%s",
+            "bat_balancer: tick mode=%s brain=%.0fW effective=%.0fW targets=%s status=%s",
+            balancer_mode,
             brain_target_w,
+            effective_target_w,
             {k: round(v) for k, v in result.targets.items()},
             result.status,
         )
@@ -282,12 +323,8 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             try:
                 soc = float(soc_state.state)
                 is_online = True
-                # stale check
-                age_s = (
-                    self.hass.loop.time() - soc_state.last_changed.timestamp()
-                    if hasattr(soc_state.last_changed, "timestamp")
-                    else 0.0
-                )
+                # stale check — use dt_util (wallclock) not hass.loop.time() (monotonic)
+                age_s = (dt_util.utcnow() - soc_state.last_updated).total_seconds()
                 if age_s > HW_STALE_THRESHOLD_S:
                     sensor_stale = True
             except (TypeError, ValueError):

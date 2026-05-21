@@ -23,8 +23,8 @@ RATE_LIMIT_W_PER_TICK: float = 1500.0
 TICK_S: int = 5
 
 # INV-24 SoC-equalization defaults (overridden by helpers at runtime)
-SOC_EQ_THRESHOLD_DEFAULT_PCT: float = 5.0
-SOC_EQ_MAX_BIAS_DEFAULT_W: float = 500.0
+SOC_EQ_THRESHOLD_DEFAULT_PCT: float = 1.0
+SOC_EQ_MAX_BIAS_DEFAULT_W: float = 1000.0
 
 # ZG-12: anti-export band
 ZG12_BAND_W: float = 50.0
@@ -41,6 +41,8 @@ INV23_TOLERANCE_FRACTION: float = 0.01
 # Brand-agnostic entity IDs (resolved at runtime from helpers / hw-bindings)
 ENTITY_BRAIN_TARGET_BAT_W = "input_number.brain_target_bat_w"
 ENTITY_SHADOW_MODE = "input_boolean.bat_balancer_shadow_mode"
+ENTITY_BAT_BALANCER_MODE = "input_select.bat_balancer_mode"
+ENTITY_BAT_BALANCER_TARGET_MANUAL_W = "input_number.bat_balancer_target_manual_w"
 ENTITY_SOC_EQ_THRESHOLD_PCT = "input_number.bat_balancer_soc_equalization_threshold_pct"
 ENTITY_SOC_EQ_MAX_BIAS_W = "input_number.bat_balancer_soc_equalization_max_bias_w"
 ENTITY_MIN_SOC_BUFFER_PCT = "input_number.bat_balancer_min_soc_buffer_pct"
@@ -77,6 +79,7 @@ class BatBalancerStatus(StrEnum):
     ERROR = "error"
     SHADOW_MODE = "shadow_mode"
     INITIALIZING = "initializing"
+    MANUAL_MODE = "manual_mode"
 
 
 class RejectedReason(StrEnum):
