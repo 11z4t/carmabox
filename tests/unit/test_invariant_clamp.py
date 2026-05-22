@@ -143,7 +143,6 @@ def _bin_state(switch_on: bool = False) -> BalancerState:
 def _bat_snap(grid_w: float = 2000.0) -> BatSnap:
     return BatSnap(
         brain_target_bat_w=-2000.0,
-        house_grid_w=grid_w,
         pv_w=0.0,
     )
 
@@ -362,7 +361,6 @@ class TestBatBalancerBrainOfferClamp:
         }
         snap = BatSnap(
             brain_target_bat_w=-2000.0,
-            house_grid_w=3000.0,
             pv_w=0.0,
             soc_equalization_threshold_pct=5.0,
             soc_equalization_max_bias_w=500.0,

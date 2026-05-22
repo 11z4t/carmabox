@@ -40,13 +40,11 @@ def _two_banks(
 
 def _snap(
     brain_target_bat_w: float = 0.0,
-    house_grid_w: float = 3000.0,
     shadow_mode: bool = False,
     brain_target_available: bool = True,
 ) -> SensorSnapshot:
     return SensorSnapshot(
         brain_target_bat_w=brain_target_bat_w,
-        house_grid_w=house_grid_w,
         pv_w=0.0,
         shadow_mode=shadow_mode,
         brain_target_available=brain_target_available,
@@ -61,7 +59,7 @@ class TestManualModeDistribution:
             target_w=5000.0,
             bank_configs=configs,
             bank_states=states,
-            snapshot=_snap(brain_target_bat_w=5000.0, house_grid_w=float("nan")),
+            snapshot=_snap(brain_target_bat_w=5000.0),
         )
         assert result.actual_total_w > 0.0, "MANUAL 5000W must produce non-zero distribution"
         assert result.targets["kontor"] > 0.0, "Kontor must get positive charge allocation"
@@ -74,7 +72,7 @@ class TestManualModeDistribution:
             target_w=5000.0,
             bank_configs=configs,
             bank_states=states,
-            snapshot=_snap(brain_target_bat_w=5000.0, house_grid_w=float("nan")),
+            snapshot=_snap(brain_target_bat_w=5000.0),
         )
         total = sum(abs(v) for v in result.targets.values())
         assert total <= 5000.0 + 100.0 + 0.01, f"Brain-offer invariant breach: {total:.1f}W > 5100W"
@@ -139,7 +137,7 @@ class TestAutoModeDistribution:
             target_w=3000.0,
             bank_configs=configs,
             bank_states=states,
-            snapshot=_snap(brain_target_bat_w=3000.0, house_grid_w=float("nan")),
+            snapshot=_snap(brain_target_bat_w=3000.0),
         )
         assert result.actual_total_w > 0.0
         total = sum(v for v in result.targets.values())
