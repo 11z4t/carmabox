@@ -12,6 +12,10 @@ SCAN_INTERVAL: timedelta = timedelta(seconds=5)
 
 # Entity IDs — reads (v0.1/v0.2 carryover)
 ENTITY_GRID_POWER: str = "sensor.house_grid_power"
+# 5-min rolling average of P1 grid power (neg=export) — IT-3599 binary cascade
+ENTITY_BRAIN_GRID_5MIN_AVG: str = "sensor.brain_grid_w_5min_avg"
+# 1-min rolling average — v0.4.5.3 F2 feed-forward (faster grid_null convergence)
+ENTITY_BRAIN_GRID_1MIN_AVG: str = "sensor.brain_grid_w_1min_avg"
 ENTITY_EV_SOC: str = "sensor.ev_soc_filtered"
 ENTITY_EV_TARGET_SOC: str = "input_number.ev_target_soc"
 ENTITY_FORCE_EV_ACTIVE: str = "input_boolean.brain_operator_force_ev_active"
@@ -27,6 +31,7 @@ DEFAULT_NIGHT_END_HOUR: int = 6
 
 # Default EV status entity (configurable via configuration.yaml)
 ENTITY_EV_STATUS_DEFAULT: str = "sensor.easee_home_12840_status"
+ENTITY_EV_ACTUAL_W: str = "sensor.easee_home_12840_power"
 
 # Entity IDs — writes (v0.2)
 ENTITY_TARGET_EV_W: str = "input_number.brain_target_ev_w"
@@ -117,8 +122,8 @@ PV2_MODE_DEADBAND_W: float = 100.0
 
 # ── v0.4 additions ──────────────────────────────────────────────────────────
 
-# PV forecast remaining (forecast.solar integration)
-ENTITY_PV_REMAINING_KWH: str = "sensor.energy_production_today_remaining"
+# PV forecast remaining — Solcast integration (p10 pessimistic, direct state)
+ENTITY_PV_REMAINING_KWH: str = "sensor.solcast_pv_forecast_forecast_remaining_today"
 
 # Sun position
 ENTITY_SUN_SUN: str = "sun.sun"
@@ -150,10 +155,6 @@ STRATEGY_BUFFER_AVAILABLE: str = "BUFFER_AVAILABLE"
 STRATEGY_BAT_PRIORITY: str = "BAT_PRIORITY"
 STRATEGY_NO_SUN: str = "NO_SUN"
 STRATEGY_FORECAST_UNAVAILABLE: str = "FORECAST_UNAVAILABLE"
-# Period string constants (cascade.py v0.4.4+ period-aware dispatch)
-PERIOD_AFTER_SURPLUS: str = "AFTER_SURPLUS"
-PERIOD_MORNING: str = "MORNING"
-PERIOD_NIGHT: str = "NIGHT"
 
 # ── v0.4.1 additions ────────────────────────────────────────────────────────
 
@@ -173,11 +174,12 @@ ENTITY_BRAIN_NON_CARMA_ANTICIPATION_W: str = "input_number.brain_non_carma_antic
 DEFAULT_NON_CARMA_ANTICIPATION_W: float = 2500.0
 
 # ── v0.4.1-D: Binary asset action publishing ────────────────────────────────
-BINARY_ASSET_IDS: tuple[str, ...] = ("miner", "pool_elv")
+BINARY_ASSET_IDS: tuple[str, ...] = ("miner", "pool_elv", "pool_vp")
 BINARY_ACTION_TMPL: str = "input_text.brain_action_{asset_id}_json"
 
-# ── v0.4.1-E: EV Priority Operator override ──────────────────────────────────
+# ── v0.4.1-E: EV Priority Operator override + EV sticky state ───────────────
 ENTITY_EV_PRIORITY: str = "input_boolean.brain_ev_priority"
+ENTITY_EV_TARGET_STICKY: str = "input_boolean.brain_ev_target_sticky"
 
 # ── v0.6 prep: EV safe min SoC (NO_CHARGE threshold) ────────────────────────
 ENTITY_EV_SAFE_MIN_SOC: str = "input_number.brain_ev_safe_min_soc"
@@ -204,18 +206,109 @@ DEFAULT_BAT_FLOOR_EVENING_PCT: float = 30.0
 DEFAULT_PER_PHASE_BOOST_A: float = 13.0
 BAT_PHASE_BOOST_W: float = 2000.0
 BAT_EXPORT_DEADBAND_W: float = 100.0
-DEFAULT_BAT_SOC_CHARGE_CEILING_PCT: float = 95.0
+DEFAULT_BAT_SOC_CHARGE_CEILING_PCT: float = (
+    100.0  # Borje 2026-05-14: ladda till 100% enligt cascade tier 6
+)
 BAT_LOAN_MIN_SOC_PCT: float = 50.0
+ENTITY_BAT_LOAN_MIN_SOC_PCT: str = "input_number.brain_bat_loan_min_soc_pct"
 BAT_MAX_DISCHARGE_FALLBACK_W: float = 4000.0
 
-# ── F2 cascade-ramp control (cascade.py imports) ────────────────────────────
-# F2_KP: proportional gain for grid-null delta scaling (delta_scaled = K_p × delta_raw)
-# F2_DELTA_CAP_W: max ramp per cycle (clamp delta to ±300W to avoid step changes)
-# F2_STEP_CAP_W: anti-windup ramp limit (Brain target step ±1500W per cycle) — prevents
-#                Brain from outpacing bat_balancer's ramp-up
-F2_KP: float = 0.2
-F2_DELTA_CAP_W: float = 300.0
+# ── v0.4.4: F1/F2 closed-loop grid-null ─────────────────────────────────────
+ENTITY_BRAIN_TARGET_GRID_W: str = "input_number.brain_target_grid_w"
+DEFAULT_BRAIN_TARGET_GRID_W: float = 0.0
+# Nordpool current price (SEK/kWh) — safety gate: if price < 0, accept configured import
+ENTITY_NORDPOOL_CURRENT_PRICE: str = "sensor.nordpool_kwh_se3_sek_3_10_025"
+# F2 deadband: |error| < this → target_bat_w = 0 (avoids chasing noise)
+F2_CLOSED_LOOP_DEADBAND_W: float = 100.0
+# IT-4218 anti-windup: max delta per cycle (= bat_balancer step_cap 1500W/15s)
 F2_STEP_CAP_W: float = 1500.0
+# IT-4218 Spec 1.5 P-controller: proportional gain and per-cycle ramp cap (N1 single-source-of-truth)
+F2_KP: float = 0.2  # proportional gain: delta = F2_KP × grid_error
+F2_DELTA_CAP_W: float = 300.0  # max delta per cycle from P-controller (anti-escalation)
+
+# v0.4.5 F2.1 feed-forward: bat actual power sensors (sum = house bat load).
+# Used to convert F2 from proportional (-grid_5min) to feed-forward
+# (-(bat_actual + grid_5min)) so steady-state grid_w → 0 instead of half-load.
+ENTITY_BAT_POWER_KONTOR: str = "sensor.goodwe_battery_power_kontor"
+ENTITY_BAT_POWER_FORRAD: str = "sensor.goodwe_battery_power_forrad"
+
+# IT-4218 T2: PV instantaneous power for spike feed-forward.
+# GoodWe-konvention: positiv = genererar, 0 = ingen produktion.
+ENTITY_PV_POWER_KONTOR: str = "sensor.goodwe_pv_power_kontor"
+ENTITY_PV_POWER_FORRAD: str = "sensor.goodwe_pv_power_forrad"
+
+# IT-4218 T2: PV-spike feed-forward thresholds (Borje 2026-05-17 11:08).
+# If PV rises by PV_SPIKE_THRESHOLD_W within ~15s → apply charge bias.
+PV_SPIKE_THRESHOLD_W: float = 1000.0  # 1 kW delta triggers feed-forward
+PV_SPIKE_MAX_BIAS_W: float = 2000.0  # cap on charge bias added to raw target
+
+# ── v0.4.4: Period-aware cascade ─────────────────────────────────────────────
+
+# Surplus window schedule helpers (when PV surplus is expected)
+ENTITY_SURPLUS_START_TIME: str = "input_datetime.brain_surplus_start_time"
+ENTITY_SURPLUS_END_TIME: str = "input_datetime.brain_surplus_end_time"
+
+# Default surplus window (09:00–17:00 local time)
+DEFAULT_SURPLUS_START_HOUR: int = 9
+DEFAULT_SURPLUS_END_HOUR: int = 17
+
+# Floor thresholds for period-specific bat discharge
+ENTITY_BAT_FLOOR_MORNING_PCT: str = "input_number.brain_bat_floor_morning_pct"
+ENTITY_BAT_FLOOR_AFTER_SURPLUS_PCT: str = "input_number.brain_bat_floor_after_surplus_pct"
+DEFAULT_BAT_FLOOR_MORNING_PCT: float = 50.0  # preserve bat for solar charging
+DEFAULT_BAT_FLOOR_AFTER_SURPLUS_PCT: float = 50.0  # protect reserve post-surplus
+
+# Night cascade — absolute bat floor (discharge-to target when surplus_likely)
+ENTITY_BAT_MIN_ABSOLUTE_PCT: str = "input_number.brain_bat_min_absolute_pct"
+BAT_MIN_ABSOLUTE_PCT: float = 15.0
+
+# Night cascade — grid-charge target (charge-to when no surplus expected)
+ENTITY_BAT_NIGHT_TARGET_PCT: str = "input_number.brain_bat_night_target_pct"
+BAT_NIGHT_TARGET_PCT: float = 80.0
+
+# Night cascade — PV forecast threshold for surplus_likely decision
+ENTITY_BAT_FORECAST_THRESHOLD_KWH: str = "input_number.brain_bat_forecast_threshold_kwh"
+BAT_FORECAST_THRESHOLD_KWH: float = 30.0
+
+# Solcast tomorrow forecast entity
+ENTITY_PV_FORECAST_TOMORROW_KWH: str = "sensor.solcast_pv_forecast_forecast_tomorrow"
+
+# Cheap grid-charge threshold (öre/kWh) — future grid-charge logic
+ENTITY_CHEAP_CHARGE_THRESHOLD_ORE: str = "input_number.brain_cheap_charge_threshold_ore"
+DEFAULT_CHEAP_CHARGE_THRESHOLD_ORE: float = 100.0
+
+# ── IT-4218 Spec 1.6 Batch B ────────────────────────────────────────────────
+
+# Issue 2: absolute SoC hard floor — discharge blocked below this level
+ENTITY_BRAIN_BAT_HARD_FLOOR_PCT: str = "input_number.brain_bat_hard_floor_pct"
+DEFAULT_BAT_HARD_FLOOR_PCT: float = 5.0
+
+# Issue 4: consecutive write-fail counter (observability)
+ENTITY_BRAIN_WRITE_FAIL_COUNT: str = "input_number.brain_write_fail_count"
+
+# Period name constants (used in BrainOutput.reason)
+PERIOD_MORNING: str = "MORNING"
+PERIOD_SURPLUS: str = "SURPLUS"
+PERIOD_AFTER_SURPLUS: str = "AFTER_SURPLUS"
+PERIOD_NIGHT: str = "NIGHT"
+
+# ── v0.5b D3: bat_available_kwh — individual bank SoC sensors ────────────────
+ENTITY_BAT_SOC_KONTOR: str = "sensor.pv_battery_soc_kontor"
+ENTITY_BAT_SOC_FORRAD: str = "sensor.pv_battery_soc_forrad"
+
+# Cold floor: outdoor temperature sensor (logic not yet implemented)
+# TODO: implement cold-floor cascade when outdoor_temp < threshold → use cold_min_soc
+ENTITY_OUTDOOR_TEMP: str = "sensor.home_temperature"
+DEFAULT_OUTDOOR_TEMP_C: float = 15.0
+
+# ── v0.5b D4: ev_need_kwh — car presence + capacity ──────────────────────────
+ENTITY_CAR_TRACKER: str = "binary_sensor.frigate_xpeng_g9p_hemma"
+ENTITY_CAR_BATTERY_CAPACITY_KWH: str = "input_number.car_battery_capacity_kwh"
+ENTITY_CAR_TARGET_SOC: str = "input_number.car_target_soc"
+DEFAULT_CAR_BATTERY_CAPACITY_KWH: float = 93.0  # Xpeng G9P brutto 93 kWh (Börje 2026-05-15)
+DEFAULT_CAR_TARGET_SOC: float = 80.0
+# EV SoC staleness: if ev_soc_filtered not updated in this many seconds → treat as None
+EV_SOC_STALE_S: float = 7200.0  # 2 hours
 
 # ── Phase 1: bat_balancer mode-routing (Brain owns mode, bat_balancer = slave) ──
 ENTITY_BAT_BALANCER_MODE: str = "input_select.bat_balancer_mode"

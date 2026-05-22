@@ -6,7 +6,7 @@ from custom_components.carmabox.core.night_ev import NevPhase, NevState, decide_
 
 
 def _state(**kw) -> NevState:
-    defaults = dict(  # noqa: C408
+    defaults = dict(
         is_night=True,
         ev_connected=True,
         ev_soc=60.0,

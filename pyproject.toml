@@ -20,12 +20,13 @@ select = ["E", "F", "I", "N", "UP", "B", "C4", "SIM", "TCH", "ANN", "RUF"]
 ignore = ["ANN401"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["ANN"]
+"tests/**" = ["ANN", "N802", "E501", "RUF002", "RUF003", "SIM103", "SIM117", "C408"]
 # Migrated CCs (brain/ev_balancer/bat_balancer/binary_balancer) — pre-existing issues, fix incrementally
-"custom_components/brain/*" = ["ANN", "TCH", "E501", "RUF002", "RUF003"]
+"custom_components/brain/*" = ["ANN", "TCH", "E501", "N806", "RUF002", "RUF003"]
 "custom_components/ev_balancer/*" = ["ANN", "TCH", "TC001", "SIM", "E501", "RUF002", "RUF003"]
 "custom_components/bat_balancer/*" = ["ANN", "TCH", "E501", "RUF003"]
 "custom_components/binary_balancer/*" = ["ANN", "TCH", "RUF002", "RUF003"]
+"custom_components/vp_pool_balancer/*" = ["ANN", "TCH", "TC001", "TC002", "F841", "F401", "RUF100", "E501"]
 
 [tool.mypy]
 python_version = "3.12"
