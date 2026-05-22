@@ -6,10 +6,12 @@ from collections import deque
 from dataclasses import dataclass, field
 
 from .const import (
+    BANK_SOC_CHARGE_CEILING_PCT,
     FORRAD_MAX_CHARGE_W,
     FORRAD_MAX_DISCHARGE_W,
     KONTOR_MAX_CHARGE_W,
     KONTOR_MAX_DISCHARGE_W,
+    SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT,
     SOC_EQ_MAX_BIAS_DEFAULT_W,
     SOC_EQ_THRESHOLD_DEFAULT_PCT,
     BatBalancerStatus,
@@ -41,7 +43,7 @@ class BankConfig:
     def default_kontor(cls) -> BankConfig:
         return cls(
             id="kontor",
-            capacity_kwh=14.0,
+            capacity_kwh=15.0,
             max_charge_w=KONTOR_MAX_CHARGE_W,
             max_discharge_w=KONTOR_MAX_DISCHARGE_W,
         )
@@ -50,7 +52,7 @@ class BankConfig:
     def default_forrad(cls) -> BankConfig:
         return cls(
             id="forrad",
-            capacity_kwh=6.0,
+            capacity_kwh=10.0,
             max_charge_w=FORRAD_MAX_CHARGE_W,
             max_discharge_w=FORRAD_MAX_DISCHARGE_W,
         )
@@ -75,10 +77,11 @@ class SensorSnapshot:
 
     brain_target_bat_w: float = 0.0
     banks: dict[str, BankState] = field(default_factory=dict)
-    house_grid_w: float = 0.0  # positive = import, negative = export
     pv_w: float = 0.0
     soc_equalization_threshold_pct: float = SOC_EQ_THRESHOLD_DEFAULT_PCT
     soc_equalization_max_bias_w: float = SOC_EQ_MAX_BIAS_DEFAULT_W
+    soc_equalization_full_bias_threshold_pct: float = SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT
+    soc_charge_ceiling_pct: float = BANK_SOC_CHARGE_CEILING_PCT  # 100.0 physical default
     shadow_mode: bool = True
     brain_target_available: bool = True
 
@@ -92,11 +95,13 @@ class DistributionResult:
     rejected_w: float = 0.0
     rejected_reason: RejectedReason | None = None
     status: BatBalancerStatus = BatBalancerStatus.OK
-    zg12_engaged: bool = False
     equalization_active: bool = False
     equalization_bias_max_w: float = 0.0
     inv23_violation: bool = False  # logged as WARNING, not crash
     overflow_redistributed: bool = False
+    capped_bank_ids: frozenset = field(default_factory=frozenset)  # banks BMS-capped this tick
+    bms_cap_suppressed_w: float = 0.0  # D5: overflow suppressed to protect SoC balance
+    soc_ceil_bank_ids: frozenset = field(default_factory=frozenset)  # banks zeroed by SoC ceiling
 
 
 @dataclass
@@ -112,7 +117,6 @@ class BatBalancerState:
 
     # Metrics (rolling counters — coordinator resets at 24h boundary)
     transitions_24h: int = 0
-    zg12_count_24h: int = 0
     overflow_count_24h: int = 0
     equalization_active: bool = False
 

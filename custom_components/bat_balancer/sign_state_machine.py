@@ -7,8 +7,8 @@ the ramp as a failsafe. If a direct sign flip is detected, it:
   3. Next tick allows full magnitude in new direction
 
 States:
-  CHARGING        — last confirmed write was positive
-  DISCHARGING     — last confirmed write was negative
+  CHARGING        — last confirmed write was negative (charge = negative)
+  DISCHARGING     — last confirmed write was positive (discharge = positive)
   IDLE            — last confirmed write was 0
   RAMPING_THROUGH_ZERO — one zero-tick inserted (returns to normal next tick)
 """
@@ -101,16 +101,16 @@ def _target_direction(w: float) -> int:
 
 def _state_direction(state: SignState) -> int:
     if state == SignState.CHARGING:
-        return 1
-    if state == SignState.DISCHARGING:
         return -1
+    if state == SignState.DISCHARGING:
+        return 1
     return 0
 
 
 def _sign_to_state(w: float) -> SignState:
-    if w > _FLOAT_TOL:
-        return SignState.CHARGING
     if w < -_FLOAT_TOL:
+        return SignState.CHARGING
+    if w > _FLOAT_TOL:
         return SignState.DISCHARGING
     return SignState.IDLE
 
