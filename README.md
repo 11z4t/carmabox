@@ -1,75 +1,90 @@
-# CARMA Box
+![CarmaBox](logo.png)
 
-**C**onnected **A**utomated **R**esource **M**anagement **A**dvisor
+# CarmaBox — Smart Energy Management for Home Assistant
 
-Energy optimizer för hemmabruk — batterier, solceller, EV-laddning, vitvaror.
-Minimerar effekttoppar och elkostnader automatiskt.
+[![HACS Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg)](LICENSE)
+[![HA Version](https://img.shields.io/badge/Home%20Assistant-2025.1%2B-orange.svg)](https://www.home-assistant.io)
+[![Version](https://img.shields.io/badge/version-v0.1.0-orange.svg)](https://github.com/11z4t/carmabox/releases)
 
-## Lagar (prioritetsordning)
+**CARMA** = *Connected Automated Resource Management Advisor*
 
-Se [MANIFEST.md](MANIFEST.md) för fullständig specifikation.
+Smart battery charging, surplus optimization, and energy automation for Home Assistant — built for GoodWe + single-battery systems.
 
-1. **Ellevio timmedel ALDRIG över tak** (2 kW viktat)
-2. **Batterier ska användas aktivt** (idle = bortkastat)
-3. **EV ≥ 75% SoC kl 06:00** varje dag
-4. **Minimera export** — maximera egenkonsumtion
-5. **Laddning vid lägst elpris** och effektmedel
-6. **Urladdning: effektmedel först**, elkostnad sedan
-7. **Sol- och säsongsmedvetenhet**
+---
 
-## Arkitektur
+## v0.1 — What it does
 
+| State | Action |
+|-------|--------|
+| Grid exporting (>100 W surplus) | Charge battery up to rated max |
+| Grid importing (>100 W) | Stop charge — battery standby |
+| Battery SoC ≥ ceiling | Stop charge |
+| Overnight (00:00–07:00) | Linear discharge to UPS floor |
+
+Self-consumption optimization for single-battery GoodWe systems. No cloud. No complexity.
+
+---
+
+## Dashboard
+
+![CarmaBox Dashboard](screenshots/dashboard.png)
+
+Real-time energy flow: PV → battery → house → grid. Live SoC, power flows, endurance estimate.
+
+---
+
+## Requirements
+
+- Home Assistant 2025.1+
+- GoodWe inverter (single battery bank)
+- Grid meter sensor (P1 / HomeWizard / GoodWe built-in)
+- GoodWe HA integration
+
+---
+
+## Installation
+
+### Via HACS
+
+1. Open HACS → Integrations → ⋮ → Custom repositories
+2. Add: `https://github.com/11z4t/carmabox` → Category: **Integration**
+3. Install **CarmaBox** → Restart HA
+
+### Customer Packages
+
+Add the automation package to your HA config:
+
+```yaml
+# configuration.yaml
+homeassistant:
+  packages: !include_dir_named packages/
 ```
-Varje 30s-cykel:
 
-┌─────────────────────────────────────┐
-│ Layer 0: GRID GUARD                 │ ← ALDRIG överskrid Ellevio
-│ Invarianter: INV-1 till INV-5       │
-├─────────────────────────────────────┤
-│ Layer 1: STATE COLLECTOR            │
-├─────────────────────────────────────┤
-│ Layer 2: PLANNER (var 5 min)        │ ← Sol/pris/temperatur-medveten
-├─────────────────────────────────────┤
-│ Layer 3: PLAN EXECUTOR              │ ← Planen styr
-├─────────────────────────────────────┤
-│ Layer 4: BATTERY BALANCER           │ ← Proportionell, cold-lock aware
-├─────────────────────────────────────┤
-│ Layer 5: SURPLUS CHAIN              │ ← Knapsack: 0W export
-├─────────────────────────────────────┤
-│ Layer 6: WATCHDOG                   │
-└─────────────────────────────────────┘
-```
+Copy `customer_packages/carmabox_v01.yaml` → `/config/packages/carmabox.yaml`
 
-## Core-moduler
+See `customer_packages/customer_config_example.yaml` for entity mapping.
 
-| Modul | Ansvar | Tester |
-|-------|--------|--------|
-| `core/grid_guard.py` | LAG 1 enforcement + INV-1 till INV-5 | 34 |
-| `core/battery_balancer.py` | Proportionell urladdning/laddning | 22 |
-| `core/plan_executor.py` | Plan → commands, 3-fas EV, replan | 27 |
-| `core/surplus_chain.py` | Knapsack allokering, hysteres | 16 |
-| `core/planner.py` | Sol/temp-medveten planering | 12 |
+---
 
-## Integrationer
+## Components
 
-| Kategori | Stödda |
-|----------|--------|
-| Invertrar | GoodWe |
-| EV-laddare | Easee |
-| Elmätare | HomeWizard P1 |
-| Priser | Nordpool, Tibber |
-| Solprognos | Solcast, Forecast.Solar |
-| Väder | Tempest WeatherFlow (MQTT) |
-| Hemautomation | Home Assistant (HACS) |
+| Component | Description |
+|-----------|-------------|
+| `bat_balancer` | Battery charge/discharge coordinator |
+| `brain` | PV surplus + overnight discharge logic |
+| `ev_balancer` | EV charging optimizer |
+| `carmabox` | Core platform + helpers |
 
-## Dokumentation
+---
 
-| Fil | Innehåll |
-|-----|----------|
-| [MANIFEST.md](MANIFEST.md) | Lagar, invarianter, arkitektur, parametrar |
-| [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | Implementationsplan, milstolpar |
-| [docs/GRID-GUARD-DESIGN.md](docs/GRID-GUARD-DESIGN.md) | Grid Guard detaljdesign |
+## Version History
+
+- **v0.1.0** (2026-05-25) — First production release: bat_balancer + mini-brain + telemetry
+- **legacy-v5.0.0-prev** — Previous development branch (archived)
+
+---
 
 ## License
 
-Proprietary — 4recon AB
+Apache 2.0 — see [LICENSE](LICENSE)

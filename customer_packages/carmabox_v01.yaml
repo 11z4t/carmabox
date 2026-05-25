@@ -1,0 +1,104 @@
+# CarmaBox v0.1 — Surplus Bat-Charge package
+# Single feature: PV-surplus → bat charge, max 5kW. Stop on import.
+#
+# Install: copy to /config/packages/carmabox_v01/ + reference in configuration.yaml:
+#   homeassistant:
+#     packages: !include_dir_named packages/
+#
+# Configure via customer_config.yaml (= per-customer entity-mapping).
+
+template:
+  - sensor:
+      - name: "carmabox_v01_grid_5min_avg"
+        unique_id: carmabox_v01_grid_5min_avg
+        unit_of_measurement: "W"
+        device_class: power
+        state: >
+          {% set grid = states('carmabox_v01_grid_power_sensor') | float(0) %}
+          {{ grid | round(0) | int }}
+        attributes:
+          source: "{{ 'customer_config' }}"
+
+      - name: "carmabox_v01_surplus_w"
+        unique_id: carmabox_v01_surplus_w
+        unit_of_measurement: "W"
+        device_class: power
+        state: >
+          {% set grid = states('sensor.carmabox_v01_grid_5min_avg') | float(0) %}
+          {{ [-grid, 0] | max | round(0) | int }}
+
+      - name: "carmabox_v01_status"
+        unique_id: carmabox_v01_status
+        state: >
+          {% set grid = states('sensor.carmabox_v01_grid_5min_avg') | float(0) %}
+          {% set soc = states('sensor.carmabox_v01_bat_soc') | float(0) %}
+          {% set ceiling = states('input_number.carmabox_v01_bat_soc_ceiling_pct') | float(95) %}
+          {% if soc >= ceiling %}
+            BAT_FULL
+          {% elif grid < -100 %}
+            CHARGING_SURPLUS
+          {% elif grid > 100 %}
+            IMPORTING
+          {% else %}
+            BALANCED
+          {% endif %}
+
+automation:
+  - id: carmabox_v01_surplus_charge_engage
+    alias: "CarmaBox v0.1 — engage charge on surplus"
+    description: >
+      Trigger när grid_5min < -100W (= export sustained).
+      Sätt EMS mode = charge_battery + power_limit = min(surplus, 5000).
+    mode: single
+    max_exceeded: silent
+    trigger:
+      - platform: time_pattern
+        seconds: "/30"
+    condition:
+      - condition: numeric_state
+        entity_id: sensor.carmabox_v01_surplus_w
+        above: 100
+      - condition: numeric_state
+        entity_id: sensor.carmabox_v01_bat_soc
+        below: input_number.carmabox_v01_bat_soc_ceiling_pct
+    action:
+      - variables:
+          target_w: >
+            {% set surplus = states('sensor.carmabox_v01_surplus_w') | float(0) %}
+            {% set max_cap = states('input_number.carmabox_v01_max_charge_w') | float(5000) %}
+            {{ [surplus, max_cap] | min | round(0) | int }}
+      - service: number.set_value
+        target:
+          entity_id: number.carmabox_v01_ems_power_limit
+        data:
+          value: "{{ target_w }}"
+      - service: select.select_option
+        target:
+          entity_id: select.carmabox_v01_ems_mode
+        data:
+          option: "charge_battery"
+
+  - id: carmabox_v01_surplus_charge_disengage
+    alias: "CarmaBox v0.1 — disengage on import"
+    description: >
+      När grid > +100W eller bat full → stoppa charge (= ems_mode = battery_standby).
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.carmabox_v01_grid_5min_avg
+        above: 100
+        for: "00:00:30"
+      - platform: numeric_state
+        entity_id: sensor.carmabox_v01_bat_soc
+        above: input_number.carmabox_v01_bat_soc_ceiling_pct
+    action:
+      - service: select.select_option
+        target:
+          entity_id: select.carmabox_v01_ems_mode
+        data:
+          option: "battery_standby"
+      - service: number.set_value
+        target:
+          entity_id: number.carmabox_v01_ems_power_limit
+        data:
+          value: 0
