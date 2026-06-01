@@ -225,6 +225,9 @@ F2_STEP_CAP_W: float = 1500.0
 # IT-4218 Spec 1.5 P-controller: proportional gain and per-cycle ramp cap (N1 single-source-of-truth)
 F2_KP: float = 0.2  # proportional gain: delta = F2_KP × grid_error
 F2_DELTA_CAP_W: float = 300.0  # max delta per cycle from P-controller (anti-escalation)
+F2_0VISION_ABSORB_MARGIN_W: float = (
+    50.0  # 0-vision: extra absorb margin on top of |grid_5min| to guarantee charge
+)
 
 # v0.4.5 F2.1 feed-forward: bat actual power sensors (sum = house bat load).
 # Used to convert F2 from proportional (-grid_5min) to feed-forward

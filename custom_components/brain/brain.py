@@ -1436,6 +1436,22 @@ class BrainController:
                 if abs(grid_5min) < F2_DEADBAND_W:
                     return current_offer, "AUTO"  # deadband: hold
                 new_offer = bat_actual + grid_5min
+                # 0-vision enforcement (Borje 2026-06-01): vid PV-export + bat ej full
+                # → tvinga charge oavsett F2-cancellation (bat_discharge + grid_export ≈ 0).
+                # F2_0VISION_ABSORB_MARGIN_W = 50W (definierat i const.py).
+                bat_soc = self._state_float(ENTITY_BAT_AVG_SOC_PCT, 100.0)
+                if grid_5min < -F2_DEADBAND_W and bat_soc < DEFAULT_BAT_SOC_CHARGE_CEILING_PCT:
+                    min_charge_offer = -(abs(grid_5min) + 50.0)
+                    new_offer = min(new_offer, min_charge_offer)
+                    charge_cap = self._bat_max_charge_w_now()
+                    if charge_cap > 0.0:
+                        new_offer = max(new_offer, -charge_cap)
+                    _LOGGER.info(
+                        "0-vision-enforce: grid=%.0fW bat=%.1f%% offer=%.0fW",
+                        grid_5min,
+                        bat_soc,
+                        new_offer,
+                    )
                 # Symmetrisk clamp: tillåt både charge (neg) och discharge (pos)
                 new_offer = max(F2_OFFER_FLOOR_W, min(F2_OFFER_CEIL_W, new_offer))
                 return new_offer, "AUTO"
