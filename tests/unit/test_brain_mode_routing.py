@@ -33,6 +33,8 @@ def _controller(
     bat_kontor: str | None = None,
     bat_forrad: str | None = None,
     current_offer: str | None = None,
+    bat_soc: str = "80.0",
+    bat_floor: str | None = None,
 ) -> BrainController:
     """Create a BrainController with mocked hass for mode-routing tests."""
     hass = MagicMock()
@@ -45,6 +47,8 @@ def _controller(
             "sensor.goodwe_battery_power_kontor": bat_kontor,
             "sensor.goodwe_battery_power_forrad": bat_forrad,
             "input_number.brain_target_bat_w": current_offer,
+            "sensor.bat_balancer_avg_soc_pct": bat_soc,
+            "input_number.brain_bat_floor_day_pct": bat_floor,
         }
         val = mapping.get(entity_id)
         if entity_id not in mapping:
@@ -76,6 +80,21 @@ class TestAutoMode:
         assert offer_w == 700.0  # 200 + 500
         assert source == "AUTO"
 
+    def test_t1d_auto_floor_blocked_discharge_returns_zero(self) -> None:
+        """T1d: AUTO, grid importing, but SoC at floor → offer=0W (floor guard)."""
+        ctrl = _controller(
+            mode="AUTO",
+            grid_5min="500.0",
+            bat_kontor="0.0",
+            bat_forrad="0.0",
+            current_offer="0",
+            bat_soc="15.0",  # at floor
+            bat_floor="50.0",
+        )
+        offer_w, source = ctrl._bat_mode_routing(computed_bat_w=0.0)
+        assert offer_w == 0.0  # floor guard: soc=15 <= floor=50
+        assert source == "AUTO"
+
     def test_t1b_auto_feed_forward_surplus(self) -> None:
         """T1b: AUTO, PV surplus grid_5min=-640W, bat idle -> offer=-640W (charge)."""
         ctrl = _controller(
@@ -84,6 +103,7 @@ class TestAutoMode:
             bat_kontor="0.0",
             bat_forrad="0.0",
             current_offer="0",
+            bat_soc="100.0",  # at ceiling: no 0-vision enforcement
         )
         offer_w, source = ctrl._bat_mode_routing(computed_bat_w=0.0)
         assert offer_w == -640.0
@@ -160,6 +180,7 @@ class TestAutoMode:
             bat_kontor="-2000.0",
             bat_forrad="-1000.0",
             current_offer="0",
+            bat_soc="100.0",  # at ceiling: no 0-vision enforcement
         )
         offer_w, _ = ctrl._bat_mode_routing(computed_bat_w=0.0)
         assert offer_w == -10000.0

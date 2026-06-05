@@ -1436,10 +1436,24 @@ class BrainController:
                 if abs(grid_5min) < F2_DEADBAND_W:
                     return current_offer, "AUTO"  # deadband: hold
                 new_offer = bat_actual + grid_5min
+                # Conservative fallback 0.0: if SoC unavailable, assume empty → block discharge.
+                bat_soc = self._state_float(ENTITY_BAT_AVG_SOC_PCT, 0.0)
+                # F2 discharge floor guard (mirrors cascade._compute_bat_grid_target:82).
+                # Prevents discharge offer when at SoC floor — eliminates W2 false alarm.
+                if new_offer > 0.0:
+                    bat_floor = self._state_float(
+                        ENTITY_BAT_FLOOR_DAY_PCT, DEFAULT_BAT_FLOOR_DAY_PCT
+                    )
+                    if bat_soc <= bat_floor:
+                        _LOGGER.debug(
+                            "F2-floor-block: soc=%.1f%% <= floor=%.1f%% → hold 0W",
+                            bat_soc,
+                            bat_floor,
+                        )
+                        new_offer = 0.0
                 # 0-vision enforcement (Borje 2026-06-01): vid PV-export + bat ej full
                 # → tvinga charge oavsett F2-cancellation (bat_discharge + grid_export ≈ 0).
                 # F2_0VISION_ABSORB_MARGIN_W = 50W (definierat i const.py).
-                bat_soc = self._state_float(ENTITY_BAT_AVG_SOC_PCT, 100.0)
                 if grid_5min < -F2_DEADBAND_W and bat_soc < DEFAULT_BAT_SOC_CHARGE_CEILING_PCT:
                     min_charge_offer = -(abs(grid_5min) + 50.0)
                     new_offer = min(new_offer, min_charge_offer)
