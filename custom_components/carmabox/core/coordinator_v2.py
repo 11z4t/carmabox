@@ -22,8 +22,11 @@ from typing import Any
 
 from ..const import (
     DEFAULT_EV_MIN_AMPS,
+    DEFAULT_GRID_CHARGE_PRICE_THRESHOLD,
     DEFAULT_NIGHT_END,
     DEFAULT_NIGHT_START,
+    EV_CAPACITY_KWH,
+    GRID_LIMIT_DEFAULT_KW,
     MAX_EV_CURRENT,
 )
 from ..optimizer.bayesian_tuner import BayesianTuner, TunerParams
@@ -53,7 +56,7 @@ _LOGGER = logging.getLogger(__name__)
 class CoordinatorConfig:
     """All config — parameterstyrd."""
 
-    ellevio_tak_kw: float = 2.0
+    ellevio_tak_kw: float = GRID_LIMIT_DEFAULT_KW
     ellevio_night_weight: float = 0.5
     grid_guard_margin: float = 0.85
     battery_1_kwh: float = 15.0
@@ -67,8 +70,8 @@ class CoordinatorConfig:
     ev_max_amps: int = MAX_EV_CURRENT
     ev_target_soc: float = 75.0
     ev_departure_hour: int = 6
-    ev_capacity_kwh: float = 92.0
-    grid_charge_price_threshold: float = 15.0
+    ev_capacity_kwh: float = EV_CAPACITY_KWH
+    grid_charge_price_threshold: float = DEFAULT_GRID_CHARGE_PRICE_THRESHOLD
     plan_interval_cycles: int = 10  # 10 x 30s = 5 min
 
 
