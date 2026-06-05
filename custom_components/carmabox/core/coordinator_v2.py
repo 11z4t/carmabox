@@ -28,6 +28,7 @@ from ..const import (
     EV_CAPACITY_KWH,
     GRID_LIMIT_DEFAULT_KW,
     MAX_EV_CURRENT,
+    MIN_BAT_FOR_EV_KWH,
 )
 from ..optimizer.bayesian_tuner import BayesianTuner, TunerParams
 from ..optimizer.plan_feedback import PlanFeedback
@@ -394,8 +395,8 @@ class CoordinatorV2:
                 ]
                 if s >= 0
             )
-            min_bat_for_ev_kwh = 2.0
-            if bat_avail > min_bat_for_ev_kwh:
+
+            if bat_avail > MIN_BAT_FOR_EV_KWH:
                 self.night_ev_active = True
                 ev_cmd = {
                     "action": "start",

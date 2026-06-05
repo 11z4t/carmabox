@@ -551,3 +551,9 @@ MIN_CONSUMER_SURPLUS_W: int = 200  # Min surplus watts to activate controllable 
 MIN_EXPORT_THRESHOLD_W: int = 50  # Below this watts → not considered meaningful export
 DEFAULT_ELLEVIO_TAK_W: float = 2000.0  # Default Ellevio peak cap (W) for surplus calculations
 PV_SURPLUS_BAT_MAX_CHARGE_W: int = 5000  # Max battery charge rate in PV surplus mode (W)
+
+# ── CoordinatorV2 — Night EV thresholds ──────────────────────────────────────
+MIN_BAT_FOR_EV_KWH: float = 2.0  # Min available battery kWh before starting night EV charge
+
+# ── Decision Engine — Night charge price threshold ───────────────────────────
+DEFAULT_CHEAP_NIGHT_PRICE_ORE: float = 30.0  # EV night charge threshold (öre/kWh)

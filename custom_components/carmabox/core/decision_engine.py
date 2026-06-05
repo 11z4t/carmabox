@@ -13,8 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
-# Price thresholds
-_CHEAP_NIGHT_PRICE_ORE = 30  # öre/kWh — below this, night EV charging is triggered
+from ..const import DEFAULT_CHEAP_NIGHT_PRICE_ORE
 
 
 class BatteryAction(Enum):
@@ -162,7 +161,7 @@ def decide(
 
     if ev_connected and ev_soc_pct < ev_target_pct:
         # Night charging (cheap or workday need)
-        if is_night and (is_workday_tomorrow or current_price_ore < _CHEAP_NIGHT_PRICE_ORE):
+        if is_night and (is_workday_tomorrow or current_price_ore < DEFAULT_CHEAP_NIGHT_PRICE_ORE):
             # Check headroom against Ellevio tak
             ev_kw_3p = 4.14  # 6A * 230V * 3 phases / 1000
             net_load_3p = house_load_w + ev_kw_3p * 1000 - pv_power_w - discharge_w
