@@ -163,9 +163,9 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
-            adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+            adapter.analyze_only = not self.executor_enabled
         if self.ev_adapter:
-            self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+            self.ev_adapter.analyze_only = not self.executor_enabled
 
         # ── Miner entity ───────────────────────────────────────
         self._miner_entity: str = str(self._cfg.get("miner_entity", ""))

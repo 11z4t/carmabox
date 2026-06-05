@@ -65,7 +65,7 @@ def _make_bridge_full(data: dict | None = None) -> CoordinatorBridge:
                 ems_mode="peak_shaving",
                 fast_charging_on=False,
                 prefix="kontor",
-                _analyze_only=False,
+                analyze_only=False,
                 set_ems_mode=AsyncMock(return_value=True),
                 set_discharge_limit=AsyncMock(return_value=True),
             ),
@@ -76,7 +76,7 @@ def _make_bridge_full(data: dict | None = None) -> CoordinatorBridge:
                 status="",
                 cable_locked=False,
                 is_charging=False,
-                _analyze_only=False,
+                analyze_only=False,
             ),
         ),
         patch(
@@ -154,7 +154,7 @@ class TestBridgeInitBranches:
         assert isinstance(bridge.executor_enabled, bool)
 
     def test_ev_adapter_analyze_only_propagated(self) -> None:
-        """ev_adapter._analyze_only set based on executor_enabled (line 167)."""
+        """ev_adapter.analyze_only set based on executor_enabled (line 167)."""
         bridge = _make_bridge_full(
             {
                 "ev_enabled": True,
@@ -166,7 +166,7 @@ class TestBridgeInitBranches:
         )
         if bridge.ev_adapter:
             # When executor_enabled=False, _analyze_only should be True
-            assert bridge.ev_adapter._analyze_only is True
+            assert bridge.ev_adapter.analyze_only is True
 
 
 # ── Tests: _read_float / _read_str edge cases ─────────────────────────────────

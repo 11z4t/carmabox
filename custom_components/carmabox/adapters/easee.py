@@ -104,7 +104,7 @@ class EaseeAdapter(EVAdapter):
 
     async def _safe_call(self, domain: str, service: str, data: dict[str, object]) -> bool:
         entity_id = data.get("entity_id", data.get("charger_id", "?"))
-        if getattr(self, "_analyze_only", False):
+        if self.analyze_only:
             _LOGGER.info("DRY-RUN Easee: %s.%s → %s", domain, service, entity_id)
             return True
         for attempt in range(2):

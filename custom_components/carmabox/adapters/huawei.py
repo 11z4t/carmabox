@@ -102,7 +102,7 @@ class HuaweiAdapter(InverterAdapter):
         """Call HA service with rate limiting and retry."""
         entity_id = data.get("entity_id", "?")
 
-        if getattr(self, "_analyze_only", False):
+        if self.analyze_only:
             _LOGGER.info("DRY-RUN Huawei %s: %s.%s → %s", self.prefix, domain, service, entity_id)
             return True
 

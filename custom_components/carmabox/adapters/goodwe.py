@@ -95,7 +95,7 @@ class GoodWeAdapter(InverterAdapter):
         """
         entity_id = data.get("entity_id", "?")
 
-        if getattr(self, "_analyze_only", False):
+        if self.analyze_only:
             _LOGGER.info("DRY-RUN GoodWe %s: %s.%s → %s", self.prefix, domain, service, entity_id)
             return True
 

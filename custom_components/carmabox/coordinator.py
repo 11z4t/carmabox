@@ -545,9 +545,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         # Propagate dry_run to adapters
         for adapter in self.inverter_adapters:
-            adapter._analyze_only = not self.executor_enabled  # type: ignore[attr-defined]
+            adapter.analyze_only = not self.executor_enabled
         if self.ev_adapter:
-            self.ev_adapter._analyze_only = not self.executor_enabled  # type: ignore[union-attr,attr-defined]
+            self.ev_adapter.analyze_only = not self.executor_enabled
 
         if not self.executor_enabled:
             _LOGGER.warning("CARMA Box running in ANALYZER mode — no commands will be sent")
@@ -2006,16 +2006,16 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 if want_exec and not self.executor_enabled and self._has_feature("executor"):
                     self.executor_enabled = True
                     for adapter in self.inverter_adapters:
-                        adapter._analyze_only = False  # type: ignore[attr-defined]
+                        adapter.analyze_only = False
                     if self.ev_adapter:
-                        self.ev_adapter._analyze_only = False  # type: ignore[attr-defined]
+                        self.ev_adapter.analyze_only = False
                     _LOGGER.warning("CARMA Box: Executor ACTIVATED via HA toggle")
                 elif not want_exec and self.executor_enabled:
                     self.executor_enabled = False
                     for adapter in self.inverter_adapters:
-                        adapter._analyze_only = True  # type: ignore[attr-defined]
+                        adapter.analyze_only = True
                     if self.ev_adapter:
-                        self.ev_adapter._analyze_only = True  # type: ignore[attr-defined]
+                        self.ev_adapter.analyze_only = True
                     _LOGGER.warning("CARMA Box: Executor DEACTIVATED via HA toggle")
 
             # ── RC-2: STARTUP SAFETY — fast_charging OFF + standby ──

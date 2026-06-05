@@ -14,6 +14,7 @@ class InverterAdapter(ABC):
     """Contract for battery inverter adapters (GoodWe, Huawei, SolarEdge)."""
 
     prefix: str = ""
+    analyze_only: bool = False  # Dry-run mode: log commands but do not write hardware
 
     @property
     @abstractmethod
@@ -73,6 +74,7 @@ class EVAdapter(ABC):
     """Contract for EV charger adapters (Easee, Zaptec, Wallbox)."""
 
     prefix: str = ""
+    analyze_only: bool = False  # Dry-run mode: log commands but do not write hardware
 
     @property
     @abstractmethod

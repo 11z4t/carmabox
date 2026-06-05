@@ -201,7 +201,7 @@ class TestAdapterBasesBatch20:
     def test_cable_locked_default_false(self) -> None:
         """EVAdapter.cable_locked default → False (line 73)."""
         adapter = self._make_concrete_ev()
-        result = adapter.cable_locked  # type: ignore[union-attr]
+        result = adapter.cable_locked
         assert result is False
 
     def test_reset_to_default_calls_set_current_6(self) -> None:
@@ -267,12 +267,12 @@ class TestGoodWeBatch20:
         return adapter
 
     def test_safe_call_dry_run_returns_true(self) -> None:
-        """_analyze_only=True → _safe_call logs and returns True (lines 99-100)."""
+        """analyze_only=True → _safe_call logs and returns True (lines 99-100)."""
         adapter = self._make_adapter()
-        adapter._analyze_only = True  # type: ignore[union-attr]
+        adapter.analyze_only = True
 
         async def run() -> bool:
-            return await adapter._safe_call(  # type: ignore[union-attr]
+            return await adapter._safe_call(
                 "goodwe", "set_parameter", {"entity_id": "number.foo", "value": 1}
             )
 
@@ -283,7 +283,7 @@ class TestGoodWeBatch20:
         """bms_charge_limit_a <= 0 → max_charge_w returns 0 (line 223)."""
         adapter = self._make_adapter()
         # hass.states.get returns None → bms_charge_limit_a=0 → returns 0
-        result = adapter.max_charge_w  # type: ignore[union-attr]
+        result = adapter.max_charge_w
         assert result == 0
 
     def test_set_fast_charging_blocked_when_not_authorized(self) -> None:
@@ -298,7 +298,7 @@ class TestGoodWeBatch20:
         with patch.object(adapter, "_safe_call", side_effect=mock_safe_call):  # type: ignore[arg-type]
 
             async def run() -> bool:
-                return await adapter.set_fast_charging(on=True, authorized=False)  # type: ignore[union-attr]
+                return await adapter.set_fast_charging(on=True, authorized=False)
 
             result = asyncio.get_event_loop().run_until_complete(run())
             # Should complete without error; forced off
@@ -316,7 +316,7 @@ class TestGoodWeBatch20:
         with patch.object(adapter, "_safe_call", side_effect=mock_safe_call_fail):  # type: ignore[arg-type]
 
             async def run() -> bool:
-                return await adapter.set_fast_charging(on=False, authorized=True)  # type: ignore[union-attr]
+                return await adapter.set_fast_charging(on=False, authorized=True)
 
             result = asyncio.get_event_loop().run_until_complete(run())
             assert result is False
@@ -335,7 +335,7 @@ class TestGoodWeBatch20:
         with patch.object(adapter, "_safe_call", side_effect=mock_safe_call_second_fails):  # type: ignore[arg-type]
 
             async def run() -> bool:
-                return await adapter.set_fast_charging(on=True, authorized=True)  # type: ignore[union-attr]
+                return await adapter.set_fast_charging(on=True, authorized=True)
 
             result = asyncio.get_event_loop().run_until_complete(run())
             assert result is False
@@ -360,12 +360,12 @@ class TestEaseeBatch20:
         return EaseeAdapter(hass=hass, device_id="ev1")
 
     def test_safe_call_dry_run_returns_true(self) -> None:
-        """_analyze_only=True → _safe_call logs and returns True (lines 107-108)."""
+        """analyze_only=True → _safe_call logs and returns True (lines 107-108)."""
         adapter = self._make_adapter()
-        adapter._analyze_only = True  # type: ignore[union-attr]
+        adapter.analyze_only = True
 
         async def run() -> bool:
-            return await adapter._safe_call(  # type: ignore[union-attr]
+            return await adapter._safe_call(
                 "easee", "set_charger_dynamic_limit", {"charger_id": "abc", "current": 10}
             )
 
@@ -379,10 +379,8 @@ class TestEaseeBatch20:
         adapter = self._make_adapter()
         state_mock = MagicMock()
         state_mock.state = "not_a_number"
-        adapter.hass.states.get = MagicMock(return_value=state_mock)  # type: ignore[union-attr]
-        result = adapter._state_by_id(  # type: ignore[union-attr]
-            "sensor.easee_home_12840_power", default=99.0
-        )
+        adapter.hass.states.get = MagicMock(return_value=state_mock)
+        result = adapter._state_by_id("sensor.easee_home_12840_power", default=99.0)
         assert result == 99.0
 
     def test_cable_locked_plug_connected(self) -> None:
@@ -399,8 +397,8 @@ class TestEaseeBatch20:
                 s.state = "off"
             return s
 
-        adapter.hass.states.get = mock_states_get  # type: ignore[union-attr]
-        assert adapter.cable_locked is True  # type: ignore[union-attr]
+        adapter.hass.states.get = mock_states_get
+        assert adapter.cable_locked is True
 
     def test_phase_count_three(self) -> None:
         """phase_mode='three' → phase_count=3 (line 318)."""
@@ -413,8 +411,8 @@ class TestEaseeBatch20:
             s.state = "three"
             return s
 
-        adapter.hass.states.get = mock_state  # type: ignore[union-attr]
-        assert adapter.phase_count == 3  # type: ignore[union-attr]
+        adapter.hass.states.get = mock_state
+        assert adapter.phase_count == 3
 
     def test_charging_power_at_amps(self) -> None:
         """charging_power_at_amps uses phase_count (line 323)."""
@@ -434,16 +432,16 @@ class TestEaseeBatch20:
                 new_callable=lambda: property(lambda self: 3),
             ),
         ):
-            result = adapter.charging_power_at_amps  # type: ignore[union-attr]
+            result = adapter.charging_power_at_amps
             assert abs(result - 10.0 * 230 * 3 / 1000) < 0.01
 
     def test_set_charger_phase_no_charger_id(self) -> None:
         """charger_id='' → return False immediately (line 388-390)."""
         adapter = self._make_adapter()
-        adapter.charger_id = ""  # type: ignore[union-attr]
+        adapter.charger_id = ""
 
         async def run() -> bool:
-            return await adapter.set_charger_phase_mode("1_phase")  # type: ignore[union-attr]
+            return await adapter.set_charger_phase_mode("1_phase")
 
         result = asyncio.get_event_loop().run_until_complete(run())
         assert result is False
@@ -451,10 +449,10 @@ class TestEaseeBatch20:
     def test_set_charger_phase_invalid_mode(self) -> None:
         """Invalid mode → return False (lines 394-396)."""
         adapter = self._make_adapter()
-        adapter.charger_id = "abc123"  # type: ignore[union-attr]
+        adapter.charger_id = "abc123"
 
         async def run() -> bool:
-            return await adapter.set_charger_phase_mode("bad_mode")  # type: ignore[union-attr]
+            return await adapter.set_charger_phase_mode("bad_mode")
 
         result = asyncio.get_event_loop().run_until_complete(run())
         assert result is False
@@ -479,7 +477,7 @@ class TestCoordinatorV2Batch20:
         cfg = CoordinatorConfig(plan_interval_cycles=2)
         v2 = CoordinatorV2(config=cfg)
         # Force startup confirmed
-        v2._startup_confirmed = True  # type: ignore[union-attr]
+        v2._startup_confirmed = True
 
         state = SystemState(
             battery_soc_1=50.0,
