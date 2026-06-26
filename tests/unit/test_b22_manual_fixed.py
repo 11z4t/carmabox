@@ -163,3 +163,57 @@ class TestShadowMode:
         decision = translate_target_to_action(snap, _state(), FakeCooldowns())
         assert decision.action == EvAction.HOLD
         assert decision.status == EvBalancerStatus.SHADOW_MODE
+
+
+class TestEvBalancerManualInvariant4:
+    """ev_balancer Invariant #4: MANUAL_FIXED = operator äger laddaren.
+    Brain-target 0W ska INTE stänga av laddaren om operator satt target > 0A.
+    """
+
+    def test_manual_fixed_ignores_brain_zero_target(self) -> None:
+        """Brain target_ev_w=0 + MANUAL_FIXED target=10A → SET_DYNAMIC 10A (INTE PAUSE)."""
+        snap = _snap(
+            balancer_mode="MANUAL_FIXED",
+            target_manual_a=10.0,
+            brain_target_ev_w=0.0,
+        )
+        decision = translate_target_to_action(snap, _state(last_dynamic_a=0), FakeCooldowns())
+        assert (
+            decision.action == EvAction.SET_DYNAMIC
+        ), f"Brain=0W ska inte stänga laddaren i MANUAL_FIXED: fick {decision.action}"
+        assert decision.dynamic_a == 10
+
+    def test_manual_fixed_ignores_brain_negative_target(self) -> None:
+        """Brain target_ev_w=-500 (urladdning) + MANUAL_FIXED target=8A → SET_DYNAMIC 8A."""
+        snap = _snap(
+            balancer_mode="MANUAL_FIXED",
+            target_manual_a=8.0,
+            brain_target_ev_w=-500.0,
+        )
+        decision = translate_target_to_action(snap, _state(last_dynamic_a=0), FakeCooldowns())
+        assert decision.action == EvAction.SET_DYNAMIC
+        assert decision.dynamic_a == 8
+
+    def test_manual_fixed_target_zero_pauses_on_operator_intent(self) -> None:
+        """Operator sätter target=0A i MANUAL_FIXED → PAUSE (operatörens intention att stoppa)."""
+        snap = _snap(
+            balancer_mode="MANUAL_FIXED",
+            target_manual_a=0.0,
+            brain_target_ev_w=3000.0,
+        )
+        decision = translate_target_to_action(snap, _state(last_dynamic_a=10), FakeCooldowns())
+        assert (
+            decision.action == EvAction.PAUSE
+        ), "Operator satte 0A = intention att stoppa → ska PAUSE"
+
+    def test_manual_fixed_not_blocked_by_balancer_disabled(self) -> None:
+        """MANUAL_FIXED kör trots balancer_disabled=True — P0 före P1."""
+        snap = _snap(
+            balancer_mode="MANUAL_FIXED",
+            target_manual_a=10.0,
+            brain_target_ev_w=0.0,
+            balancer_disabled=True,
+        )
+        decision = translate_target_to_action(snap, _state(last_dynamic_a=0), FakeCooldowns())
+        assert decision.action == EvAction.SET_DYNAMIC
+        assert decision.dynamic_a == 10

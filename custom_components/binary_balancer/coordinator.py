@@ -28,6 +28,7 @@ from .const import (
     DOMAIN,
     FEEDBACK_HELPER_TMPL,
     OFFLINE_CYCLES_THRESHOLD,
+    OVERRIDE_MODE_HELPER_TMPL,
 )
 from .models import (
     ActionMessage,
@@ -186,9 +187,25 @@ class BinaryBalancerCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             stale_cycles=new_stale_cycles,
         )
 
+    def _read_override_mode(self) -> str:
+        """Return override mode from input_select helper — defaults to AUTO."""
+        entity_id = OVERRIDE_MODE_HELPER_TMPL.format(asset_id=self._config.asset_id)
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return "AUTO"
+        return state.state.upper()
+
     async def _apply_switch_action(self, action: SwitchAction) -> None:
         """Call HA switch service if action is not HOLD."""
         if action == SwitchAction.HOLD:
+            return
+        # PRIO 1 (Borje 2026-06-26): MANUAL-mode = operator äger switchen. Balancer rör ALDRIG.
+        if self._read_override_mode() == "MANUAL":
+            _LOGGER.debug(
+                "binary_balancer %s: MANUAL-mode → skip switch.%s (operator äger switchen)",
+                self._config.asset_id,
+                action.value,
+            )
             return
         service = action.value  # "turn_on" or "turn_off"
         entity_id = self._config.switch_entity

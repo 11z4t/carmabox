@@ -45,3 +45,7 @@ DECISION_LOG_MAX_BYTES = 10 * 1024 * 1024  # 10 MB rotation
 COORDINATOR_INTERVAL_S = 10
 
 BRAIN_STALE_THRESHOLD_S: int = 60  # universal max age for brain action
+
+# HA input_select / input_number helpers for override mode and manual target
+OVERRIDE_MODE_HELPER_TMPL = "input_select.{asset_id}_balancer_mode"
+MANUAL_TARGET_HELPER_TMPL = "input_number.{asset_id}_manual_target_w"
