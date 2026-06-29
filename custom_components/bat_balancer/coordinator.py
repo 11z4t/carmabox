@@ -59,6 +59,7 @@ from .const import (
     ENTITY_SOC_CHARGE_CEILING_PCT,
     ENTITY_SOC_EQ_FULL_BIAS_HYSTERESIS_PCT,
     ENTITY_SOC_EQ_FULL_BIAS_THRESHOLD_PCT,
+    ENTITY_SOC_EQ_MAX_ASYMMETRY_PCT,
     ENTITY_SOC_EQ_MAX_BIAS_W,
     ENTITY_SOC_EQ_THRESHOLD_PCT,
     GOODWE_ECO_MODE_ENABLE,
@@ -77,6 +78,7 @@ from .const import (
     HW_STALE_THRESHOLD_S,
     SOC_EQ_FULL_BIAS_HYSTERESIS_PCT,
     SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT,
+    SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT,
     SOC_EQ_MAX_BIAS_DEFAULT_W,
     SOC_EQ_THRESHOLD_DEFAULT_PCT,
     BatBalancerStatus,
@@ -396,6 +398,9 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             soc_equalization_full_bias_threshold_pct=effective_full_bias_threshold,
             soc_charge_ceiling_pct=self._float_helper(
                 ENTITY_SOC_CHARGE_CEILING_PCT, BANK_SOC_CHARGE_CEILING_PCT
+            ),
+            soc_max_asymmetry_pct=self._float_helper(
+                ENTITY_SOC_EQ_MAX_ASYMMETRY_PCT, SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT
             ),
             shadow_mode=shadow,
             brain_target_available=target_available,

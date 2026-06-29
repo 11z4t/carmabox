@@ -12,6 +12,7 @@ from .const import (
     KONTOR_MAX_CHARGE_W,
     KONTOR_MAX_DISCHARGE_W,
     SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT,
+    SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT,
     SOC_EQ_MAX_BIAS_DEFAULT_W,
     SOC_EQ_THRESHOLD_DEFAULT_PCT,
     BatBalancerStatus,
@@ -82,6 +83,7 @@ class SensorSnapshot:
     soc_equalization_max_bias_w: float = SOC_EQ_MAX_BIAS_DEFAULT_W
     soc_equalization_full_bias_threshold_pct: float = SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT
     soc_charge_ceiling_pct: float = BANK_SOC_CHARGE_CEILING_PCT  # 100.0 physical default
+    soc_max_asymmetry_pct: float = SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT
     shadow_mode: bool = True
     brain_target_available: bool = True
 

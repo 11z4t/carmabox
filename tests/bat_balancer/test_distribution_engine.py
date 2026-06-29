@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from custom_components.bat_balancer.const import (
     SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT,
+    SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT,
     SOC_EQ_THRESHOLD_DEFAULT_PCT,
     RejectedReason,
 )
@@ -86,12 +87,14 @@ def _make_snap(
     eq_threshold: float = SOC_EQ_THRESHOLD_DEFAULT_PCT,
     eq_max_bias: float = 500.0,
     eq_full_bias_threshold: float = SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT,
+    max_asymmetry_pct: float = 100.0,  # 100=disabled (old behavior) — pass 80 to test Fix-A
 ) -> SensorSnapshot:
     return SensorSnapshot(
         brain_target_bat_w=brain_w,
         soc_equalization_threshold_pct=eq_threshold,
         soc_equalization_max_bias_w=eq_max_bias,
         soc_equalization_full_bias_threshold_pct=eq_full_bias_threshold,
+        soc_max_asymmetry_pct=max_asymmetry_pct,
     )
 
 
@@ -587,3 +590,99 @@ class TestSoCEqualization:
         assert result.targets["kontor"] == pytest.approx(
             0.0, abs=1.0
         ), f"A3: kontor={result.targets['kontor']:.1f}W expected 0W"
+
+
+class TestFixAMaxAsymmetry:
+    """Fix-A (IT-5677 cross-dir RCA): max_asymmetry_pct prevents 100% to one bank."""
+
+    def test_fix_a_charge_caps_winner_at_80pct(self):
+        """Fix-A: A3 full-bias charge → capped at 80%, loser gets 20%.
+
+        SoC kontor=47% forrad=82%, gap=35% > 15% → A3 gives 100% to kontor (lowest SoC).
+        Fix-A cap=80%: kontor=-2400W, forrad=-600W.
+        """
+        configs = {
+            "kontor": BankConfig(
+                id="kontor", capacity_kwh=15.0, max_charge_w=5000.0, max_discharge_w=5000.0
+            ),
+            "forrad": BankConfig(
+                id="forrad", capacity_kwh=10.0, max_charge_w=3000.0, max_discharge_w=3000.0
+            ),
+        }
+        states = _make_states(kontor_soc=47.0, forrad_soc=82.0)
+        snap = _make_snap(
+            brain_w=-3000.0,
+            eq_threshold=1.0,
+            eq_max_bias=1000.0,
+            eq_full_bias_threshold=15.0,
+            max_asymmetry_pct=SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT,
+        )
+
+        result = distribute_target_to_banks(-3000.0, configs, states, snap)
+
+        assert result.equalization_active is True
+        assert result.targets["kontor"] == pytest.approx(
+            -2400.0, abs=1.0
+        ), f"Fix-A: kontor={result.targets['kontor']:.1f}W expected -2400W (80% of 3000)"
+        assert result.targets["forrad"] == pytest.approx(
+            -600.0, abs=1.0
+        ), f"Fix-A: forrad={result.targets['forrad']:.1f}W expected -600W (20% of 3000)"
+        assert result.actual_total_w == pytest.approx(3000.0, abs=1.0)
+
+    def test_fix_a_discharge_caps_winner_at_80pct(self):
+        """Fix-A: A3 full-bias discharge → capped at 80%, loser gets 20%.
+
+        SoC kontor=47% forrad=82%, gap=35% → A3 gives 100% discharge to forrad (highest SoC).
+        Fix-A cap=80%: forrad=1600W, kontor=400W.
+        """
+        configs = {
+            "kontor": BankConfig(
+                id="kontor", capacity_kwh=15.0, max_charge_w=5000.0, max_discharge_w=5000.0
+            ),
+            "forrad": BankConfig(
+                id="forrad", capacity_kwh=10.0, max_charge_w=3000.0, max_discharge_w=3000.0
+            ),
+        }
+        states = _make_states(kontor_soc=47.0, forrad_soc=82.0)
+        snap = _make_snap(
+            brain_w=2000.0,
+            eq_threshold=1.0,
+            eq_max_bias=1000.0,
+            eq_full_bias_threshold=15.0,
+            max_asymmetry_pct=SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT,
+        )
+
+        result = distribute_target_to_banks(2000.0, configs, states, snap)
+
+        assert result.equalization_active is True
+        assert result.targets["forrad"] == pytest.approx(
+            1600.0, abs=1.0
+        ), f"Fix-A: forrad={result.targets['forrad']:.1f}W expected 1600W (80% of 2000)"
+        assert result.targets["kontor"] == pytest.approx(
+            400.0, abs=1.0
+        ), f"Fix-A: kontor={result.targets['kontor']:.1f}W expected 400W (20% of 2000)"
+        assert result.actual_total_w == pytest.approx(2000.0, abs=1.0)
+
+    def test_fix_a_disabled_when_100pct(self):
+        """Fix-A at 100% cap = disabled, A3 full-bias still works (100% to winner)."""
+        configs = {
+            "kontor": BankConfig(
+                id="kontor", capacity_kwh=15.0, max_charge_w=5000.0, max_discharge_w=5000.0
+            ),
+            "forrad": BankConfig(
+                id="forrad", capacity_kwh=10.0, max_charge_w=3000.0, max_discharge_w=3000.0
+            ),
+        }
+        states = _make_states(kontor_soc=47.0, forrad_soc=82.0)
+        snap = _make_snap(
+            brain_w=-3000.0,
+            eq_threshold=1.0,
+            eq_max_bias=1000.0,
+            eq_full_bias_threshold=15.0,
+            max_asymmetry_pct=100.0,
+        )
+
+        result = distribute_target_to_banks(-3000.0, configs, states, snap)
+
+        assert result.targets["kontor"] == pytest.approx(-3000.0, abs=1.0)
+        assert result.targets["forrad"] == pytest.approx(0.0, abs=1.0)

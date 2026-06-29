@@ -27,6 +27,10 @@ SOC_EQ_THRESHOLD_DEFAULT_PCT: float = 3.0  # D2: raised from 1.0 — suppress no
 SOC_EQ_MAX_BIAS_DEFAULT_W: float = 1000.0
 # A3: gap ≥ this → 100% to one bank (charge→lowest SoC, disch→highest SoC)
 SOC_EQ_FULL_BIAS_THRESHOLD_DEFAULT_PCT: float = 15.0
+# Fix-A (IT-5677 cross-dir RCA): max % of total offer any single bank can receive (0-100).
+# Prevents 100% asymmetry when off_grid-locked banks run autonomously in opposite direction.
+SOC_EQ_MAX_ASYMMETRY_DEFAULT_PCT: float = 80.0
+ENTITY_SOC_EQ_MAX_ASYMMETRY_PCT = "input_number.bat_balancer_soc_max_asymmetry_pct"
 # S2: hysteresis — exit full-bias only when divergence drops this far below entry threshold
 ENTITY_SOC_EQ_FULL_BIAS_HYSTERESIS_PCT = "input_number.bat_balancer_soc_eq_full_bias_hysteresis_pct"
 SOC_EQ_FULL_BIAS_HYSTERESIS_PCT: float = 5.0  # default — helpers override

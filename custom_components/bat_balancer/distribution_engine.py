@@ -167,6 +167,35 @@ def distribute_target_to_banks(
                 targets[bc.id] = 0.0
                 soc_ceil_bank_ids.add(bc.id)
 
+    # --- 2.7. Fix-A max-asymmetry cap (IT-5677 cross-dir RCA) ---
+    # Prevents any bank from receiving more than soc_max_asymmetry_pct of total offer.
+    # Ensures all online banks always get a non-zero allocation, preventing autonomous HW behaviour
+    # when a bank receives 0W (standby) while Brain has a non-zero offer.
+    max_asym_pct = max(0.0, min(100.0, snapshot.soc_max_asymmetry_pct))
+    if len(online) > 1 and abs(target_w) > _FLOAT_TOL and max_asym_pct < 100.0:
+        max_w_per_bank = abs(target_w) * max_asym_pct / 100.0
+        asymmetry_clamped = False
+        for bc in online:
+            if bc.id in soc_ceil_bank_ids:
+                continue  # SoC-ceiling banks are intentionally 0 — don't re-distribute to them
+            if abs(targets.get(bc.id, 0.0)) > max_w_per_bank + _FLOAT_TOL:
+                excess_w = abs(targets[bc.id]) - max_w_per_bank
+                targets[bc.id] = -max_w_per_bank if charging else max_w_per_bank
+                # Distribute excess proportionally to remaining banks
+                recipients = [b for b in online if b.id != bc.id and b.id not in soc_ceil_bank_ids]
+                if recipients:
+                    share = excess_w / len(recipients)
+                    for r in recipients:
+                        targets[r.id] += -share if charging else share
+                asymmetry_clamped = True
+        if asymmetry_clamped:
+            _LOGGER.info(
+                "bat_balancer Fix-A: asymmetry clamped to %.0f%% (max=%.0fW/bank) targets=%s",
+                max_asym_pct,
+                max_w_per_bank,
+                {bid: round(targets[bid]) for bid in targets},
+            )
+
     # --- 3. BMS-cap + overflow-redistribution ---
     overflow_redistributed = False
     overflow_w = 0.0
