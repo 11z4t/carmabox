@@ -99,6 +99,7 @@ def _make_coord(
     coord._hw_autonomy_initialized = False
     coord._last_written_ems_modes = last_written or {bid: None for bid in BANKS}
     coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._off_grid_lock_recovery_ts = {bid: 0.0 for bid in BANKS}
     coord._full_bias_active = False
     coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
     return coord
@@ -325,3 +326,64 @@ async def test_TC_MISMATCH_NO_EMS_WRITTEN_skips_check():
 
     assert _pn_create_calls(coord) == []
     assert coord._hw_mismatch_ticks["kontor"] == 0
+
+
+@pytest.mark.asyncio
+async def test_TC_FIX_B_cross_dir_busts_ems_cache():
+    """Fix-B: discharge commanded but HW charges → EMS+op_mode caches busted after N ticks."""
+    states = _make_states(
+        **{
+            ENTITY_GOODWE_BATTERY_POWER.format(bank_id="forrad"): "-3717",  # charging
+            ENTITY_GOODWE_BATTERY_POWER.format(bank_id="kontor"): "2558",  # discharging (correct)
+        }
+    )
+    coord = _make_coord(
+        states,
+        last_written={
+            "kontor": GOODWE_EMS_MODE_DISCHARGE,
+            "forrad": GOODWE_EMS_MODE_DISCHARGE,  # commanded discharge but HW charges
+        },
+    )
+    coord._last_goodwe_ems_modes["forrad"] = GOODWE_EMS_MODE_DISCHARGE
+    coord._last_goodwe_modes["forrad"] = "peak_shaving"
+    coord._last_goodwe_ems_modes["kontor"] = (
+        GOODWE_EMS_MODE_DISCHARGE  # set so we can verify it's untouched
+    )
+
+    for _ in range(HW_MISMATCH_TICKS_DEFAULT):
+        await coord._check_hw_ems_mismatch()
+
+    # After N ticks: EMS cache must be busted so next write is forced
+    assert coord._last_goodwe_ems_modes["forrad"] is None, "EMS cache not busted"
+    assert coord._last_goodwe_modes["forrad"] is None, "op_mode cache not busted"
+    # Kontor was correct → not busted
+    assert coord._last_goodwe_ems_modes["kontor"] == GOODWE_EMS_MODE_DISCHARGE
+
+
+@pytest.mark.asyncio
+async def test_TC_FIX_B_cooldown_prevents_repeated_bust():
+    """Fix-B cooldown: recovery_ts set → second bust blocked until 60s passes."""
+    states = _make_states(
+        **{
+            ENTITY_GOODWE_BATTERY_POWER.format(bank_id="forrad"): "-3717",
+            ENTITY_GOODWE_BATTERY_POWER.format(bank_id="kontor"): "0",
+        }
+    )
+    coord = _make_coord(
+        states,
+        last_written={
+            "kontor": None,
+            "forrad": GOODWE_EMS_MODE_DISCHARGE,
+        },
+    )
+    # Simulate that recovery already fired recently (not yet 60s ago)
+    coord._off_grid_lock_recovery_ts["forrad"] = time.monotonic()
+    coord._last_goodwe_ems_modes["forrad"] = GOODWE_EMS_MODE_DISCHARGE
+
+    for _ in range(HW_MISMATCH_TICKS_DEFAULT):
+        await coord._check_hw_ems_mismatch()
+
+    # Cache should NOT be busted (cooldown active)
+    assert (
+        coord._last_goodwe_ems_modes["forrad"] == GOODWE_EMS_MODE_DISCHARGE
+    ), "EMS cache busted during cooldown — Fix-B cooldown not working"

@@ -118,6 +118,8 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         # Q4: mismatch watchdog — tracks what ems_mode was actually written per bank
         self._last_written_ems_modes: dict[str, str | None] = {bid: None for bid in BANKS}
         self._hw_mismatch_ticks: dict[str, int] = {bid: 0 for bid in BANKS}
+        # Fix-B (IT-5674): per-bank off_grid-lock recovery timestamp (monotonic)
+        self._off_grid_lock_recovery_ts: dict[str, float] = {bid: 0.0 for bid in BANKS}
         # W1: current watchdog state
         self._current_emergency_active: bool = False
         self._current_below_reset_since: float | None = None
@@ -791,6 +793,30 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
                         },
                         blocking=False,
                     )
+                    # Fix-B (IT-5674): per-bank off_grid-lock recovery.
+                    # Cross-direction mismatch = GoodWe locked ignoring EMS direction.
+                    # Force EMS + op_mode cache-bust so next tick re-sends the commands.
+                    is_cross_dir = (
+                        last_ems == GOODWE_EMS_MODE_DISCHARGE and hw_power < -threshold_w
+                    ) or (last_ems == GOODWE_EMS_MODE_CHARGE and hw_power > threshold_w)
+                    import time as _time_fix_b
+
+                    now_mono = _time_fix_b.monotonic()
+                    if (
+                        is_cross_dir
+                        and (now_mono - self._off_grid_lock_recovery_ts.get(bid, 0.0)) > 60.0
+                    ):
+                        _LOGGER.warning(
+                            "bat_balancer Fix-B: off_grid-lock bank=%s wrote=%s hw=%.0fW "
+                            "— cache-busting EMS+op_mode to break lock",
+                            bid,
+                            last_ems,
+                            hw_power,
+                        )
+                        self._last_goodwe_ems_modes[bid] = None
+                        self._last_goodwe_modes[bid] = None
+                        self._hw_mismatch_ticks[bid] = 0
+                        self._off_grid_lock_recovery_ts[bid] = now_mono
             else:
                 prev_ticks = self._hw_mismatch_ticks.get(bid, 0)
                 self._hw_mismatch_ticks[bid] = 0
