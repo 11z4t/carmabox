@@ -775,7 +775,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                             )
                             stale = True
                     except (ValueError, TypeError):
-                        pass  # Can't parse timestamp, proceed normally
+                        _LOGGER.debug(  # C3.1: no silent pass
+                            "coordinator: savings timestamp parse error", exc_info=True
+                        )
 
                 if stale:
                     self.savings = reset_savings()

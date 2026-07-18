@@ -193,15 +193,7 @@ def test_all_functions_return_explicitly():
 
 def test_no_bare_except_pass():
     """except Exception: pass swallows errors silently. Use logging."""
-    all_prod = list(Path("custom_components/carmabox").rglob("*.py"))
-    violations = []
-    for path in sorted(all_prod):
-        lines = path.read_text().split("\n")
-        for i, line in enumerate(lines):
-            if "except" in line and i + 1 < len(lines):
-                next_line = lines[i + 1].strip()
-                if next_line == "pass":
-                    violations.append(f"  {path}:L{i + 1}: {line.strip()} / {next_line}")
+    violations = _bare_except_pass_violations(Path("custom_components/carmabox"))
     assert not violations, (
         "Bare except:pass found — use _LOGGER.debug('...', exc_info=True):\n"
         + "\n".join(violations)
@@ -212,13 +204,17 @@ def test_no_bare_except_pass():
 
 
 def _bare_except_pass_violations(directory: Path) -> list[str]:
-    """Scan a directory for bare except:pass patterns."""
+    """Scan a directory for bare except:pass patterns (including pass  # comment)."""
     violations = []
     for path in sorted(directory.rglob("*.py")):
         lines = path.read_text().split("\n")
         for i, line in enumerate(lines):
-            if "except" in line and i + 1 < len(lines) and lines[i + 1].strip() == "pass":
-                violations.append(f"  {path}:L{i + 1}: {line.strip()} / pass")
+            if "except" in line and i + 1 < len(lines):
+                next_stripped = lines[i + 1].strip()
+                # Match bare `pass` and `pass  # ...` (comment doesn't replace logging)
+                is_pass = next_stripped == "pass" or next_stripped.startswith("pass #")
+                if is_pass:
+                    violations.append(f"  {path}:L{i + 1}: {line.strip()} / {next_stripped}")
     return violations
 
 

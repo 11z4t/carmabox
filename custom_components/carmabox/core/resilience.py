@@ -17,8 +17,11 @@ Key principles:
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass
@@ -109,7 +112,10 @@ class ResilienceManager:
                     fb.last_update = now
                     return current, False
             except (TypeError, ValueError):
-                pass  # Treat as unavailable
+                _LOGGER.debug(  # C3.1: no silent pass
+                    "resilience: sensor value parse error, treating as unavailable",
+                    exc_info=True,
+                )
 
         # Fallback to last known
         if fb.last_update > 0:
