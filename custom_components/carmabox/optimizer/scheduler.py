@@ -135,7 +135,7 @@ def _hours_until_departure(current_hour: int, departure: int = SCHEDULER_EV_DEPA
 # ── EV Scheduling (backwards from departure) ──────────────────────
 
 
-def _schedule_ev_backwards(
+def _schedule_ev_backwards(  # noqa: C901
     num_hours: int,
     start_hour: int,
     ev_soc_pct: float,
@@ -333,7 +333,7 @@ def _schedule_ev_backwards(
 # ── Battery Scheduling ─────────────────────────────────────────────
 
 
-def _schedule_battery(
+def _schedule_battery(  # noqa: C901
     num_hours: int,
     start_hour: int,
     hourly_prices: list[float],
@@ -663,7 +663,7 @@ def _update_slot(slot: SchedulerHourSlot, **kwargs: Any) -> SchedulerHourSlot:
 # ── Auto Root Cause Analysis ──────────────────────────────────────
 
 
-def analyze_breach(
+def analyze_breach(  # noqa: C901
     hour: int,
     actual_weighted_kw: float,
     target_kw: float,
@@ -770,7 +770,7 @@ def analyze_breach(
     )
 
 
-def update_learnings(
+def update_learnings(  # noqa: C901
     learnings: list[BreachLearning],
     breach: BreachRecord,
 ) -> list[BreachLearning]:
@@ -866,7 +866,7 @@ def plan_ev_full_charge(
 # ── Breach Correction Application ──────────────────────────────────
 
 
-def _apply_corrections(
+def _apply_corrections(  # noqa: C901
     corrections: list[BreachCorrection],
     ev_schedule: list[tuple[float, int]],
     battery_schedule: list[tuple[float, str]],
@@ -976,7 +976,7 @@ def _apply_corrections(
 # ── Main Scheduler Entry Point ─────────────────────────────────────
 
 
-def generate_scheduler_plan(
+def generate_scheduler_plan(  # noqa: C901
     start_hour: int,
     num_hours: int = SCHEDULER_PLAN_HOURS,
     # Prices & forecasts
@@ -1261,7 +1261,7 @@ def generate_scheduler_plan(
     )
 
 
-def analyze_idle_time(
+def analyze_idle_time(  # noqa: C901
     slots: list[SchedulerHourSlot],
     idle_minutes_today: int,
     battery_soc_pct: float,

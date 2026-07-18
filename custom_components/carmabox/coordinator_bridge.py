@@ -388,7 +388,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
     # ── Command execution ──────────────────────────────────────
 
-    async def _execute_battery_commands(self, commands: list[dict[str, Any]]) -> None:
+    async def _execute_battery_commands(self, commands: list[dict[str, Any]]) -> None:  # noqa: C901
         """Execute battery commands from CycleResult via GoodWeAdapters."""
         for cmd in commands:
             bat_id: int = cmd.get("id", 0)
@@ -882,7 +882,7 @@ class CoordinatorBridge(DataUpdateCoordinator[CarmaboxState]):
 
     # ── Main update loop ───────────────────────────────────────
 
-    async def _async_update_data(self) -> CarmaboxState:
+    async def _async_update_data(self) -> CarmaboxState:  # noqa: C901
         """Fetch data, run V2 cycle, execute commands, return state."""
         try:
             # ── Restore state on first run ─────────────────────

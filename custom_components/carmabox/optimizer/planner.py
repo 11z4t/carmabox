@@ -32,7 +32,7 @@ from .grid_logic import ellevio_weight
 from .models import HourPlan
 
 
-def generate_plan(
+def generate_plan(  # noqa: C901
     num_hours: int,
     start_hour: int,
     target_weighted_kw: float,

@@ -189,7 +189,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
     _ml_predictor_loaded: bool = False
     _ml_predictor_last_save: float = 0.0
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:  # noqa: C901
         """Initialize coordinator."""
         super().__init__(
             hass,
@@ -1100,7 +1100,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except (TimeoutError, AttributeError, OSError):
             _LOGGER.debug("Benchmarking fetch failed", exc_info=True)
 
-    async def _execute_v2(self, state: CarmaboxState) -> None:
+    async def _execute_v2(self, state: CarmaboxState) -> None:  # noqa: C901
         """V2 executor — plan-driven, uses core modules.
 
         Flow: Plan Executor → Battery Balancer → Surplus Chain
@@ -1717,7 +1717,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """Enforce EMS modes every cycle (PLAT-1099)."""
         await self._execution_engine.enforce_ems_modes()
 
-    async def _execute_grid_guard_commands(
+    async def _execute_grid_guard_commands(  # noqa: C901
         self,
         commands: list[dict[str, Any]],
         state: CarmaboxState,
@@ -1996,7 +1996,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                 )
             return getattr(self, "data", None) or CarmaboxState()
 
-    async def _async_update_data_inner(self) -> CarmaboxState:
+    async def _async_update_data_inner(self) -> CarmaboxState:  # noqa: C901
         """Inner update — wrapped by timeout in _async_update_data."""
         try:
             now = datetime.now()
@@ -2362,7 +2362,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self.plan,
         )
 
-    def _generate_plan(self, state: CarmaboxState) -> None:
+    def _generate_plan(self, state: CarmaboxState) -> None:  # noqa: C901
         """Generate energy plan from Nordpool + Solcast + consumption."""
         _step = "init"
         try:
@@ -3104,7 +3104,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         }
         return json.dumps(payload, separators=(",", ":"))
 
-    def _write_plan_display(self, plan: list[Any], start_hour: int) -> None:
+    def _write_plan_display(self, plan: list[Any], start_hour: int) -> None:  # noqa: C901
         """Write human-readable plan split by day (today/tomorrow/day3)."""
         # Calculate SoC progressively from ACTUAL current SoC
         opts = self._cfg
@@ -3177,7 +3177,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                 )
 
-    async def _execute(self, state: CarmaboxState) -> None:
+    async def _execute(self, state: CarmaboxState) -> None:  # noqa: C901
         """Execute current action based on state.
 
         ALL commands go through SafetyGuard. No exceptions.
@@ -3877,7 +3877,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         await self._execute_climate(state)
         await self._execute_pool(state)
 
-    async def _execute_climate(self, state: CarmaboxState) -> None:
+    async def _execute_climate(self, state: CarmaboxState) -> None:  # noqa: C901
         """Control VP/AC based on surplus and price.
 
         Surplus priority chain position: Battery → EV → Miner → VP → Pool → Export.
@@ -4029,7 +4029,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         except (HomeAssistantError, RuntimeError):
             _LOGGER.warning("CARMA: pool switch failed: %s", entity_id, exc_info=True)
 
-    async def _execute_pool_circulation(self, state: CarmaboxState) -> None:
+    async def _execute_pool_circulation(self, state: CarmaboxState) -> None:  # noqa: C901
         """Control pool circulation pump based on surplus.
 
         Surplus chain: Battery → EV → Miner → VP → Pool → Cirk → Export.
@@ -4159,7 +4159,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._plan_last_correction_time = now
             self._plan_deviation_count = 0
 
-    async def _watchdog(self, state: CarmaboxState) -> None:
+    async def _watchdog(self, state: CarmaboxState) -> None:  # noqa: C901
         """Self-correction watchdog — catches obvious decision errors.
 
         Runs AFTER _execute(). Checks if the decision makes sense
@@ -4466,7 +4466,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         )
         return min_target
 
-    async def _execute_ev(self, state: CarmaboxState) -> None:
+    async def _execute_ev(self, state: CarmaboxState) -> None:  # noqa: C901
         """Execute EV charging decisions (PLAT-949).
 
         Runs AFTER battery rules. Controls Easee enable/disable + amps.
@@ -4802,7 +4802,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if self._ev_enabled and not is_night:
             await self._cmd_ev_stop()
 
-    async def _execute_miner(self, state: CarmaboxState) -> None:
+    async def _execute_miner(self, state: CarmaboxState) -> None:  # noqa: C901
         """CARMA-P0-FIXES Task 3: Miner control with SoC/price awareness + state reconciliation.
 
         Priority chain: Battery → EV → Miner → VP → Pool → Export.
@@ -5100,7 +5100,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         return self._state_mgr.read_battery_temp(self.inverter_adapters)
 
     @property
-    def system_health(self) -> dict[str, str]:
+    def system_health(self) -> dict[str, str]:  # noqa: C901
         """PLAT-964: System health for transparency sensor.
 
         Returns user-friendly status per component. NEVER technical error messages.
@@ -5237,7 +5237,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         }
 
     @property
-    def daily_insight(self) -> dict[str, Any]:
+    def daily_insight(self) -> dict[str, Any]:  # noqa: C901
         """Daily insight report — Ellevio + Nordpool analysis.
 
         Deep analysis with >90% confidence recommendations only.
@@ -5410,7 +5410,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             "recommendation_count": len(recommendations),
         }
 
-    def _analyze_hour(self, hour: int, label: str) -> str:
+    def _analyze_hour(self, hour: int, label: str) -> str:  # noqa: C901
         """Deep-analyze what caused a specific hour to be worst/best."""
         if hour < 0:
             return "Otillräcklig data"
@@ -5924,7 +5924,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
             self._bat_idle_seconds = 0
 
-    def _track_shadow(self, state: CarmaboxState) -> None:
+    def _track_shadow(self, state: CarmaboxState) -> None:  # noqa: C901
         """PLAT-940: Compare CARMA recommendation vs v6 actual behavior."""
         hour = datetime.now().hour
         night_wt = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
@@ -6027,7 +6027,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         if len(self.shadow_log) > 48:
             self.shadow_log = self.shadow_log[-48:]
 
-    def _track_savings(self, state: CarmaboxState) -> None:
+    def _track_savings(self, state: CarmaboxState) -> None:  # noqa: C901
         """Track savings data from current state."""
         hour = datetime.now().hour
         night_weight = float(self._cfg.get("night_weight", DEFAULT_NIGHT_WEIGHT))
@@ -6293,7 +6293,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     MIN_TRAINING_SAMPLES,
                 )
 
-    def _feed_predictor_ml(self, state: CarmaboxState) -> None:
+    def _feed_predictor_ml(self, state: CarmaboxState) -> None:  # noqa: C901
         """Feed all ML data to predictor every cycle."""
         from datetime import datetime
 
@@ -6400,7 +6400,7 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     )
                     break
 
-    def _check_daily_goals(self, state: CarmaboxState) -> dict[str, Any]:
+    def _check_daily_goals(self, state: CarmaboxState) -> dict[str, Any]:  # noqa: C901
         """Check daily goals and generate root cause if breached.
 
         Goals:

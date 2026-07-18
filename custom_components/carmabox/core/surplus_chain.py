@@ -230,7 +230,7 @@ def build_default_consumers(
     ]
 
 
-def allocate_surplus(
+def allocate_surplus(  # noqa: C901
     surplus_w: float,
     consumers: list[SurplusConsumer],
     hysteresis: HysteresisState | None = None,

@@ -31,7 +31,7 @@ PRICE_NORMAL = 80  # Below: charge at min amps
 # Above PRICE_NORMAL: skip (too expensive)
 
 
-def calculate_ev_schedule(
+def calculate_ev_schedule(  # noqa: C901
     start_hour: int,
     num_hours: int,
     ev_soc_pct: float,

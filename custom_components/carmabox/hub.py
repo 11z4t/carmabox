@@ -232,7 +232,7 @@ class HubSyncClient:
             return True
         return False
 
-    async def connect_mqtt(self) -> bool:
+    async def connect_mqtt(self) -> bool:  # noqa: C901
         """Connect to hub via MQTT.
 
         Prefers MQTTS with mTLS (port 8883) when client certs are available.

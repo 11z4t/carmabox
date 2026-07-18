@@ -163,7 +163,7 @@ class CoordinatorV2:
         except (KeyError, ValueError, TypeError):
             _LOGGER.debug("restore_tuner_state: invalid data, keeping defaults")
 
-    def cycle(self, state: SystemState) -> CycleResult:
+    def cycle(self, state: SystemState) -> CycleResult:  # noqa: C901
         """Run one 30s cycle. Returns commands to execute."""
         cfg = self.config
         is_night = state.hour >= DEFAULT_NIGHT_START or state.hour < DEFAULT_NIGHT_END

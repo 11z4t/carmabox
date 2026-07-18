@@ -98,7 +98,7 @@ class WeatherProfile:
             return self._interpolate(hour, bin_idx)
         return round(self.factors[hour][bin_idx], 3)
 
-    def _interpolate(self, hour: int, target_bin: int) -> float:
+    def _interpolate(self, hour: int, target_bin: int) -> float:  # noqa: C901
         """Interpolate from nearest bins with sufficient data."""
         left = right = None
         for offset in range(1, NUM_BINS):

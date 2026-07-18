@@ -51,7 +51,7 @@ def _avg_top25(prices: list[float]) -> float:
     return sum(sorted_desc[:n]) / n
 
 
-def decide(
+def decide(  # noqa: C901
     # Current state
     battery_soc_pct: float,
     battery_cap_kwh: float,

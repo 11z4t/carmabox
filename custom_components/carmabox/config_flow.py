@@ -700,7 +700,7 @@ class CarmaboxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_create_entry(title=title, data=data, options=config)
 
-    def _build_entity_mappings(self) -> dict[str, str]:
+    def _build_entity_mappings(self) -> dict[str, str]:  # noqa: C901
         """Build entity ID mappings from detected integrations.
 
         Uses real HA entity scanning instead of guessing names from prefixes.

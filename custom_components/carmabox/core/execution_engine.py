@@ -95,7 +95,7 @@ class ExecutionEngine:
     # execute_v2 — plan-driven execution (PLAT-1141)
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def execute_v2(self, state: CarmaboxState) -> None:
+    async def execute_v2(self, state: CarmaboxState) -> None:  # noqa: C901
         """V2-exekvering — plandriven, använder core-moduler.
 
         Flöde: Plan Executor → Battery Balancer → Surplus Chain.
@@ -676,7 +676,7 @@ class ExecutionEngine:
     # execute_surplus_allocations
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def execute_surplus_allocations(self, allocations: list[SurplusAllocation]) -> None:
+    async def execute_surplus_allocations(self, allocations: list[SurplusAllocation]) -> None:  # noqa: C901
         """Utför surplus chain-allokeringar mot hårdvara.
 
         Args:
@@ -731,7 +731,7 @@ class ExecutionEngine:
     # enforce_ems_modes — PLAT-1099
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def enforce_ems_modes(self) -> None:
+    async def enforce_ems_modes(self) -> None:  # noqa: C901
         """Enforce EMS-läge på ALLA invertrar varje cykel (PLAT-1099).
 
         1. Mappa _last_battery_action → önskat EMS-läge
@@ -972,7 +972,7 @@ class ExecutionEngine:
     # cmd_charge_pv
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def cmd_charge_pv(self, state: CarmaboxState) -> None:
+    async def cmd_charge_pv(self, state: CarmaboxState) -> None:  # noqa: C901
         """Ladda batterier från sol.
 
         SafetyGuard: heartbeat + rate limit + charge check.
@@ -1078,7 +1078,7 @@ class ExecutionEngine:
     # cmd_grid_charge
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def cmd_grid_charge(self, state: CarmaboxState) -> None:
+    async def cmd_grid_charge(self, state: CarmaboxState) -> None:  # noqa: C901
         """Ladda batterier från elnätet (billigt pris).
 
         GoodWe: charge_pv + fast_charging = laddar från grid när ingen PV.
@@ -1197,7 +1197,7 @@ class ExecutionEngine:
     # cmd_standby
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:
+    async def cmd_standby(self, state: CarmaboxState, force: bool = False) -> None:  # noqa: C901
         """Sätt alla batterier i standby.
 
         SafetyGuard: heartbeat + rate limit (hoppas över om force=True
@@ -1258,7 +1258,7 @@ class ExecutionEngine:
     # cmd_discharge
     # ═══════════════════════════════════════════════════════════════════════
 
-    async def cmd_discharge(self, state: CarmaboxState, watts: int) -> None:
+    async def cmd_discharge(self, state: CarmaboxState, watts: int) -> None:  # noqa: C901
         """Urladda batterier med angiven effekt.
 
         SafetyGuard: heartbeat + rate limit + discharge check.

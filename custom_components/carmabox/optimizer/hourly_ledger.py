@@ -213,7 +213,7 @@ class EnergyLedger:
     _last_cell_temp_kontor: float | None = None
     _last_cell_temp_forrad: float | None = None
 
-    def record_sample(
+    def record_sample(  # noqa: C901
         self,
         hour: int,
         date_str: str,

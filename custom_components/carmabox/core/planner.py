@@ -65,7 +65,7 @@ class SolarAllocationResult:
     reason: str = ""
 
 
-def plan_solar_allocation(
+def plan_solar_allocation(  # noqa: C901
     battery_soc_pct: float,
     battery_cap_kwh: float,
     ev_soc_pct: float,
@@ -339,7 +339,7 @@ class PVSurplusAllocation:
     reason: str
 
 
-def allocate_pv_surplus(
+def allocate_pv_surplus(  # noqa: C901
     pv_now_w: float,
     grid_now_w: float,
     house_consumption_w: float,

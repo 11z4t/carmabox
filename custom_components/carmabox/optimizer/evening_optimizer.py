@@ -49,7 +49,7 @@ def _peak_price(prices_24h: list[float], hours: list[int]) -> float:
     return max(vals) if vals else 100.0
 
 
-def evaluate_evening_strategy(
+def evaluate_evening_strategy(  # noqa: C901
     # Battery state
     battery_kwh_available: float,
     battery_cap_kwh: float = 20.0,

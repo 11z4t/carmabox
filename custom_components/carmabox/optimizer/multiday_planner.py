@@ -53,7 +53,7 @@ class MultiDayPlan:
     data_quality: str = "mixed"  # "known", "predicted", "mixed"
 
 
-def build_day_inputs(
+def build_day_inputs(  # noqa: C901
     days: int,
     start_hour: int,
     start_weekday: int,

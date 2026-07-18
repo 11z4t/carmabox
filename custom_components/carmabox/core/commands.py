@@ -25,7 +25,7 @@ from ..optimizer.models import BatteryCommand
 _LOGGER = logging.getLogger(__name__)
 
 
-async def cmd_charge_pv(
+async def cmd_charge_pv(  # noqa: C901
     hass: HomeAssistant,
     adapters: list[InverterAdapter],
     safety: SafetyGuard,

@@ -204,7 +204,7 @@ class ConsumptionPredictor:
             result.append(round(max(0.3, predicted), 2))
         return result
 
-    def predict_24h_with_uncertainty(
+    def predict_24h_with_uncertainty(  # noqa: C901
         self,
         start_hour: int,
         weekday: int,

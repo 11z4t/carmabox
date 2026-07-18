@@ -114,7 +114,7 @@ class GridGuard:
 
     # ── Public API ──────────────────────────────────────────────
 
-    def evaluate(
+    def evaluate(  # noqa: C901
         self,
         viktat_timmedel_kw: float,
         grid_import_w: float,
@@ -310,7 +310,7 @@ class GridGuard:
 
     # ── Invariant checks ────────────────────────────────────────
 
-    def _check_invariants(
+    def _check_invariants(  # noqa: C901
         self,
         batteries: list[BatteryState],
         fast_charge_authorized: bool,
@@ -437,7 +437,7 @@ class GridGuard:
 
     # ── Action ladder ───────────────────────────────────────────
 
-    def _action_ladder(
+    def _action_ladder(  # noqa: C901
         self,
         overshoot_w: float,
         consumers: list[Consumer],

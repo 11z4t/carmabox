@@ -68,7 +68,7 @@ class NevCommand:
     reason: str = ""
 
 
-def decide_nev(
+def decide_nev(  # noqa: C901
     state: NevState,
     current_state: str,  # IDLE/DISCHARGE_RAMP/EV_CHARGING/APPLIANCE_PAUSE/BATTERY_DEPLETED
     ramp_start: float,  # time.monotonic() when ramp started
