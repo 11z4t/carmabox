@@ -51,7 +51,7 @@ def distribute_target_to_banks(
             "bat_balancer: N=0 online banks — STANDBY all, rejected_w=%s", abs(target_w)
         )
         return DistributionResult(
-            targets={bid: 0.0 for bid in all_bank_ids},
+            targets=dict.fromkeys(all_bank_ids, 0.0),
             actual_total_w=0.0,
             rejected_w=abs(target_w),
             rejected_reason=RejectedReason.NO_AVAILABLE_BANKS,
@@ -61,7 +61,7 @@ def distribute_target_to_banks(
     # --- target=0 → STANDBY ---
     if abs(target_w) < _FLOAT_TOL:
         return DistributionResult(
-            targets={bid: 0.0 for bid in all_bank_ids},
+            targets=dict.fromkeys(all_bank_ids, 0.0),
             actual_total_w=0.0,
             status=BatBalancerStatus.OK,
         )

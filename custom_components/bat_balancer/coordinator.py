@@ -113,31 +113,31 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         }
         self._state = BatBalancerState()
         self._last_brain_write_ts: float = 0.0
-        self._last_goodwe_ems_modes: dict[str, str | None] = {bid: None for bid in BANKS}
-        self._last_goodwe_modes: dict[str, str | None] = {bid: None for bid in BANKS}
-        self._bank_was_online: dict[str, bool] = {bid: True for bid in BANKS}
+        self._last_goodwe_ems_modes: dict[str, str | None] = dict.fromkeys(BANKS)
+        self._last_goodwe_modes: dict[str, str | None] = dict.fromkeys(BANKS)
+        self._bank_was_online: dict[str, bool] = dict.fromkeys(BANKS, True)
         self._hw_autonomy_initialized: bool = False
         # Q4: mismatch watchdog — tracks what ems_mode was actually written per bank
-        self._last_written_ems_modes: dict[str, str | None] = {bid: None for bid in BANKS}
-        self._hw_mismatch_ticks: dict[str, int] = {bid: 0 for bid in BANKS}
+        self._last_written_ems_modes: dict[str, str | None] = dict.fromkeys(BANKS)
+        self._hw_mismatch_ticks: dict[str, int] = dict.fromkeys(BANKS, 0)
         # Fix-B (IT-5674): per-bank off_grid-lock recovery timestamp (monotonic)
-        self._off_grid_lock_recovery_ts: dict[str, float] = {bid: 0.0 for bid in BANKS}
+        self._off_grid_lock_recovery_ts: dict[str, float] = dict.fromkeys(BANKS, 0.0)
         # W1: current watchdog state
         self._current_emergency_active: bool = False
         self._current_below_reset_since: float | None = None
         # S2: hysteresis state for full-bias equalization
         self._full_bias_active: bool = False
         # S5: exact EMS limit written per bank (signed: neg=charge, pos=discharge)
-        self._last_ems_limit_w: dict[str, float] = {bid: 0.0 for bid in BANKS}
+        self._last_ems_limit_w: dict[str, float] = dict.fromkeys(BANKS, 0.0)
         # W6: HW closed-loop feedback-clamp state
-        self._hw_actual_w: dict[str, float] = {bid: 0.0 for bid in BANKS}
+        self._hw_actual_w: dict[str, float] = dict.fromkeys(BANKS, 0.0)
         self._hw_overshoot_ema: float = 0.0
         self._hw_overshoot_ticks: int = 0
         self._hw_undershoot_ticks: int = 0
         self._hw_correction_active: bool = False
         # REASON: current reason + per-bank reasons (updated each tick)
         self._reason: str = "initializing"
-        self._bank_reasons: dict[str, str] = {bid: "initializing" for bid in BANKS}
+        self._bank_reasons: dict[str, str] = dict.fromkeys(BANKS, "initializing")
 
     # ── Public API (read by sensor.py) ──────────────────────────────────────
 
@@ -244,7 +244,7 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         # W1: current watchdog — hard circuit breaker, highest priority
         if await self._check_current_safety():
             self._reason = "overcurrent"
-            self._bank_reasons = {bid: "overcurrent" for bid in BANKS}
+            self._bank_reasons = dict.fromkeys(BANKS, "overcurrent")
             for bid in BANKS:
                 # Force standby both banks every emergency tick (bypass both idempotent caches)
                 self._last_goodwe_ems_modes[bid] = None
@@ -410,7 +410,7 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             self._state.status = BatBalancerStatus.OK
             self._state.last_target_w = 0.0
             self._reason = "shadow" if shadow else "ok"
-            self._bank_reasons = {bid: self._reason for bid in BANKS}
+            self._bank_reasons = dict.fromkeys(BANKS, self._reason)
             if not shadow:
                 # write 0 to all banks (idle)
                 for bid in BANKS:
@@ -947,17 +947,17 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
         """Compute cross-balancer reason code for this tick (priority order)."""
         if self._current_emergency_active:
             r = "overcurrent"
-            return r, {bid: r for bid in BANKS}
+            return r, dict.fromkeys(BANKS, r)
 
         if shadow:
-            return "shadow", {bid: "shadow" for bid in BANKS}
+            return "shadow", dict.fromkeys(BANKS, "shadow")
 
         mode_state = self.hass.states.get(ENTITY_BAT_BALANCER_MODE)
         if mode_state and mode_state.state == "MANUAL":
-            return "manual", {bid: "manual" for bid in BANKS}
+            return "manual", dict.fromkeys(BANKS, "manual")
 
         if not any(bs.is_online for bs in bank_states.values()):
-            return "hw_not_available", {bid: "hw_not_available" for bid in BANKS}
+            return "hw_not_available", dict.fromkeys(BANKS, "hw_not_available")
 
         online_bank_ids = {bid for bid, bs in bank_states.items() if bs and bs.is_online}
         _ceil_ids = result.soc_ceil_bank_ids

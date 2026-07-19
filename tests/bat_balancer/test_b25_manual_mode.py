@@ -56,23 +56,23 @@ def _make_coord(hass: MagicMock) -> BatBalancerCoordinator:
     coord._entry = entry
     coord._startup_safe_mode_done = True
     coord._last_brain_write_ts = time.monotonic()
-    coord._bank_was_online = {bid: True for bid in BANKS}
+    coord._bank_was_online = dict.fromkeys(BANKS, True)
     coord._sign_machines = {bid: SignStateMachine() for bid in BANKS}
     coord._bank_configs = {
         "kontor": BankConfig.default_kontor(),
         "forrad": BankConfig.default_forrad(),
     }
     coord._state = BatBalancerState()
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._hw_autonomy_initialized = False
     coord._current_emergency_active = False
     coord._current_below_reset_since = None
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
-    coord._hw_actual_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
+    coord._hw_actual_w = dict.fromkeys(BANKS, 0.0)
     coord._hw_overshoot_ema = 0.0
     coord._hw_overshoot_ticks = 0
     coord._hw_undershoot_ticks = 0

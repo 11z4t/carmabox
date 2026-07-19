@@ -82,9 +82,9 @@ def _make_coord(states_mock: MagicMock | None = None) -> BatBalancerCoordinator:
     coord._sign_machines = {bid: SignStateMachine() for bid in BANKS}
     coord._state = BatBalancerState()
     coord._last_brain_write_ts = time.monotonic()
-    coord._bank_was_online = {bid: True for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
+    coord._bank_was_online = dict.fromkeys(BANKS, True)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
     coord._hw_autonomy_initialized = False
     return coord
 

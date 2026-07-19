@@ -105,16 +105,16 @@ def _make_coord(
     coord._sign_machines = {bid: SignStateMachine() for bid in BANKS}
     coord._state = BatBalancerState()
     coord._last_brain_write_ts = time.monotonic()
-    coord._bank_was_online = {bid: True for bid in BANKS}
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
+    coord._bank_was_online = dict.fromkeys(BANKS, True)
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
     coord._hw_autonomy_initialized = False
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._current_emergency_active = emergency
     coord._current_below_reset_since = below_reset_since
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
     return coord
 
 
@@ -333,12 +333,12 @@ async def test_TC_W2_DISCHARGE_0_clamped_to_standby():
 
     coord = BatBalancerCoordinator.__new__(BatBalancerCoordinator)
     coord.hass = hass
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
 
     # global direction=+2000 (discharge), but per-bank target=0 (equalization bias-excluded)
     await coord._write_power_limit("forrad", 0.0, direction_w=2000.0)
@@ -373,12 +373,12 @@ async def test_TC_W2_CHARGE_0_clamped_to_standby():
 
     coord = BatBalancerCoordinator.__new__(BatBalancerCoordinator)
     coord.hass = hass
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
 
     await coord._write_power_limit("forrad", 0.0, direction_w=-2000.0)
 
@@ -405,12 +405,12 @@ async def test_TC_W2_NON_ZERO_not_clamped():
 
     coord = BatBalancerCoordinator.__new__(BatBalancerCoordinator)
     coord.hass = hass
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
 
     await coord._write_power_limit("kontor", 500.0, direction_w=500.0)
 
@@ -444,12 +444,12 @@ async def test_TC_W4_INCIDENT_scenario_prevented():
 
     coord = BatBalancerCoordinator.__new__(BatBalancerCoordinator)
     coord.hass = hass
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
 
     # Kontor gets full 1500W (active bank)
     await coord._write_power_limit("kontor", 1500.0, direction_w=1500.0)

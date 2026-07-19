@@ -83,17 +83,17 @@ def _make_coord(
     coord._sign_machines = {bid: SignStateMachine() for bid in BANKS}
     coord._state = BatBalancerState()
     coord._last_brain_write_ts = time.monotonic()
-    coord._bank_was_online = {bid: True for bid in BANKS}
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
-    coord._last_written_ems_modes = {bid: None for bid in BANKS}
-    coord._hw_mismatch_ticks = {bid: 0 for bid in BANKS}
+    coord._bank_was_online = dict.fromkeys(BANKS, True)
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
+    coord._last_written_ems_modes = dict.fromkeys(BANKS)
+    coord._hw_mismatch_ticks = dict.fromkeys(BANKS, 0)
     coord._full_bias_active = False
-    coord._last_ems_limit_w = {bid: 0.0 for bid in BANKS}
+    coord._last_ems_limit_w = dict.fromkeys(BANKS, 0.0)
     coord._current_emergency_active = False
     coord._current_below_reset_since = None
     coord._hw_autonomy_initialized = True
-    coord._hw_actual_w = {bid: 0.0 for bid in BANKS}
+    coord._hw_actual_w = dict.fromkeys(BANKS, 0.0)
     coord._hw_overshoot_ema = 0.0
     coord._hw_overshoot_ticks = 0
     coord._hw_undershoot_ticks = 0
@@ -200,8 +200,8 @@ async def test_d_cross_direction_triggers_all_standby() -> None:
     coord._sign_machines["forrad"].tick(-3000.0)
 
     # Reset ems_mode caches
-    coord._last_goodwe_ems_modes = {bid: None for bid in BANKS}
-    coord._last_goodwe_modes = {bid: None for bid in BANKS}
+    coord._last_goodwe_ems_modes = dict.fromkeys(BANKS)
+    coord._last_goodwe_modes = dict.fromkeys(BANKS)
 
     # Set target so that ticked values will be opposing (3000 kontor, -3000 forrad)
     # We directly test _tick with an offer that would produce opposing per-bank targets
