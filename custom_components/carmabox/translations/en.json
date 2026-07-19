@@ -117,6 +117,9 @@
       "ev_soc": {
         "name": "EV SoC"
       },
+      "ev_block_reason": {
+        "name": "EV block reason"
+      },
       "household_insights": {
         "name": "Household Insights"
       },

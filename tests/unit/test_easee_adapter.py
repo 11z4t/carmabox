@@ -377,6 +377,38 @@ class TestReasonForNoCurrentRecovery:
         adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
         assert adapter.max_charger_limit_a == 16.0
 
+    @pytest.mark.asyncio
+    async def test_waiting_in_fully_calls_resume(self) -> None:
+        """AC: reason=51 → raise max_charger_limit + resume (not override_schedule)."""
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", "51"),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        await adapter.try_recover()
+        calls = [c[0] for c in hass.services.async_call.call_args_list]
+        assert (
+            "easee",
+            "action_command",
+            {"charger_id": CHARGER_ID, "action_command": "resume"},
+        ) in calls
+
+    @pytest.mark.asyncio
+    async def test_circuit_low_calls_override_schedule(self) -> None:
+        """AC: reason=6 → re-init + override_schedule (not resume)."""
+        hass = _make_hass(
+            (f"sensor.{PREFIX}_reason_for_no_current", "6"),
+            (f"sensor.{PREFIX}_max_charger_limit", "10"),
+        )
+        adapter = EaseeAdapter(hass, "dev1", PREFIX, charger_id=CHARGER_ID)
+        await adapter.try_recover()
+        calls = [c[0] for c in hass.services.async_call.call_args_list]
+        assert (
+            "button",
+            "press",
+            {"entity_id": f"button.{PREFIX}_override_schedule"},
+        ) in calls
+
 
 class TestShellyPro3EMIntegration:
     """EXP-01: Shelly Pro 3EM as primary EV power sensor."""

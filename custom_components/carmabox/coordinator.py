@@ -89,6 +89,9 @@ from .const import (
     DRIFT_MIN_EXPECTED_W,
     EV_RAMP_INTERVAL_S,
     EV_RAMP_STEPS,
+    EV_RECOVERY_COOLDOWN_S,
+    EV_RECOVERY_MAX_ATTEMPTS,
+    EV_RECOVERY_RETRY_INTERVAL_S,
     EV_STUCK_TIMEOUT_S,
     LUX_DARK,
     LUX_DAYLIGHT,
@@ -303,6 +306,12 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         self._ev_current_amps: int = 0
         self._ev_last_ramp_time: float = 0.0
         self._ev_initialized: bool = False
+
+        # EXP-05: reason_for_no_current monitoring + auto-recovery backoff state
+        self._ev_block_reason: str = ""
+        self._ev_recovery_attempts: int = 0
+        self._ev_recovery_last_reason: str | None = None
+        self._ev_recovery_next_attempt_at: float = 0.0
 
         # K3 (PLAT-945): Deferred write-verify — store (entity, expected_mode)
         # pairs after service calls, verify on NEXT update cycle (30s later)
@@ -1589,11 +1598,9 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
                     if disc_alert:
                         _LOGGER.warning("EV-ALERT: %s", disc_alert)
 
-                # EXP-05: Auto-recover from blocked states
-                if self.ev_adapter and ev_connected and self.ev_adapter.needs_recovery:
-                    recovery = await self.ev_adapter.try_recover()
-                    if recovery:
-                        _LOGGER.warning("EV-RECOVERY: %s", recovery)
+                # EXP-05: Log reason_for_no_current every cycle + auto-recover
+                # from blocked states (with backoff — see _handle_ev_block_recovery).
+                await self._handle_ev_block_recovery(ev_connected)
 
             except (HomeAssistantError, AttributeError, ValueError):
                 _LOGGER.debug("SOLAR-EV: allocation failed", exc_info=True)
@@ -5029,6 +5036,68 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             self._ev_current_amps = amps
             # CARMA-P0-FIXES Task 4: Save runtime after EV amps change
             await self._async_save_runtime()
+
+    async def _handle_ev_block_recovery(self, ev_connected: bool) -> None:
+        """EXP-05: Monitor Easee reason_for_no_current + auto-recover.
+
+        Runs every executor cycle while the EV is plugged in:
+          - Always logs the current reason_for_no_current (AC: "every cycle").
+          - If the adapter reports a recoverable block (see
+            EASEE_RECOVERABLE_REASONS / needs_recovery), calls try_recover().
+
+        Backoff (prevents an infinite Easee-cloud retry loop, per story
+        guardrail): at most EV_RECOVERY_MAX_ATTEMPTS recovery calls spaced
+        at least EV_RECOVERY_RETRY_INTERVAL_S apart for the *same* reported
+        reason. Once attempts are exhausted, recovery pauses for
+        EV_RECOVERY_COOLDOWN_S before trying again. The counter resets
+        whenever the reason changes (new problem) or clears (fixed).
+        """
+        if not self.ev_adapter or not ev_connected:
+            return
+
+        reason = self.ev_adapter.reason_for_no_current
+        self._ev_block_reason = reason
+        if reason:
+            _LOGGER.debug("EV-REASON: reason_for_no_current=%s", reason)
+
+        if not self.ev_adapter.needs_recovery:
+            self._ev_recovery_attempts = 0
+            self._ev_recovery_last_reason = None
+            return
+
+        now_mono = time.monotonic()
+        if reason != getattr(self, "_ev_recovery_last_reason", None):
+            # New/changed reason → fresh backoff window
+            self._ev_recovery_attempts = 0
+            self._ev_recovery_last_reason = reason
+            self._ev_recovery_next_attempt_at = 0.0
+
+        if now_mono < getattr(self, "_ev_recovery_next_attempt_at", 0.0):
+            return  # Still within backoff window — skip this cycle
+
+        attempts = getattr(self, "_ev_recovery_attempts", 0)
+        if attempts >= EV_RECOVERY_MAX_ATTEMPTS:
+            _LOGGER.error(
+                "EV-RECOVERY: giving up after %d attempts for reason=%s — cooling down %ds",
+                attempts,
+                reason,
+                EV_RECOVERY_COOLDOWN_S,
+            )
+            # Reset the counter so we try again periodically instead of forever
+            self._ev_recovery_attempts = 0
+            self._ev_recovery_next_attempt_at = now_mono + EV_RECOVERY_COOLDOWN_S
+            return
+
+        self._ev_recovery_attempts = attempts + 1
+        recovery = await self.ev_adapter.try_recover()
+        if recovery:
+            _LOGGER.warning(
+                "EV-RECOVERY (%d/%d): %s",
+                self._ev_recovery_attempts,
+                EV_RECOVERY_MAX_ATTEMPTS,
+                recovery,
+            )
+        self._ev_recovery_next_attempt_at = now_mono + EV_RECOVERY_RETRY_INTERVAL_S
 
     def _track_rule(self, rule_id: str, result: str) -> None:
         """IT-1937: Track active rule and last triggered timestamp for sensor.carma_box_rules."""

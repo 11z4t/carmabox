@@ -24,12 +24,15 @@ def _make_sensor_deps(
     state: CarmaboxState | None = None,
     last_command: BatteryCommand = BatteryCommand.IDLE,
     target_kw: float = 2.0,
+    ev_adapter: MagicMock | None = None,
 ) -> tuple[CarmaboxCoordinator, MagicMock]:
     """Create mocked coordinator + entry for sensor tests."""
     coord = MagicMock(spec=CarmaboxCoordinator)
     coord.data = state
     coord._last_command = last_command
     coord.target_kw = target_kw
+    coord.ev_adapter = ev_adapter
+    coord._ev_recovery_attempts = 0
     coord.savings = SavingsState(month=3, year=2026)
     coord.last_decision = Decision()
     coord.decision_log = []
@@ -69,7 +72,7 @@ def _get_sensor(key: str, coord: MagicMock, entry: MagicMock) -> CarmaboxSensor:
 
 class TestSensorDescriptions:
     def test_all_descriptions_have_key(self) -> None:
-        assert len(SENSOR_DESCRIPTIONS) == 29  # PLAT-975 added ml_forecast sensor
+        assert len(SENSOR_DESCRIPTIONS) == 30  # EXP-05 added ev_block_reason sensor
         keys = {d.key for d in SENSOR_DESCRIPTIONS}
         assert "plan_accuracy" in keys
         assert "decision" in keys
@@ -79,6 +82,7 @@ class TestSensorDescriptions:
         assert "battery_soc" in keys
         assert "grid_import" in keys
         assert "ev_soc" in keys
+        assert "ev_block_reason" in keys
         assert "household_insights" in keys
 
     def test_all_have_translation_key(self) -> None:
@@ -235,6 +239,58 @@ class TestEVSocSensor:
         coord, entry = _make_sensor_deps()
         sensor = _get_sensor("ev_soc", coord, entry)
         assert sensor.native_value is None
+
+
+class TestEvBlockReasonSensor:
+    """EXP-05: carmabox_ev_block_reason exposes the raw Easee reason code."""
+
+    def test_no_adapter_returns_empty(self) -> None:
+        coord, entry = _make_sensor_deps(ev_adapter=None)
+        sensor = _get_sensor("ev_block_reason", coord, entry)
+        assert sensor.native_value == ""
+        assert sensor.extra_state_attributes == {}
+
+    def test_no_block_returns_empty_reason(self) -> None:
+        ev = MagicMock()
+        ev.reason_for_no_current = ""
+        ev.needs_recovery = False
+        coord, entry = _make_sensor_deps(ev_adapter=ev)
+        sensor = _get_sensor("ev_block_reason", coord, entry)
+        assert sensor.native_value == ""
+        assert sensor.extra_state_attributes["label"] == "none"
+        assert sensor.extra_state_attributes["needs_recovery"] is False
+
+    def test_waiting_in_fully_reason_exposed(self) -> None:
+        ev = MagicMock()
+        ev.reason_for_no_current = "51"
+        ev.needs_recovery = True
+        coord, entry = _make_sensor_deps(ev_adapter=ev)
+        coord._ev_recovery_attempts = 1
+        sensor = _get_sensor("ev_block_reason", coord, entry)
+        assert sensor.native_value == "51"
+        attrs = sensor.extra_state_attributes
+        assert attrs["label"] == "waiting_in_fully"
+        assert attrs["needs_recovery"] is True
+        assert attrs["recovery_attempts"] == 1
+
+    def test_max_circuit_current_too_low_reason_exposed(self) -> None:
+        ev = MagicMock()
+        ev.reason_for_no_current = "6"
+        ev.needs_recovery = True
+        coord, entry = _make_sensor_deps(ev_adapter=ev)
+        sensor = _get_sensor("ev_block_reason", coord, entry)
+        assert sensor.native_value == "6"
+        assert sensor.extra_state_attributes["label"] == "max_circuit_current_too_low"
+
+    def test_unknown_reason_labeled_unknown(self) -> None:
+        """A reason code CARMA Box doesn't actively recover from is still exposed."""
+        ev = MagicMock()
+        ev.reason_for_no_current = "99"
+        ev.needs_recovery = False
+        coord, entry = _make_sensor_deps(ev_adapter=ev)
+        sensor = _get_sensor("ev_block_reason", coord, entry)
+        assert sensor.native_value == "99"
+        assert sensor.extra_state_attributes["label"] == "unknown"
 
 
 class TestDeviceInfo:
