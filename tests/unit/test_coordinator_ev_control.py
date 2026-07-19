@@ -421,6 +421,107 @@ class TestEvGoalHeadroomBoost:
         coord._cmd_ev_start.assert_called_with(6)
 
 
+# ── EXP-04: EV-3 night ramp-up interval gating (lines 4730-4734) ──────────────
+
+
+class TestEvRampIntervalGating:
+    """EV-3 night path: ramp UP is gated by EV_RAMP_INTERVAL_S (5 min).
+
+    Ramp DOWN (optimal_amps < current) is NOT gated — it's handled by the
+    unconditional `elif optimal_amps < self._ev_current_amps` branch, which
+    always calls _cmd_ev_adjust directly regardless of _ev_last_ramp_time.
+    """
+
+    @pytest.mark.asyncio
+    async def test_ramp_up_blocked_within_interval(self) -> None:
+        """optimal_amps > current but interval not elapsed → no adjust call."""
+        from custom_components.carmabox.const import EV_RAMP_INTERVAL_S
+
+        coord = _make_ev_coord(
+            cable_locked=True,
+            ev_enabled=True,
+            ev_current_amps=6,
+            tonight_soc=70.0,
+        )
+        # Last ramp happened "just now" → well within the 5 min interval
+        coord._ev_last_ramp_time = time.monotonic()
+
+        # Weekday night + battery support headroom → optimal_amps caps at
+        # MAX_EV_CURRENT (10), well above current_amps=6 (see
+        # TestEvWeekdayNightBatterySupport for the identical headroom math).
+        state = _ev_state(ev_soc=70.0, grid_w=100.0, battery_soc_1=80.0, battery_soc_2=80.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(
+                hour=23, month=3, weekday=MagicMock(return_value=1)
+            )
+            mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
+            coord.plan = [_plan_ev(hour=23, ev_kw=2.0)]
+            before = coord._ev_last_ramp_time
+            await coord._execute_ev(state)
+
+        coord._cmd_ev_adjust.assert_not_called()
+        assert coord._ev_last_ramp_time == before  # unchanged — no ramp happened
+        assert EV_RAMP_INTERVAL_S == 300  # sanity: 5 min
+
+    @pytest.mark.asyncio
+    async def test_ramp_up_allowed_after_interval_elapsed(self) -> None:
+        """optimal_amps > current and interval elapsed → adjust called + timer reset."""
+        from custom_components.carmabox.const import EV_RAMP_INTERVAL_S, MAX_EV_CURRENT
+
+        coord = _make_ev_coord(
+            cable_locked=True,
+            ev_enabled=True,
+            ev_current_amps=6,
+            tonight_soc=70.0,
+        )
+        # Last ramp was more than EV_RAMP_INTERVAL_S ago → gate opens
+        coord._ev_last_ramp_time = time.monotonic() - EV_RAMP_INTERVAL_S - 1
+
+        state = _ev_state(ev_soc=70.0, grid_w=100.0, battery_soc_1=80.0, battery_soc_2=80.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(
+                hour=23, month=3, weekday=MagicMock(return_value=1)
+            )
+            mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
+            coord.plan = [_plan_ev(hour=23, ev_kw=2.0)]
+            before = coord._ev_last_ramp_time
+            await coord._execute_ev(state)
+
+        # optimal_amps caps at MAX_EV_CURRENT (10) — see headroom math in
+        # TestEvWeekdayNightBatterySupport
+        coord._cmd_ev_adjust.assert_called_once_with(MAX_EV_CURRENT)
+        assert coord._ev_last_ramp_time > before  # timer reset to "now"
+
+    @pytest.mark.asyncio
+    async def test_ramp_down_not_gated_by_interval(self) -> None:
+        """optimal_amps < current → adjust called directly, no interval check."""
+        coord = _make_ev_coord(
+            cable_locked=True,
+            ev_enabled=True,
+            ev_current_amps=10,
+            tonight_soc=70.0,
+        )
+        # Last ramp "just now" — would block ramp UP, but must NOT block ramp DOWN
+        coord._ev_last_ramp_time = time.monotonic()
+
+        # Low headroom (heavy house load, no battery support) → optimal_amps < 10
+        state = _ev_state(ev_soc=70.0, grid_w=1800.0, battery_soc_1=15.0, battery_soc_2=15.0)
+
+        with patch("custom_components.carmabox.coordinator.datetime") as mock_dt:
+            mock_dt.now.return_value = MagicMock(
+                hour=23, month=3, weekday=MagicMock(return_value=1)
+            )
+            mock_dt.now.return_value.strftime = MagicMock(return_value="2026-03-31")
+            coord.plan = [_plan_ev(hour=23, ev_kw=2.0)]
+            await coord._execute_ev(state)
+
+        coord._cmd_ev_adjust.assert_called_once()
+        called_amps = coord._cmd_ev_adjust.call_args[0][0]
+        assert called_amps < 10
+
+
 # ── Cable disconnected → stop (lines 2644-2647) ──────────────────────────────
 
 
