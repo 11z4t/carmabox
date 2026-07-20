@@ -7,52 +7,52 @@
 
 ## Stories (Priority Order)
 
-### EXP-01: Shelly Pro 3EM som primär EV-effektsensor
+### EXP-01: Shelly Pro 3EM som primär EV-effektsensor ✅ KLAR (mergad main 2026-03-31, commit c4faa31)
 **Value:** Snabbare Grid Guard feedback (1s vs 15-30s Easee), exakt per-fas mätning
 **AC:**
-- [ ] EaseeAdapter har property `shelly_power_w` som läser Shelly Pro 3EM total power
-- [ ] EaseeAdapter har property `shelly_phase_powers` som returnerar per-fas effekt (A, B, C)
-- [ ] `power_w` property prioriterar Shelly > Easee sensor (med fallback)
-- [ ] Tester: 5+ tester inkl fallback, per-fas, stale data
-**DoD:** Commit, push, 901 QC PASS, alla tester gröna
+- [x] EaseeAdapter har property `shelly_power_w` som läser Shelly Pro 3EM total power
+- [x] EaseeAdapter har property `shelly_phase_powers` som returnerar per-fas effekt (A, B, C)
+- [x] `power_w` property prioriterar Shelly > Easee sensor (med fallback)
+- [x] Tester: 12 tester (över kravet 5+) inkl fallback, per-fas, stale data
+**DoD:** Commit, push, 901 QC PASS, alla tester gröna — verifierad klar 2026-07-19/20, checkboxen var bara inaktuell
 
-### EXP-02: GoodWe BMS-strömgräns awareness
+### EXP-02: GoodWe BMS-strömgräns awareness ✅ KLAR (mergad main 2026-03-31, commit 704795a)
 **Value:** Korrekt urladdningsallokering vid kall temp (BMS begränsar till 7A vid 5°C)
 **AC:**
-- [ ] GoodWeAdapter har property `bms_charge_limit_a` och `bms_discharge_limit_a`
-- [ ] `max_discharge_w` property beräknar: `bms_discharge_limit_a * voltage`
-- [ ] battery_balancer respekterar per-batteri max discharge W
-- [ ] Tester: 5+ tester inkl cold derating, asymmetrisk allokering
-**DoD:** Commit, push, 901 QC PASS
+- [x] GoodWeAdapter har property `bms_charge_limit_a` och `bms_discharge_limit_a`
+- [x] `max_discharge_w` property beräknar: `bms_discharge_limit_a * voltage`
+- [x] battery_balancer respekterar per-batteri max discharge W
+- [x] Tester: 14 tester (över kravet 5+) inkl cold derating, asymmetrisk allokering
+**DoD:** Commit, push, 901 QC PASS — verifierad klar 2026-07-19/20, checkboxen var bara inaktuell
 
-### EXP-03: Reaktiv urladdning via peak_shaving_power_limit
+### EXP-03: Reaktiv urladdning via peak_shaving_power_limit 🔄 VÄNTAR 901 QC (branch feat/exp-03-peak-shaving-reactive, commit be319f1, 2026-07-20)
 **Value:** ±0.5 kW bättre grid-precision, automatisk kompensation vid lastsvängar
 **AC:**
-- [ ] GoodWeAdapter har `set_peak_shaving_limit(watts)` som skriver register 47542
-- [ ] Coordinator sätter peak_shaving_power_limit = actual_grid + target_headroom varje cykel
-- [ ] Urladdning justeras automatiskt när huset drar mer/mindre
-- [ ] Safety: peak_shaving_power_limit clampad 0-10000W
-- [ ] Tester: 8+ tester inkl clamp, reaktiv justering, fallback
-**DoD:** Commit, push, 901 QC PASS
+- [x] GoodWeAdapter har `set_peak_shaving_limit(watts)` som skriver register 47542
+- [x] Coordinator sätter peak_shaving_power_limit = actual_grid + target_headroom varje cykel
+- [x] Urladdning justeras automatiskt när huset drar mer/mindre
+- [x] Safety: peak_shaving_power_limit clampad 0-10000W
+- [x] Tester: 29 tester (över kravet 8+) inkl clamp, reaktiv justering, fallback
+**DoD:** Commit ✅, push ✅, 901 QC PASS ⏳ väntar
 
-### EXP-04: EV ramp-steg enforcement (6→8→10A)
+### EXP-04: EV ramp-steg enforcement (6→8→10A) 🔄 VÄNTAR 901 QC (branch feat/exp-04-ev-ramp-steps, commit 028c6f2, 2026-07-20)
 **Value:** Förhindrar strömspike, skyddar Ellevio timmedel vid uppramping
 **AC:**
-- [ ] `_cmd_ev_adjust()` följer EV_RAMP_STEPS steg-för-steg
-- [ ] Max 1 steg per EV_RAMP_INTERVAL_S (5 min)
-- [ ] Nedramping: direkt till target (inget behov av stegvis)
-- [ ] Tester: 5+ tester inkl steg, interval, nedramping
-**DoD:** Commit, push, 901 QC PASS
+- [x] `_cmd_ev_adjust()` följer EV_RAMP_STEPS steg-för-steg (kärnlogik redan mergad mars 2026)
+- [x] Max 1 steg per EV_RAMP_INTERVAL_S (5 min)
+- [x] Nedramping: direkt till target (inget behov av stegvis)
+- [x] Tester: lucka hittad (interval-gating otestad) — 3 nya tester tillagda 2026-07-20
+**DoD:** Commit ✅, push ✅, 901 QC PASS ⏳ väntar (inkl. beslut om repo-brett trasigt pre-commit-hook)
 
-### EXP-05: Reason-for-no-current monitoring + auto-recovery
+### EXP-05: Reason-for-no-current monitoring + auto-recovery 🔄 VÄNTAR 901 QC (branch feat/exp-05-ev-block-recovery, commit 696fcc3, 2026-07-20)
 **Value:** Automatisk recovery vid Easee-block (waiting_in_fully, car_not_charging)
 **AC:**
-- [ ] Coordinator loggar reason_for_no_current varje cykel vid EV pluggad
-- [ ] Om reason=51 (WaitingInFully): höj max_charger_limit till 10A + resume
-- [ ] Om reason=6: re-init + override_schedule
-- [ ] Sensor `carmabox_ev_block_reason` exponerar current reason
-- [ ] Tester: 5+ tester per reason-kod
-**DoD:** Commit, push, 901 QC PASS
+- [x] Coordinator loggar reason_for_no_current varje cykel vid EV pluggad
+- [x] Om reason=51 (WaitingInFully): höj max_charger_limit till 10A + resume — BUGG hittad och fixad (var omkastad med reason=6)
+- [x] Om reason=6: re-init + override_schedule — BUGG hittad och fixad
+- [x] Sensor `carmabox_ev_block_reason` exponerar current reason
+- [x] Tester: 19 tester (över kravet 5+) per reason-kod + backoff/retry/cooldown
+**DoD:** Commit ✅, push ✅, 901 QC PASS ⏳ väntar
 
 ### EXP-06: GoodWe SoH monitoring + derating
 **Value:** Batterilivslängd skyddas, degradering synliggörs
