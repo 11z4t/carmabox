@@ -70,6 +70,7 @@ from .const import (
     DEFAULT_NIGHT_START,
     DEFAULT_NIGHT_WEIGHT,
     DEFAULT_PEAK_COST_PER_KW,
+    DEFAULT_PEAK_SHAVING_TARGET_HEADROOM_W,
     DEFAULT_PLAN_HORIZON_HOURS,
     DEFAULT_PRICE_CHEAP_ORE,
     DEFAULT_PRICE_EXPENSIVE_ORE,
@@ -354,6 +355,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
 
         self.target_kw: float = self._cfg.get("target_weighted_kw", DEFAULT_TARGET_WEIGHTED_KW)
         self.min_soc: float = self._cfg.get("min_soc", DEFAULT_BATTERY_MIN_SOC)
+        # EXP-03: reactive peak-shaving headroom (see core/peak_shaving.py)
+        self.peak_shaving_headroom_w: float = float(
+            self._cfg.get("peak_shaving_target_headroom_w", DEFAULT_PEAK_SHAVING_TARGET_HEADROOM_W)
+        )
         init_now = datetime.now()
         self.savings = SavingsState(month=init_now.month, year=init_now.year)
         self._savings_store: Store[dict[str, Any]] = Store(
@@ -1717,6 +1722,58 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
         """Enforce EMS modes every cycle (PLAT-1099)."""
         await self._execution_engine.enforce_ems_modes()
 
+    async def _apply_reactive_peak_shaving(self, state: CarmaboxState) -> None:
+        """EXP-03: reactively track grid import via peak_shaving_power_limit.
+
+        Runs EVERY cycle. For each inverter currently discharging
+        (discharge_pv/discharge_battery), recompute register 47542 as
+        actual_grid + headroom so discharge automatically compensates
+        when the house draws more/less. Adapters not currently
+        discharging are left untouched — this only adjusts an ALREADY
+        active discharge, it never starts one (that stays the job of the
+        EMS mode / NEV / plan-executor logic elsewhere).
+
+        Does NOT touch ems_power_limit — that invariant (PLAT-1040: must
+        be 0 unless actively grid-charging) is owned by
+        ExecutionEngine.enforce_ems_modes() and untouched here.
+        """
+        from .core.peak_shaving import (
+            compute_reactive_peak_shaving_w,
+            should_apply_reactive_peak_shaving,
+        )
+
+        actual_grid_w = state.grid_power_w
+        for adapter in self.inverter_adapters:
+            try:
+                mode = adapter.ems_mode
+            except Exception:  # fallback: skip this adapter, don't crash cycle
+                _LOGGER.debug(
+                    "PEAK-SHAVING %s: failed to read ems_mode — skipping this cycle",
+                    getattr(adapter, "prefix", "?"),
+                    exc_info=True,
+                )
+                continue
+
+            if not should_apply_reactive_peak_shaving(mode):
+                continue
+
+            # Fallback: not every InverterAdapter implements peak-shaving
+            # (e.g. HuaweiAdapter) — register 47542 is GoodWe-specific.
+            if not hasattr(adapter, "set_peak_shaving_limit"):
+                continue
+
+            limit_w = compute_reactive_peak_shaving_w(actual_grid_w, self.peak_shaving_headroom_w)
+            ok = await adapter.set_peak_shaving_limit(limit_w)
+            if not ok:
+                # Fallback: write failed — log and keep going, previous
+                # register value (set by GoodWe firmware) stays in effect.
+                _LOGGER.warning(
+                    "PEAK-SHAVING %s: failed to write peak_shaving_power_limit=%dW "
+                    "— keeping previous value (fallback)",
+                    adapter.prefix,
+                    limit_w,
+                )
+
     async def _execute_grid_guard_commands(  # noqa: C901
         self,
         commands: list[dict[str, Any]],
@@ -2224,6 +2281,10 @@ class CarmaboxCoordinator(DataUpdateCoordinator[CarmaboxState]):
             # manual overrides (e.g., discharge_pv left from yesterday) and
             # INV-2 crosscharge at EMS level.
             await self._enforce_ems_modes()
+
+            # EXP-03: reactive peak-shaving — runs EVERY cycle, after EMS
+            # enforcement so it reads the just-enforced ems_mode.
+            await self._apply_reactive_peak_shaving(state)
 
             await self._watchdog(state)
             # IT-2465: Non-critical methods wrapped with isolation

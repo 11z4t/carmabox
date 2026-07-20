@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
+from ..const import PEAK_SHAVING_MAX_W, PEAK_SHAVING_MIN_W
 from . import InverterAdapter
 
 if TYPE_CHECKING:
@@ -26,7 +27,6 @@ _LOGGER = logging.getLogger(__name__)
 _RETRY_DELAY_S = 5
 _MODBUS_MIN_INTERVAL_S = 0.1  # Min 100ms between Modbus calls
 _ADAPTER_RATE_LIMIT_S = 2.0  # MANIFEST 10.2: max 1 call per 2s per adapter
-_MAX_PEAK_SHAVING_W = 10000  # Safety clamp: inverter rated power
 _VERIFY_DELAY_S = 1.0  # EXP-08: Wait before read-back verification
 
 
@@ -417,7 +417,7 @@ class GoodWeAdapter(InverterAdapter):
                    0 = battery covers ALL grid import.
                    Clamped to 0-10000W for safety.
         """
-        watts = max(0, min(watts, _MAX_PEAK_SHAVING_W))
+        watts = max(PEAK_SHAVING_MIN_W, min(watts, PEAK_SHAVING_MAX_W))
         _LOGGER.info("GoodWe %s: peak_shaving_power_limit -> %dW", self.prefix, watts)
         return await self._safe_call(
             "number",

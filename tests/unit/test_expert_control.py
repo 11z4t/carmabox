@@ -24,6 +24,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from custom_components.carmabox.const import DEFAULT_PEAK_SHAVING_TARGET_HEADROOM_W
 from custom_components.carmabox.coordinator import (
     BatteryCommand,
     CarmaboxCoordinator,
@@ -117,6 +118,12 @@ def _make_coord(options: dict | None = None) -> CarmaboxCoordinator:
     coord._pending_write_verifies = []
     coord.target_kw = float((options or {}).get("target_weighted_kw", 2.0))
     coord.min_soc = float((options or {}).get("min_soc", 15.0))
+    # EXP-03: reactive peak-shaving headroom (see core/peak_shaving.py)
+    coord.peak_shaving_headroom_w = float(
+        (options or {}).get(
+            "peak_shaving_target_headroom_w", DEFAULT_PEAK_SHAVING_TARGET_HEADROOM_W
+        )
+    )
     coord.logger = MagicMock()
     coord.name = "carmabox"
     coord._states = states
