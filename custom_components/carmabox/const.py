@@ -172,6 +172,14 @@ SPIKE_COOLDOWN_S = 60  # Seconds after spike ends before restoring
 SPIKE_SAFETY_TIMEOUT_S = 600  # Force reset if spike_active > 10 min
 SPIKE_DEFAULT_PS_LIMIT_W = 20000  # Normal PS limit (no restriction)
 
+# ── EXP-03: Reactive Peak Shaving (GoodWe register 47542) ──────
+# Coordinator recomputes peak_shaving_power_limit every cycle as
+# actual_grid_w + headroom, so battery discharge automatically tracks
+# house-load swings instead of holding a fixed target.
+PEAK_SHAVING_MIN_W = 0  # Safety floor — battery covers ALL grid import
+PEAK_SHAVING_MAX_W = 10000  # Safety ceiling — inverter rated power
+DEFAULT_PEAK_SHAVING_TARGET_HEADROOM_W = 200.0  # Margin above actual grid draw
+
 # ── IT-2067: Reserve Target (Solcast-based) ────────────────────
 RESERVE_PV_STRONG_KWH = 20.0  # Strong sun → low reserve
 RESERVE_PV_WEAK_KWH = 5.0  # Weak sun → high reserve
