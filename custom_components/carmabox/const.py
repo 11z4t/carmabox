@@ -552,6 +552,10 @@ BAYES_AGGRESSIVE_MEDIAN_FACTOR_MAX: float = 1.80
 BAYES_BATTERY_BUDGET_LOW_RATIO_MIN: float = 0.10
 BAYES_BATTERY_BUDGET_LOW_RATIO_MAX: float = 0.50
 
+# ── PLAT-1241: Wolta Feedback Tuner (EXP-07) ─────────────────────────────────
+WOLTA_TUNER_DEFAULT_MAX_STALENESS_S: int = 3600  # Ratings older than this are ignored (1h)
+WOLTA_TUNER_MAX_LOG_ENTRIES: int = 200  # Ring-buffer size for the decision log
+
 # ── PLAT-1221: QC constants ─────────────────────────────────────────────────
 EV_CAPACITY_KWH: float = 82.0  # EV battery capacity (kWh)
 EV_PHASE_COUNT: int = 3  # EV charger phase count
@@ -614,3 +618,17 @@ MIN_BAT_FOR_EV_KWH: float = 2.0  # Min available battery kWh before starting nig
 
 # ── Decision Engine — Night charge price threshold ───────────────────────────
 DEFAULT_CHEAP_NIGHT_PRICE_ORE: float = 30.0  # EV night charge threshold (öre/kWh)
+
+# ── Dynamic Discharge Threshold (optimizer/discharge_threshold.py) ───────────
+# Root cause (Jerström, 2026-07-19): a STATIC discharge floor (originally
+# 50 öre/kWh, later patched to 90 öre/kWh) emptied the battery at 19:50 —
+# ~2h before the day's actual price peak (130 öre at 21:45). A fixed
+# öre/kWh value cannot adapt to the shape of a given day's price curve.
+# This threshold is instead computed every cycle as a percentile of the
+# REMAINING today's Nordpool prices, so it self-adjusts: high on cheap
+# days (discharge rarely), low on expensive days (discharge more often),
+# always relative to what the rest of the day actually looks like.
+DYNAMIC_DISCHARGE_PERCENTILE: float = 0.85  # Discharge only in top (1-p) remaining hours
+DYNAMIC_DISCHARGE_MIN_PRICE_POINTS: int = 2  # Below this many remaining hours → static fallback
+DYNAMIC_DISCHARGE_FALLBACK_FLOOR_ORE: float = 50.0  # Fallback floor when too few price points
+DYNAMIC_DISCHARGE_SOC_FLOOR_PCT: float = 15.0  # Never discharge below this SoC, regardless of price
