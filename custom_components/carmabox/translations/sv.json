@@ -121,6 +121,9 @@
       "ev_soc": {
         "name": "Elbil-SoC"
       },
+      "ev_block_reason": {
+        "name": "Elbil blockeringsorsak"
+      },
       "appliance_laundry": {
         "name": "Förbrukning Vitvaror"
       },

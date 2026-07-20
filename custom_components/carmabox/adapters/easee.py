@@ -19,7 +19,11 @@ from typing import TYPE_CHECKING
 
 from homeassistant.exceptions import HomeAssistantError, ServiceNotFound
 
-from ..const import MAX_EV_CURRENT
+from ..const import (
+    EASEE_RECOVERABLE_REASONS,
+    MAX_EV_CURRENT,
+    EaseeBlockReason,
+)
 from . import EVAdapter
 
 if TYPE_CHECKING:
@@ -266,11 +270,12 @@ class EaseeAdapter(EVAdapter):
     def needs_recovery(self) -> bool:
         """True if Easee is in a blocked state that requires recovery.
 
-        EXP-05: Detects common block reasons and reboot-induced limit resets.
+        EXP-05: Detects common block reasons (see EASEE_RECOVERABLE_REASONS
+        in const.py) and reboot-induced limit resets.
         """
         # Reason codes that indicate recoverable block
         reason = self.reason_for_no_current
-        if reason in ("51", "WaitingInFully", "6", "MaxCircuitCurrentTooLow"):
+        if reason in EASEE_RECOVERABLE_REASONS:
             return True
         # EXP-09: Detect reboot (max_charger_limit drops below safe floor)
         return self.max_charger_limit_a > 0 and self.max_charger_limit_a < _MAX_LIMIT_FLOOR
@@ -280,6 +285,13 @@ class EaseeAdapter(EVAdapter):
 
         Returns recovery action taken, or None if no recovery needed.
         EXP-05 + EXP-09: Handles waiting_in_fully, reboot, max_limit reset.
+        Reason codes are named via EaseeBlockReason (const.py) — never
+        compared as bare magic numbers here.
+
+        NOTE: This method performs Easee writes (re-init/resume) unconditionally
+        on each call — callers (coordinator.py) are responsible for backoff /
+        max-retry so a persistently blocked charger doesn't trigger a tight
+        retry loop against the Easee cloud API. See EV_RECOVERY_* in const.py.
         """
         reason = self.reason_for_no_current
 
@@ -293,21 +305,31 @@ class EaseeAdapter(EVAdapter):
             await self.ensure_initialized(force=True)
             return "reboot_reinit"
 
-        # Case 2: WaitingInFully (reason 51) — max_limit too low
-        if reason in ("51", "WaitingInFully"):
-            _LOGGER.warning("Easee: WaitingInFully — raising max_limit to %dA", _MAX_LIMIT_FLOOR)
-            await self.ensure_initialized(force=True)
-            return "waiting_in_fully_fix"
-
-        # Case 3: MaxCircuitCurrentTooLow (reason 6)
-        if reason in ("6", "MaxCircuitCurrentTooLow"):
-            _LOGGER.warning("Easee: MaxCircuitCurrentTooLow — re-init + override")
+        # Case 2: WaitingInFully (reason 51) — max_limit too low.
+        # EXP-05 AC: raise max_charger_limit to 10A (via ensure_initialized) + resume.
+        if reason in (EaseeBlockReason.WAITING_IN_FULLY, "WaitingInFully"):
+            _LOGGER.warning(
+                "Easee: WaitingInFully — raising max_limit to %dA + resume", _MAX_LIMIT_FLOOR
+            )
             await self.ensure_initialized(force=True)
             if self.charger_id:
                 await self._safe_call(
                     "easee",
                     "action_command",
                     {"charger_id": self.charger_id, "action_command": "resume"},
+                )
+            return "waiting_in_fully_fix"
+
+        # Case 3: MaxCircuitCurrentTooLow (reason 6).
+        # EXP-05 AC: re-init + override_schedule (Easee's own schedule blocks otherwise).
+        if reason in (EaseeBlockReason.MAX_CIRCUIT_CURRENT_TOO_LOW, "MaxCircuitCurrentTooLow"):
+            _LOGGER.warning("Easee: MaxCircuitCurrentTooLow — re-init + override_schedule")
+            await self.ensure_initialized(force=True)
+            with contextlib.suppress(Exception):
+                await self.hass.services.async_call(
+                    "button",
+                    "press",
+                    {"entity_id": f"button.{self.prefix}_override_schedule"},
                 )
             return "circuit_low_fix"
 

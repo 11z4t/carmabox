@@ -1,5 +1,7 @@
 """CARMA Box — Constants."""
 
+from enum import StrEnum
+
 DOMAIN = "carmabox"
 PLATFORMS = ["sensor"]
 
@@ -94,6 +96,53 @@ EV_RAMP_INTERVAL_S = 300  # 5 min between ramp-up steps
 EV_STUCK_TIMEOUT_S = 6 * 3600  # W6 watchdog: stop EV if SoC unchanged for this long
 EV_RAMP_STEPS = [6, 8, 10]  # Gradual: 6A → 8A → 10A
 EV_FALLBACK_AMPS = 6  # Safe fallback (not 16A!)
+
+
+# EXP-05: Easee reason_for_no_current — named codes instead of magic numbers.
+# The Easee HA integration reports either the numeric code or, on some
+# firmware/integration versions, the string name — both forms are handled.
+class EaseeBlockReason(StrEnum):
+    """Easee `reason_for_no_current` codes CARMA Box actively recovers from.
+
+    Only codes with a defined recovery action live here — see
+    EaseeAdapter.needs_recovery / try_recover (EXP-05).
+    """
+
+    NONE = ""
+    WAITING_IN_FULLY = "51"  # max_charger_limit too low vs dynamic_limit → raise + resume
+    MAX_CIRCUIT_CURRENT_TOO_LOW = "6"  # circuit dynamic limit blocks charging → re-init + override
+
+
+# String-name aliases some Easee integration versions report instead of the
+# numeric code. Maps alias → canonical EaseeBlockReason.
+EASEE_BLOCK_REASON_ALIASES: dict[str, EaseeBlockReason] = {
+    "WaitingInFully": EaseeBlockReason.WAITING_IN_FULLY,
+    "MaxCircuitCurrentTooLow": EaseeBlockReason.MAX_CIRCUIT_CURRENT_TOO_LOW,
+}
+
+# All raw reason values (numeric + string alias) that trigger auto-recovery.
+EASEE_RECOVERABLE_REASONS: frozenset[str] = frozenset(
+    {EaseeBlockReason.WAITING_IN_FULLY, EaseeBlockReason.MAX_CIRCUIT_CURRENT_TOO_LOW}
+    | set(EASEE_BLOCK_REASON_ALIASES)
+)
+
+# Human-readable labels for sensor attributes / logging.
+EASEE_BLOCK_REASON_LABELS: dict[str, str] = {
+    EaseeBlockReason.NONE: "none",
+    EaseeBlockReason.WAITING_IN_FULLY: "waiting_in_fully",
+    EaseeBlockReason.MAX_CIRCUIT_CURRENT_TOO_LOW: "max_circuit_current_too_low",
+    "WaitingInFully": "waiting_in_fully",
+    "MaxCircuitCurrentTooLow": "max_circuit_current_too_low",
+}
+
+# EXP-05: Auto-recovery backoff — prevents infinite retry loop writing to
+# Easee cloud every scan cycle (SCAN_INTERVAL_SECONDS=30) while blocked.
+# Up to EV_RECOVERY_MAX_ATTEMPTS tries spaced by EV_RECOVERY_RETRY_INTERVAL_S;
+# once exhausted, back off for EV_RECOVERY_COOLDOWN_S before trying again.
+# Counter resets whenever the reported reason changes (new problem).
+EV_RECOVERY_RETRY_INTERVAL_S = 60  # Min gap between recovery attempts for same reason
+EV_RECOVERY_MAX_ATTEMPTS = 3  # Attempts before backing off
+EV_RECOVERY_COOLDOWN_S = 900  # 15 min cooldown after exhausting attempts
 
 # Discharge drift-guard (RC3)
 DRIFT_MIN_DISCHARGE_W = 100  # Ignore drift when discharge command < this

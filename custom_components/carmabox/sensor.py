@@ -20,7 +20,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import APPLIANCE_CATEGORIES, DOMAIN
+from .const import APPLIANCE_CATEGORIES, DOMAIN, EASEE_BLOCK_REASON_LABELS
 from .coordinator import CarmaboxCoordinator
 from .optimizer.models import BatteryCommand
 from .optimizer.savings import (
@@ -96,6 +96,25 @@ def _plan_status_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
         "is_exporting": state.is_exporting,
         "plan_hours": len(state.plan),
         "plan": plan_data,
+    }
+
+
+def _ev_block_reason_value(coord: CarmaboxCoordinator) -> str:
+    """EXP-05: Raw Easee reason_for_no_current code ('' = no block, EV not blocked)."""
+    if not coord.ev_adapter:
+        return ""
+    return coord.ev_adapter.reason_for_no_current
+
+
+def _ev_block_reason_attrs(coord: CarmaboxCoordinator) -> dict[str, Any]:
+    """EXP-05: Human-readable label + recovery bookkeeping for the block-reason sensor."""
+    if not coord.ev_adapter:
+        return {}
+    reason = coord.ev_adapter.reason_for_no_current
+    return {
+        "label": EASEE_BLOCK_REASON_LABELS.get(reason, "unknown" if reason else "none"),
+        "needs_recovery": coord.ev_adapter.needs_recovery,
+        "recovery_attempts": getattr(coord, "_ev_recovery_attempts", 0),
     }
 
 
@@ -833,6 +852,13 @@ SENSOR_DESCRIPTIONS: tuple[CarmaboxSensorDescription, ...] = (
         value_fn=lambda coord: (
             round(coord.data.ev_soc, 0) if coord.data and coord.data.has_ev else None
         ),
+    ),
+    CarmaboxSensorDescription(
+        key="ev_block_reason",
+        translation_key="ev_block_reason",
+        icon="mdi:alert-circle-outline",
+        value_fn=_ev_block_reason_value,
+        extra_attrs_fn=_ev_block_reason_attrs,
     ),
     CarmaboxSensorDescription(
         key="battery_efficiency",
