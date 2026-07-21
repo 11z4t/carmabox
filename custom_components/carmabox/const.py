@@ -632,3 +632,28 @@ DYNAMIC_DISCHARGE_PERCENTILE: float = 0.85  # Discharge only in top (1-p) remain
 DYNAMIC_DISCHARGE_MIN_PRICE_POINTS: int = 2  # Below this many remaining hours → static fallback
 DYNAMIC_DISCHARGE_FALLBACK_FLOOR_ORE: float = 50.0  # Fallback floor when too few price points
 DYNAMIC_DISCHARGE_SOC_FLOOR_PCT: float = 15.0  # Never discharge below this SoC, regardless of price
+
+# ── Export Arbitrage (optimizer/export_arbitrage.py) — EXPERIMENTAL ──────────
+# Root cause (Forsmark vs. Jerström comparison, analysis 2026-07-19/21):
+# planner.py's "never discharge during export" principle (see module
+# docstring, line 12) caps every discharge branch (P3/P4/P5/P7) at `net`
+# (house load minus PV) — the battery is only ever allowed to fill the gap
+# up to zero grid import, never to push power OUT to the grid. On a shared
+# high-price evening, Forsmark's Sigen inverter (unconstrained by this
+# rule) discharged 91%→23% SoC and captured real arbitrage value; Jerström
+# stayed pinned near 100% SoC because house load alone never created enough
+# `net` to unlock meaningful discharge. Wolta's `arbitrage` component for
+# Jerström measured -322% — genuine net-export arbitrage is mathematically
+# impossible under the net-only cap, regardless of price-forecast quality.
+#
+# This section configures an OPT-IN extension (default OFF, per-site) that
+# allows discharge to exceed `net` — i.e. genuine grid export — up to a
+# hard, configurable power ceiling, and only during the top slice of the
+# day's remaining prices. It does NOT replace the existing default
+# behavior; sites that do not set `enable_export_arbitrage=True` see zero
+# change. See optimizer/export_arbitrage.py for full safety documentation.
+EXPORT_ARBITRAGE_PERCENTILE: float = 0.95  # Stricter than discharge floor — top ~5% of hours only
+EXPORT_ARBITRAGE_MIN_PRICE_POINTS: int = 2  # Below this many remaining hours → static fallback
+EXPORT_ARBITRAGE_FALLBACK_FLOOR_ORE: float = 100.0  # Fallback floor when too few price points
+EXPORT_ARBITRAGE_SOC_FLOOR_PCT: float = 20.0  # Extra safety margin above normal discharge floor
+DEFAULT_MAX_EXPORT_POWER_W: float = 0.0  # Site MUST opt in with an explicit non-zero value
