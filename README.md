@@ -62,6 +62,30 @@ Varje 30s-cykel:
 | Väder | Tempest WeatherFlow (MQTT) |
 | Hemautomation | Home Assistant (HACS) |
 
+## Kör lokalt
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+
+# Testsvit (samtliga tester) — grönt på main (2026-08-01): 3882 passed
+.venv/bin/pytest tests/ -q
+
+# Ett specifikt domänpaket, t.ex. bat_balancer
+.venv/bin/pytest tests/bat_balancer/ -q
+
+# Lint + typkontroll (samma verktyg som QC-MANIFEST-verifieringen).
+# OBS (2026-08-01): INTE gröna på main just nu — 11 ruff-fel, 53 mypy-fel,
+# huvudsakligen i ev_balancer/carmabox. Konsolideringsarbete pågår på egna
+# grenar (se steg1/steg1b-branchar) — kommandona nedan visar HUR man kör
+# verktygen, inte att de passerar idag.
+.venv/bin/ruff check custom_components/ tests/
+.venv/bin/mypy custom_components/ --strict
+```
+
+Kräver Python 3.12 (se `pyproject.toml`). Ingen levande Home Assistant-instans krävs för
+testsviten — `hass` mockas i varje testfixtur (`unittest.mock.MagicMock`).
+
 ## Dokumentation
 
 | Fil | Innehåll |
