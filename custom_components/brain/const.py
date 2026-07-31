@@ -300,7 +300,9 @@ ENTITY_BAT_SOC_KONTOR: str = "sensor.pv_battery_soc_kontor"
 ENTITY_BAT_SOC_FORRAD: str = "sensor.pv_battery_soc_forrad"
 
 # Cold floor: outdoor temperature sensor (logic not yet implemented)
-# TODO: implement cold-floor cascade when outdoor_temp < threshold → use cold_min_soc
+# See PLAT-1843 (AC37 cold_floor_protect) for the related bat_balancer-side design —
+# that ticket keys off battery temperature, not outdoor_temp, so confirm which signal
+# this cascade should actually use before implementing.
 ENTITY_OUTDOOR_TEMP: str = "sensor.home_temperature"
 DEFAULT_OUTDOOR_TEMP_C: float = 15.0
 
