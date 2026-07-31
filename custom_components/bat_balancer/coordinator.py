@@ -264,7 +264,10 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
                 target_available = True
                 self._last_brain_write_ts = time.monotonic()
             except (TypeError, ValueError):
-                pass
+                _LOGGER.warning(
+                    "bat_balancer: target entity state %r is not a valid float — treating as unavailable",
+                    target_entity.state,
+                )
 
         # stale target → zero
         brain_stale_s = int(
@@ -1022,7 +1025,10 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
                 if age_s > hw_stale_s:
                     sensor_stale = True
             except (TypeError, ValueError):
-                pass
+                _LOGGER.warning(
+                    "bat_balancer: HW staleness check failed for bank %s — treating as stale",
+                    bank_id,
+                )
 
         # BMS dynamic caps — bypassed in MANUAL mode (A1: prevents BMS-dyn swing)
         in_manual = self._str_state(ENTITY_BAT_BALANCER_MODE, "AUTO") == "MANUAL"

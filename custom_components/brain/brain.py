@@ -1404,7 +1404,10 @@ class BrainController:
                 try:
                     return float(target_state.state), "MANUAL"
                 except (TypeError, ValueError):
-                    pass
+                    _LOGGER.warning(
+                        "brain: manual target entity state %r is not a valid float — falling back to 0.0",
+                        target_state.state,
+                    )
             return 0.0, "MANUAL"
         if mode == "SHADOW":
             return 0.0, "SHADOW"
@@ -1470,7 +1473,7 @@ class BrainController:
                 new_offer = max(F2_OFFER_FLOOR_W, min(F2_OFFER_CEIL_W, new_offer))
                 return new_offer, "AUTO"
             except (TypeError, ValueError):
-                pass
+                _LOGGER.warning("brain: AUTO offer computation failed on invalid numeric input — falling back to 0.0")
         return 0.0, "AUTO"
 
     async def _async_write_bat_offer_source(self, source: str) -> None:
