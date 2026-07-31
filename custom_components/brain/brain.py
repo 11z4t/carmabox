@@ -1718,6 +1718,7 @@ class BrainController:
 
         try:
             entry: dict[str, Any] = {
+                "schema_version": 1,
                 "ts": datetime.now().isoformat(timespec="seconds"),
                 "target_ev_w": target_ev_w,
                 "target_bat_w": target_bat_w,

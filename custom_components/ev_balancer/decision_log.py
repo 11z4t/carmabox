@@ -84,6 +84,7 @@ class DecisionLog:
             self._rate_table = {k: v for k, v in self._rate_table.items() if v > cutoff}
 
         entry = {
+            "schema_version": 1,
             "ts": now,
             "action": decision.action.value,
             "dynamic_a": decision.dynamic_a,
