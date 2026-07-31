@@ -6,6 +6,25 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [Unreleased] — QC-MANIFEST v4.1 Platinum-arbete, 2026-07-31/08-01 (904)
+
+**OBS:** denna changelog var stale sedan [4.8.1] (2026-04-02) — 113 commits mot
+`custom_components/` sedan dess är inte dokumenterade här. Detta är bara min egen kvälls
+verifierade ändringar, inte en fullständig backfill av det gapet — det kräver ett separat beslut
+(rekonstruera historiken, eller börja om från detta datum).
+
+### Fixed
+- **PLAT-1935** 5× tysta `except: pass`-block ersatta med loggning i `coordinator.py`/`brain.py`
+  (QC-MANIFEST C3.1) — observabilitet endast, ingen beteendeändring.
+- **PLAT-1935** `_bank_ids`-attribut saknades i Forsmarks testfixturer (produktionskoordinatorn
+  satte det, testerna kände inte till det) — 16 failed → 2 failed.
+
+### Docs
+- **PLAT-1935** README fick en install/kör/testa-sektion (QC-MANIFEST C9.1) — saknades helt.
+- **PLAT-1935** Orphaned TODO i `brain/const.py` länkad till PLAT-1843 (QC-MANIFEST C8.3).
+
+---
+
 ## [4.8.1] — 2026-04-02
 
 ### Added
