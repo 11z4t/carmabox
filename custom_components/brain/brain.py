@@ -1734,8 +1734,9 @@ class BrainController:
                 ),
                 timeout=3.0,
             )
-        except (TimeoutError, OSError):
-            pass  # Decision log is best-effort; control loop must never crash
+        except (TimeoutError, OSError) as e:
+            # Decision log is best-effort; control loop must never crash
+            _LOGGER.debug("brain: decision log write failed (best-effort, non-fatal): %s", e)
 
     async def _heartbeat_supervisor(self) -> None:  # pragma: no cover
         """IT-4218 Spec 1.9 P2-F: Last-line-of-defense — re-register tick timer if frozen.
