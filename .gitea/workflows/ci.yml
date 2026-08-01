@@ -37,8 +37,24 @@ jobs:
         run: |
           python - << 'PYEOF'
           import json, pathlib, sys
+
+          # EEBS guard (2026-08-01): this check must not silently pass when it finds
+          # nothing to check. An empty rglob (wrong cwd, custom_components/ missing or
+          # renamed) previously exited 0 with zero output — indistinguishable from
+          # "all manifests valid." Assert a minimum count instead.
+          MIN_EXPECTED_MANIFESTS = 5  # binary_balancer, carmabox, bat_balancer, ev_balancer, brain
+
+          manifests = list(pathlib.Path("custom_components").rglob("manifest.json"))
+          if len(manifests) < MIN_EXPECTED_MANIFESTS:
+              print(
+                  f"FAIL: found {len(manifests)} manifest.json files, expected at least "
+                  f"{MIN_EXPECTED_MANIFESTS}. Wrong working directory, or custom_components/ "
+                  f"missing/renamed — this check cannot silently pass on zero input."
+              )
+              sys.exit(1)
+
           ok = True
-          for mf in pathlib.Path("custom_components").rglob("manifest.json"):
+          for mf in manifests:
               data = json.loads(mf.read_text())
               name = data.get("name", "")
               domain = data.get("domain", "")
@@ -50,5 +66,6 @@ jobs:
                   print(f"FAIL {mf}: codeowners must include '@carma'")
                   ok = False
               print(f"OK   {domain}: '{name}' {owners}")
+          print(f"Checked {len(manifests)} manifest.json files.")
           sys.exit(0 if ok else 1)
           PYEOF
