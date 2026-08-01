@@ -38,7 +38,7 @@ SOC_EQ_FULL_BIAS_HYSTERESIS_PCT: float = 5.0  # default — helpers override
 # ZG-12: anti-export band
 ZG12_BAND_W: float = 50.0
 
-# Hardware stale threshold — if sensor.last_changed > this → use static fallback
+# Hardware stale threshold — if sensor.last_reported > this → use static fallback
 ENTITY_HW_STALE_THRESHOLD_S = "input_number.bat_balancer_hw_stale_threshold_s"
 HW_STALE_THRESHOLD_S: int = 300  # default — helpers override
 

@@ -69,7 +69,7 @@ class BankState:
     battery_mode: str = "battery_standby"  # charge_battery | discharge_battery | battery_standby
     bms_max_charge_w: float | None = None  # None = use static from BankConfig
     bms_max_discharge_w: float | None = None
-    sensor_stale: bool = False  # True if SoC sensor.last_changed > HW_STALE_THRESHOLD_S
+    sensor_stale: bool = False  # True if SoC sensor.last_reported > HW_STALE_THRESHOLD_S
 
 
 @dataclass(frozen=True)
