@@ -59,13 +59,20 @@ jobs:
               name = data.get("name", "")
               domain = data.get("domain", "")
               owners = data.get("codeowners", [])
+              file_ok = True
               if not name.startswith("CARMA "):
                   print(f"FAIL {mf}: name '{name}' must start with 'CARMA '")
-                  ok = False
+                  file_ok = False
               if "@carma" not in owners:
                   print(f"FAIL {mf}: codeowners must include '@carma'")
-                  ok = False
-              print(f"OK   {domain}: '{name}' {owners}")
+                  file_ok = False
+              # 2026-08-01 (946's meta-lesson): this line must not print "OK" on a file
+              # that just failed above it — a note written from intent, not from the
+              # actual per-file outcome, lies about what was verified. Gate the label
+              # on file_ok, and never emit both FAIL and OK for the same manifest.
+              if file_ok:
+                  print(f"OK   {domain}: '{name}' {owners}")
+              ok = ok and file_ok
           print(f"Checked {len(manifests)} manifest.json files.")
           sys.exit(0 if ok else 1)
           PYEOF
