@@ -1,0 +1,214 @@
+# Miljösond — obligatoriskt första steg före varje deploy.
+#
+# Ursprung: 946 uppfann sonden som ett minimalt CI-jobb med EGEN statuskontext, så att
+# en körning går att diagnosticera utan att nå jobbloggen. Denna version bygger vidare
+# på idén med en skärpning: EN KONTEXT PER MILJÖEGENSKAP.
+#
+# VARFÖR FLERA JOBB OCH INTE ETT
+# Gitea sätter statuskontexten till "<arbetsflöde> / <jobb> (<händelse>)". Ett jobb ger
+# alltså en kontext. Med fem små jobb får man fem kontexter, och statuslistan i sig
+# blir diagnosen:
+#
+#   sond / runner (push)    grön  -> en runner plockade upp jobbet över huvud taget
+#   sond / verktyg (push)   RÖD   -> python eller git saknas på runnern
+#   sond / docker (push)    grön
+#   sond / natverk (push)   grön
+#   sond / utrymme (push)   grön
+#
+# Man ser att felet ligger i verktygen utan att ha öppnat något. Det var hela poängen.
+#
+# VARFÖR DET LÖSER ETT VERKLIGT PROBLEM
+# 2026-07-31 stod CI-jobb pending för alltid därför att runnern var registrerad på fel
+# org. Utfallet såg identiskt ut med "koden är trasig": ingenting hände. Saknas
+# "sond / runner" helt vet man omedelbart att ingen runner tog jobbet — det är en
+# miljöfråga, inte en kodfråga.
+#
+# KONSTRUKTIONSREGLER
+# 1. Sonden får ALDRIG bero på det den mäter. runner-jobbet kör därför på self-hosted
+#    (host-läge) och inte i en container — annars kan den inte rapportera att docker
+#    saknas, eftersom den då själv behövde docker för att starta.
+# 2. Varje jobb ska vara snabbt. Sonden körs före varje deploy.
+# 3. Varje jobb SKRIVER UT sitt underlag även när det lyckas. Ett grönt jobb utan
+#    utdata bevisar bara att ett kommando returnerade noll.
+# 4. Inga hemligheter. Sonden rapporterar närvaro och version, aldrig innehåll.
+# 5. Sonden måste pröva SAMMA ETIKETT som arbetsflödet den ska förklara. Se nedan.
+#
+# VARFÖR REGEL 5 FINNS — den lades till 2026-08-01 efter en mätning
+# En etikett är inte en maskin. Samma namn kan peka på helt olika körmiljöer hos olika
+# runners. Uppmätt samma natt:
+#
+#     gitea-runner-503   ubuntu-latest -> host                   (python3, git, node finns)
+#     kund-runner        ubuntu-latest -> docker://ubuntu:24.04  (inget av dem finns)
+#
+# Och gitea-runner-503 har INGEN self-hosted-etikett. Ett jobb med runs-on: self-hosted
+# kan alltså aldrig hamna där.
+#
+# Följden: en sond som bara prövar self-hosted kan rapportera "miljön är frisk" om en
+# HELT ANNAN MASKIN än den som körde jobbet som föll. Då mäter sonden inte den storhet
+# den namnger, och den blir samma sorts ställföreträdare som den byggdes för att avslöja.
+#
+# Därför finns jobbet `etikett` nedan. Det kör på ubuntu-latest — den etikett flottans
+# QC-arbetsflöden faktiskt använder — och det använder ENDAST run-steg, aldrig `uses:`.
+# Skälet är avgörande: `uses:` är JavaScript-actions som kräver node i containern. Finns
+# inte node dör steget innan det hunnit rapportera något, och man får en tom röd ruta i
+# stället för ett besked. Ett rent skalsteg kör i även den nakna imagen och kan därför
+# BERÄTTA att node saknas.
+
+name: sond
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+
+  # Att detta jobb alls kör bevisar att en runner på RÄTT org plockade upp arbetet.
+  # Saknas kontexten helt är det inte ett kodfel — det är att ingen runner tog jobbet.
+  runner:
+    runs-on: self-hosted
+    steps:
+      - name: Identitet och etiketter
+        run: |
+          echo "runner_namn=${RUNNER_NAME:-okänt}"
+          echo "runner_os=${RUNNER_OS:-okänt}"
+          echo "repo=${GITHUB_REPOSITORY:-okänt}"
+          echo "handelse=${GITHUB_EVENT_NAME:-okänt}"
+          echo "sha=${GITHUB_SHA:-okänt}"
+          echo "vard=$(hostname)"
+          echo "karna=$(uname -r)"
+          echo "arkitektur=$(uname -m)"
+          echo "tid_pa_runnern=$(date -Iseconds)"
+
+  # DEN ETIKETT SOM ARBETSFLÖDENA FAKTISKT ANVÄNDER.
+  #
+  # Detta jobb prövar `ubuntu-latest` — inte self-hosted — därför att det är den etiketten
+  # flottans QC-arbetsflöden begär. Vad den etiketten leder till skiljer sig mellan
+  # runners, och den skillnaden är hela poängen med jobbet.
+  #
+  # ENDAST run-steg. Inga `uses:`. En JavaScript-action kräver node i containern; saknas
+  # node dör steget innan det rapporterat något och man får en tom röd ruta. Ett rent
+  # skalsteg kör även i en naken image och kan därför berätta VAD som saknas.
+  #
+  # Jobbet får INTE falla på att verktyg saknas — det ska rapportera. Faller det blir
+  # utfallet omöjligt att skilja från ett kodfel, vilket är precis felet vi kartlagt.
+  etikett:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Vad ligger bakom ubuntu-latest på denna runner
+        shell: sh
+        run: |
+          echo "runner_namn=${RUNNER_NAME:-okänt}"
+          echo "vard=$(hostname 2>/dev/null || echo okänt)"
+
+          # Container eller host? I en container är PID 1 sällan init/systemd, och
+          # /.dockerenv finns ofta. Två oberoende indicier, båda utskrivna.
+          if [ -f /.dockerenv ]; then miljo="CONTAINER (/.dockerenv finns)"
+          else miljo="sannolikt HOST (ingen /.dockerenv)"; fi
+          echo "miljo=$miljo"
+          echo "pid1=$(cat /proc/1/comm 2>/dev/null || echo okänt)"
+
+          echo "--- verktyg som Node20-actions och QC-steg förutsätter ---"
+          brist=0
+          for v in python3 git node; do
+            if command -v "$v" >/dev/null 2>&1; then
+              echo "  FINNS   $v  $("$v" --version 2>&1 | head -1)"
+            else
+              echo "  SAKNAS  $v"
+              brist=$((brist + 1))
+            fi
+          done
+
+          echo "---"
+          if [ "$brist" -gt 0 ]; then
+            echo "SLUTSATS: $brist av 3 verktyg saknas bakom etiketten ubuntu-latest."
+            echo "Varje steg som anvander uses: (actions/checkout, setup-python) kan da"
+            echo "INTE STARTA — de ar JavaScript-actions och kraver node i containern."
+            echo "Ett rott qc-jobb i detta repo ar da ett MILJOFEL, inte ett kodfel."
+            echo "Atgard: rätta runnerns etikettkarta till ubuntu-latest:host."
+            echo ""
+            echo "Detta jobb avslutar med fel AVSIKTLIGT. En kontroll som inte kan falla"
+            echo "bevisar ingenting, och en gron sond hade latit pipelinen tro att miljon"
+            echo "var frisk. Diagnosen star i loggen ovan — rott har betyder MILJO, aldrig KOD."
+            exit 1
+          else
+            echo "SLUTSATS: samtliga tre verktyg finns bakom ubuntu-latest."
+            echo "Ett rott qc-jobb i detta repo kan da INTE forklaras av denna brist."
+          fi
+
+  # Verktygen som varje QC-jobb i flottan förutsätter.
+  verktyg:
+    runs-on: self-hosted
+    steps:
+      - name: Python, git och uv
+        run: |
+          fel=0
+          for v in python3 git; do
+            if command -v "$v" >/dev/null 2>&1; then
+              echo "  OK      $v $($v --version 2>&1 | head -1)"
+            else
+              echo "  SAKNAS  $v — obligatoriskt"; fel=1
+            fi
+          done
+          if command -v uv >/dev/null 2>&1; then
+            echo "  OK      uv $(uv --version 2>&1)"
+          else
+            echo "  SAKNAS  uv — krävs av qc-arbetsflödena, installeras annars per körning"
+          fi
+          exit $fel
+
+  # Egen kontext, eftersom docker kan saknas utan att allt annat är fel.
+  docker:
+    runs-on: self-hosted
+    steps:
+      - name: Docker tillgänglig och svarar
+        run: |
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "  SAKNAS  docker — jobb med runs-on ubuntu-latest kan plockas upp men inte köra"
+            exit 1
+          fi
+          echo "  OK      $(docker --version)"
+          if docker ps >/dev/null 2>&1; then
+            echo "  OK      docker svarar"
+          else
+            echo "  FEL     docker finns men svarar inte (rättigheter eller daemon nere)"
+            exit 1
+          fi
+
+  # Utan nätväg misslyckas varje beroendeinstallation, och felet ser ut som ett kodfel.
+  natverk:
+    runs-on: self-hosted
+    steps:
+      - name: Når runnern Gitea och internet
+        run: |
+          fel=0
+          gitea="${GITHUB_SERVER_URL:-http://192.168.5.40:3000}"
+          if timeout 10 curl -sS -o /dev/null "$gitea/api/v1/version"; then
+            echo "  OK      når Gitea på $gitea"
+          else
+            echo "  FEL     når INTE Gitea på $gitea"; fel=1
+          fi
+          if timeout 10 curl -sS -o /dev/null https://pypi.org/simple/; then
+            echo "  OK      når pypi.org"
+          else
+            echo "  FEL     når INTE pypi.org — beroendeinstallation kommer att falla"; fel=1
+          fi
+          exit $fel
+
+  # En full disk ger felmeddelanden som ser ut som allt annat än en full disk.
+  utrymme:
+    runs-on: self-hosted
+    steps:
+      - name: Diskutrymme och minne
+        run: |
+          fel=0
+          anv=$(df -P . | awk 'NR==2{gsub(/%/,"",$5); print $5}')
+          echo "  disk_anvant=${anv}%  ($(df -Ph . | awk 'NR==2{print $4}') ledigt)"
+          [ "${anv:-0}" -ge 90 ] && { echo "  FEL     över 90 procent använt"; fel=1; }
+          if [ -r /proc/meminfo ]; then
+            tot=$(awk '/MemTotal/{print int($2/1024)}' /proc/meminfo)
+            fri=$(awk '/MemAvailable/{print int($2/1024)}' /proc/meminfo)
+            echo "  minne_tillgangligt=${fri}MB av ${tot}MB"
+            [ "${fri:-9999}" -lt 256 ] && { echo "  FEL     under 256 MB tillgängligt"; fel=1; }
+          fi
+          exit $fel
