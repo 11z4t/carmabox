@@ -1017,8 +1017,16 @@ class BatBalancerCoordinator(DataUpdateCoordinator):
             try:
                 soc = float(soc_state.state)
                 is_online = True
-                # stale check — use dt_util (wallclock) not hass.loop.time() (monotonic)
-                age_s = (dt_util.utcnow() - soc_state.last_updated).total_seconds()
+                # stale check — use dt_util (wallclock) not hass.loop.time() (monotonic).
+                # QVF-1 (PLAT-1946-family, 2026-08-01): last_updated only advances when the
+                # VALUE changes, not on every report — a healthy sensor holding a stable SoC
+                # (e.g. battery idle at a constant %) would be falsely flagged stale, which
+                # then discards the BMS's real-time dynamic charge/discharge caps in favor of
+                # static config maxima (see _effective_discharge_w/_effective_charge_w).
+                # last_reported advances on every report regardless of value change — same fix
+                # already applied in ev_balancer/coordinator.py 2026-05-15 (Börje) for the
+                # identical reason.
+                age_s = (dt_util.utcnow() - soc_state.last_reported).total_seconds()
                 hw_stale_s = int(
                     self._float_helper(ENTITY_HW_STALE_THRESHOLD_S, float(HW_STALE_THRESHOLD_S))
                 )
