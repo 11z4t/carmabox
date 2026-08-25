@@ -4,11 +4,21 @@ set -e
 echo "Pre-commit: quality gates..."
 cd "$(git rev-parse --show-toplevel)"
 
-# Lint
-python3 -m ruff check . || { echo "ruff check FAILED"; exit 1; }
+# PLAT-1974: scope lint/format to staged files, not the whole repo. Running
+# against '.' meant any pre-existing lint debt anywhere in the tree blocked
+# every unrelated commit - a gate should examine what's being committed, not
+# the whole history.
+mapfile -d '' -t PY_FILES < <(git diff --cached --name-only --diff-filter=ACM -z -- '*.py')
 
-# Format check
-python3 -m ruff format --check . || { echo "ruff format FAILED"; exit 1; }
+if [ "${#PY_FILES[@]}" -gt 0 ]; then
+  # Lint
+  python3 -m ruff check "${PY_FILES[@]}" || { echo "ruff check FAILED"; exit 1; }
+
+  # Format check
+  python3 -m ruff format --check "${PY_FILES[@]}" || { echo "ruff format FAILED"; exit 1; }
+else
+  echo "No staged Python files - skipping ruff"
+fi
 
 # Clean .pyc and __pycache__
 find . -name "*.pyc" -delete 2>/dev/null || true
