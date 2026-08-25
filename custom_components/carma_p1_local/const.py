@@ -1,0 +1,2 @@
+DOMAIN = "carma_p1_local"
+DEFAULT_SCAN_INTERVAL_S = 2
