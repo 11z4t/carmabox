@@ -45,6 +45,9 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_HOST): cv.string,
         vol.Optional(CONF_NAME, default="P1 Meter"): cv.string,
+        vol.Optional(
+            CONF_SCAN_INTERVAL, default=timedelta(seconds=DEFAULT_SCAN_INTERVAL_S)
+        ): cv.time_period,
     }
 )
 
@@ -141,7 +144,7 @@ async def async_setup_platform(
     """Set up the HomeWizard local P1 sensors."""
     host = config[CONF_HOST]
     name = config[CONF_NAME]
-    scan_interval = config.get(CONF_SCAN_INTERVAL) or timedelta(seconds=DEFAULT_SCAN_INTERVAL_S)
+    scan_interval = config[CONF_SCAN_INTERVAL]
     session = async_get_clientsession(hass)
 
     # One-time device info fetch (product_type/serial/firmware) for the device registry.
@@ -153,6 +156,10 @@ async def async_setup_platform(
     except Exception as err:
         _LOGGER.warning("Could not fetch device info from %s: %s", host, err)
 
+    # unique_id is host-based (known at config time, deterministic across every
+    # boot) - never serial, which comes from a one-shot /api fetch that can fail
+    # on a given boot and would otherwise churn entity_ids (PLAT-1975 QC, 901).
+    # serial is still used in DeviceInfo for display/grouping only.
     serial = device_info_raw.get("serial", host)
     device_info = DeviceInfo(
         identifiers={(DOMAIN, serial)},
@@ -189,7 +196,7 @@ async def async_setup_platform(
 
     entities = [
         HomeWizardLocalSensor(
-            coordinator, serial, device_info, key, suffix, unit, device_class, state_class
+            coordinator, host, device_info, key, suffix, unit, device_class, state_class
         )
         for key, suffix, unit, device_class, state_class in SENSOR_DESCRIPTIONS
     ]
@@ -202,7 +209,7 @@ class HomeWizardLocalSensor(CoordinatorEntity, SensorEntity):
     def __init__(
         self,
         coordinator: DataUpdateCoordinator,
-        serial: str,
+        unique_id_base: str,
         device_info: DeviceInfo,
         key: str,
         suffix: str,
@@ -213,7 +220,7 @@ class HomeWizardLocalSensor(CoordinatorEntity, SensorEntity):
         super().__init__(coordinator)
         self._key = key
         self._attr_name = f"P1 Meter {suffix}"
-        self._attr_unique_id = f"{DOMAIN}_{serial}_{key}"
+        self._attr_unique_id = f"{DOMAIN}_{unique_id_base}_{key}"
         self._attr_native_unit_of_measurement = unit
         self._attr_device_class = device_class
         self._attr_state_class = state_class
