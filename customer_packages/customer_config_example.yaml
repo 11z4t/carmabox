@@ -1,0 +1,50 @@
+# CarmaBox v0.1 — Customer config example
+# Copy to customer_config.yaml and fill in your entity-IDs.
+#
+# Find entity-IDs via HA Developer Tools → States, search "goodwe" / "p1meter".
+
+input_number:
+  carmabox_v01_max_charge_w:
+    name: "CarmaBox max bat charge (W)"
+    min: 1000
+    max: 10000
+    step: 100
+    unit_of_measurement: "W"
+    icon: mdi:battery-arrow-up
+
+  carmabox_v01_bat_soc_ceiling_pct:
+    name: "CarmaBox bat SoC ceiling (%)"
+    min: 80
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:battery-high
+
+# Customer-aliases — change RIGHT-HAND entity-IDs to match YOUR HA
+sensor:
+  - platform: template
+    sensors:
+      carmabox_v01_grid_power_sensor:
+        friendly_name: "CarmaBox grid power source"
+        unit_of_measurement: "W"
+        value_template: "{{ states('sensor.hw_p1meter_3c6662_power') | float(0) }}"
+        # → CHANGE to your grid meter sensor
+
+      carmabox_v01_bat_soc:
+        friendly_name: "CarmaBox bat SoC source"
+        unit_of_measurement: "%"
+        value_template: "{{ states('sensor.goodwe_battery_soc') | float(0) }}"
+        # → CHANGE to your bat SoC sensor
+
+# Customer-aliases — entity references to your inverter
+# Use HA UI Settings → Devices → Goodwe → entity-IDs
+# Then add to your HA configuration.yaml via:
+#
+# homeassistant:
+#   customize:
+#     select.YOUR_GOODWE_EMS_MODE:
+#       alias: "carmabox_v01_ems_mode"
+#     number.YOUR_GOODWE_EMS_POWER_LIMIT:
+#       alias: "carmabox_v01_ems_power_limit"
+#
+# (= alias-pattern eller använd entity_id direkt och edit carmabox_v01.yaml)
