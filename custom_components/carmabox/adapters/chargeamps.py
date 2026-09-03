@@ -83,6 +83,7 @@ class ChargeAmpsAdapter(EVAdapter):
         api_key: str,
         charge_point_id: str,
         connector_id: int = 1,
+        shelly_prefix: str = "",
     ) -> None:
         self.hass = hass
         self.email = email
@@ -94,6 +95,15 @@ class ChargeAmpsAdapter(EVAdapter):
         self._refresh_token: str | None = None
         self._token_expires_at: float = 0.0
         self._last_status: dict | None = None
+        # Shelly Pro EM on the EV feed (904, 2026-09-03) — NOTE this is the
+        # 2-channel SINGLE-PHASE "Pro EM", not the 3-channel "Pro 3EM" that
+        # easee.py's shelly_3em_prefix pattern assumes. It has at most 2 CT
+        # clamps, so it can cover at most 2 of the EV circuit's 3 phases —
+        # TODO once installed: confirm which physical phases the two
+        # channels are actually clamped to (live status already showed one
+        # real session with L3=0A, so 2-phase coverage may be adequate in
+        # practice, but don't assume that's always true).
+        self.shelly_prefix = shelly_prefix
 
     def _session(self) -> aiohttp.ClientSession:
         return aiohttp.ClientSession(
@@ -224,8 +234,39 @@ class ChargeAmpsAdapter(EVAdapter):
             for m in self._connector_status().get("measurements", [])
         }
 
+    def _state_by_id(self, entity_id: str, default: float = 0.0) -> float:
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable", ""):
+            return default
+        try:
+            return float(state.state)
+        except (ValueError, TypeError):
+            return default
+
+    @property
+    def shelly_power_w(self) -> float:
+        """EV power from Shelly Pro EM on the EV feed (fast local, vs Charge Amps' cloud value).
+
+        Pro EM has 2 single-phase channels — sums whichever are configured.
+        Returns 0.0 if shelly_prefix not set or both channels unavailable.
+        """
+        if not self.shelly_prefix:
+            return 0.0
+        total_w = 0.0
+        for ch in (0, 1):
+            current = self._state_by_id(f"sensor.{self.shelly_prefix}_channel_{ch}_current")
+            voltage = self._state_by_id(
+                f"sensor.{self.shelly_prefix}_channel_{ch}_voltage", default=230.0
+            )
+            total_w += current * voltage
+        return total_w
+
     @property
     def power_w(self) -> float:
+        """EV charging power — prefers Shelly Pro EM (fast/local) over Charge Amps' own reading."""
+        shelly = self.shelly_power_w
+        if shelly > 10:  # > 10W = valid reading, not noise
+            return shelly
         return self._connector_status().get("chargingPowerKw", 0.0) * 1000
 
     @property
