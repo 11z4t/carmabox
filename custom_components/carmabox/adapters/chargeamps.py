@@ -20,21 +20,28 @@ Auth: POST /api/v4/auth/login with body {email, password} and header
 valid 168h (POST /api/v4/auth/refreshtoken). Bearer token in all subsequent
 calls: `Authorization: Bearer <token>`.
 
-STATUS: written directly against Charge Amps' own OpenAPI v4 spec (confirmed
-endpoint paths, request/response field names) — NOT yet exercised against a
-live account, since the API key is still pending (requested from Charge Amps
-Support via Åke's Freshdesk ticket, 2026-08-31). Once the key arrives:
-  1. Fill in email/password/api_key in the "Carma ha svensson - Charge Amps EV"
-     1Password item (4recon vault).
-  2. Call ensure_login() once and GET /api/v4/chargepoints/owned to confirm the
-     real charge_point_id (guessed nowhere in this file — must come from a
-     live call, never hardcoded).
-  3. Verify the `mode: On/Off` settings write actually starts/stops charging
-     given RFID is unlocked on this unit (per the app screenshot) — if it
-     doesn't, fall back to the remotestart/remotestop endpoints, which require
-     simulating an RFID tag (StartAuth: rfidLength, rfidFormat, rfid) since
-     that's how Charge Amps models "who authorized this session", even for
-     app/API-triggered starts.
+STATUS (904, 2026-09-03): login + GET /chargepoints/{id}/status verified
+against the real account and real charger — both work exactly as coded.
+charge_point_id="2505090652M" (name "HALO_090652M") confirmed live, connector
+1=Charger(EV)/connector 2=Schuko confirmed via the API response itself (not
+just the PDF). Credentials + charge_point_id live in the "Carma ha svensson -
+Charge Amps EV" 1Password item (4recon vault); API key lives in the "Carma ha
+svensson" note (chargeamps_api_key).
+
+IMPORTANT — NOT YET RESOLVED: the live chargepoint object has
+`"isLoadbalanced": true`. Svensson has a Charge Amps "Amp Guard" dynamic load
+balancer whose own product page describes it as "connected to the EV charger
+via Charge Amps Cloud" — meaning enable()/disable()/set_current() writes via
+this adapter may interact with Amp Guard's own cloud-side balancing in ways
+that aren't understood yet. Do NOT call the write methods (enable/disable/
+set_current) against the live charger until this is confirmed safe with
+Charge Amps — read-only status polling (refresh_status()) is fine.
+
+STILL UNVERIFIED: whether `mode: On/Off` in the settings PUT actually starts/
+stops charging (RFID is unlocked per the app screenshot, so it might), or
+whether remotestart/remotestop (which require simulating an RFID tag) is the
+real mechanism — not tested, since write methods are on hold pending the Amp
+Guard question above.
 """
 
 from __future__ import annotations
