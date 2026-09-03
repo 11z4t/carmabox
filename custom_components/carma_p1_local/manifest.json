@@ -1,0 +1,9 @@
+{
+  "domain": "carma_p1_local",
+  "name": "CARMA P1 (Lokal, oautentiserad fallback)",
+  "version": "1.0.0",
+  "documentation": "https://api-documentation.homewizard.com/",
+  "codeowners": ["@904-bolt"],
+  "requirements": [],
+  "iot_class": "local_polling"
+}
