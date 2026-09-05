@@ -42,13 +42,32 @@ stops charging (RFID is unlocked per the app screenshot, so it might), or
 whether remotestart/remotestop (which require simulating an RFID tag) is the
 real mechanism — not tested, since write methods are on hold pending the Amp
 Guard question above.
+
+CORRECTED (904, 2026-09-05): the EV-feed Shelly is a **Pro 3EM** (3-channel,
+`phase_a/b/c_current`/`_voltage` entities), not a "Pro EM" with 2 numbered
+channels — confirmed live via HA entity naming on 2026-09-04
+(`sensor.shellypro3em_..._phase_a/b/c_effekt`). The earlier "Pro EM 2-channel"
+assumption in this file was never corrected until now; `shelly_prefix` reads
+the Pro 3EM's three phases (same entity pattern as `easee.py`'s
+`shelly_3em_prefix`), summed, since Charge Amps sessions have been observed
+using 2 of the 3 phases (L1+L2, L3=0A) and a single-phase reading would have
+silently undercounted real load.
+
+DEGRADED-MODE SIGNALING (904, 2026-09-05, QC-MANIFEST v4.1 C3.4): a stale or
+never-successfully-refreshed status previously produced silent 0.0/{} reads
+from `current_a`/`phase_currents_a`/`power_w` — indistinguishable from a
+genuinely idle charger. This is unsafe for any consumer using these values as
+a phase-current guard against a main fuse: a fabricated zero can let an
+overcurrent condition through undetected. `data_available` and
+`data_age_s` are now the explicit, testable signal a caller MUST check before
+treating a zero reading as real; see their docstrings.
 """
 
 from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import aiohttp
 
@@ -65,6 +84,38 @@ _DYNAMIC_MIN = 6  # TODO verify against a live account: no confirmed minimum-cur
 # floor found in the API docs (unlike Easee's 10A max_limit quirk)
 _TOKEN_TTL_S = 120 * 60
 _TOKEN_REFRESH_MARGIN_S = 120  # refresh a bit before actual expiry
+_HTTP_TIMEOUT_S = 15  # QC-MANIFEST C3.2: every external call needs an explicit deadline
+
+
+class ConnectorMeasurement(TypedDict):
+    """One phase measurement entry from a connector status response."""
+
+    phase: str
+    current: float
+    voltage: float
+
+
+class ConnectorStatus(TypedDict, total=False):
+    """Shape of one entry in `connectorStatuses` from GET .../status.
+
+    `total=False`: the API does not guarantee every field is present on every
+    connector state (e.g. `measurements` is null while `Available`) — treat
+    absence as absence, not as a defaulted value, at the boundary (C6.3).
+    """
+
+    connectorId: int
+    status: str
+    measurements: list[ConnectorMeasurement]
+    chargingPowerKw: float
+    totalConsumptionKwh: float
+
+
+class ChargePointStatusResponse(TypedDict, total=False):
+    """Shape of the GET /chargepoints/{id}/status response body."""
+
+    id: str
+    status: str
+    connectorStatuses: list[ConnectorStatus]
 
 
 class ChargeAmpsAdapter(EVAdapter):
@@ -94,15 +145,10 @@ class ChargeAmpsAdapter(EVAdapter):
         self._token: str | None = None
         self._refresh_token: str | None = None
         self._token_expires_at: float = 0.0
-        self._last_status: dict | None = None
-        # Shelly Pro EM on the EV feed (904, 2026-09-03) — NOTE this is the
-        # 2-channel SINGLE-PHASE "Pro EM", not the 3-channel "Pro 3EM" that
-        # easee.py's shelly_3em_prefix pattern assumes. It has at most 2 CT
-        # clamps, so it can cover at most 2 of the EV circuit's 3 phases —
-        # TODO once installed: confirm which physical phases the two
-        # channels are actually clamped to (live status already showed one
-        # real session with L3=0A, so 2-phase coverage may be adequate in
-        # practice, but don't assume that's always true).
+        self._last_status: ChargePointStatusResponse | None = None
+        self._last_refresh_ok_at: float | None = None
+        # Shelly Pro 3EM on the EV feed (904, 2026-09-05, see module docstring
+        # for the Pro EM -> Pro 3EM correction).
         self.shelly_prefix = shelly_prefix
 
     def _session(self) -> aiohttp.ClientSession:
@@ -110,7 +156,8 @@ class ChargeAmpsAdapter(EVAdapter):
             headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-            }
+            },
+            timeout=aiohttp.ClientTimeout(total=_HTTP_TIMEOUT_S),
         )
 
     async def ensure_login(self, force: bool = False) -> bool:
@@ -151,11 +198,14 @@ class ChargeAmpsAdapter(EVAdapter):
                     self._refresh_token = data["refreshToken"]
                     self._token_expires_at = now + _TOKEN_TTL_S
                     return True
+        except TimeoutError:
+            _LOGGER.error("ChargeAmps: login/refresh timed out after %ds", _HTTP_TIMEOUT_S)
+            return False
         except aiohttp.ClientError as err:
             _LOGGER.error("ChargeAmps: login/refresh network error: %s", err)
             return False
 
-    async def _get(self, path: str) -> dict | None:
+    async def _get(self, path: str) -> dict[str, Any] | None:
         if not await self.ensure_login():
             return None
         try:
@@ -169,12 +219,16 @@ class ChargeAmpsAdapter(EVAdapter):
                 if r.status != 200:
                     _LOGGER.error("ChargeAmps: GET %s -> %d", path, r.status)
                     return None
-                return await r.json()
+                result: dict[str, Any] = await r.json()
+                return result
+        except TimeoutError:
+            _LOGGER.error("ChargeAmps: GET %s timed out after %ds", path, _HTTP_TIMEOUT_S)
+            return None
         except aiohttp.ClientError as err:
             _LOGGER.error("ChargeAmps: GET %s network error: %s", path, err)
             return None
 
-    async def _put(self, path: str, body: dict) -> bool:
+    async def _put(self, path: str, body: dict[str, Any]) -> bool:
         if self.analyze_only:
             _LOGGER.info("DRY-RUN ChargeAmps: PUT %s -> %s", path, body)
             return True
@@ -193,23 +247,56 @@ class ChargeAmpsAdapter(EVAdapter):
                     _LOGGER.error("ChargeAmps: PUT %s -> %d", path, r.status)
                     return False
                 return True
+        except TimeoutError:
+            _LOGGER.error("ChargeAmps: PUT %s timed out after %ds", path, _HTTP_TIMEOUT_S)
+            return False
         except aiohttp.ClientError as err:
             _LOGGER.error("ChargeAmps: PUT %s network error: %s", path, err)
             return False
 
     async def refresh_status(self) -> None:
-        """Poll GET /chargepoints/{id}/status and cache the result. Call periodically."""
+        """Poll GET /chargepoints/{id}/status and cache the result. Call periodically.
+
+        On failure, the previous cache is deliberately left in place (a
+        transient poll failure should not erase the last known reading), but
+        `_last_refresh_ok_at` is NOT updated — `data_available`/`data_age_s`
+        make that distinction observable to callers instead of silently
+        aging in place forever.
+        """
         data = await self._get(f"/api/v4/chargepoints/{self.charge_point_id}/status")
         if data:
-            self._last_status = data
+            self._last_status = ChargePointStatusResponse(
+                id=data.get("id", ""),
+                status=data.get("status", ""),
+                connectorStatuses=data.get("connectorStatuses", []),
+            )
+            self._last_refresh_ok_at = time.monotonic()
 
-    def _connector_status(self) -> dict:
+    def _connector_status(self) -> ConnectorStatus:
         if not self._last_status:
             return {}
         for c in self._last_status.get("connectorStatuses", []):
             if c.get("connectorId") == self.connector_id:
                 return c
         return {}
+
+    # ── Degraded-mode signaling (QC-MANIFEST v4.1 C3.4) ─────────
+    # A zero from current_a/phase_currents_a/power_w below is indistinguishable
+    # from a genuinely idle connector. Any safety-critical consumer (a phase
+    # fuse guard) MUST check data_available (and typically data_age_s) before
+    # treating that zero as real telemetry rather than "we don't know".
+
+    @property
+    def data_available(self) -> bool:
+        """True only if refresh_status() has ever completed successfully."""
+        return self._last_refresh_ok_at is not None
+
+    @property
+    def data_age_s(self) -> float | None:
+        """Seconds since the last successful refresh, or None if never refreshed."""
+        if self._last_refresh_ok_at is None:
+            return None
+        return time.monotonic() - self._last_refresh_ok_at
 
     # ── Read (from last refresh_status() cache — cheap, no adapter call blocks on network) ──
 
@@ -219,8 +306,12 @@ class ChargeAmpsAdapter(EVAdapter):
 
     @property
     def current_a(self) -> float:
-        """Average current across phases (A) from the last measurement, or 0."""
-        measurements = self._connector_status().get("measurements", [])
+        """Average current across phases (A) from the last measurement, or 0.
+
+        0.0 means "no current in the last measurement OR no measurement at
+        all" — check `data_available` first in any safety-critical caller.
+        """
+        measurements = self._connector_status().get("measurements") or []
         if not measurements:
             return 0.0
         currents = [m.get("current", 0.0) for m in measurements]
@@ -228,10 +319,17 @@ class ChargeAmpsAdapter(EVAdapter):
 
     @property
     def phase_currents_a(self) -> dict[str, float]:
-        """Per-phase current (A), e.g. {'L1': .., 'L2': ..} — from the API's own measurements."""
+        """Per-phase current (A), e.g. {'L1': .., 'L2': ..} — from the API's own measurements.
+
+        Empty dict means "no measurement available" (never refreshed, connector
+        not found in the last response, or the API returned `measurements: null`
+        for this connector's status, e.g. while `Available`) — NOT "0A on every
+        phase". Check `data_available` before treating an empty/zero result as
+        a real reading.
+        """
         return {
             m.get("phase", "?"): m.get("current", 0.0)
-            for m in self._connector_status().get("measurements", [])
+            for m in (self._connector_status().get("measurements") or [])
         }
 
     def _state_by_id(self, entity_id: str, default: float = 0.0) -> float:
@@ -245,25 +343,28 @@ class ChargeAmpsAdapter(EVAdapter):
 
     @property
     def shelly_power_w(self) -> float:
-        """EV power from Shelly Pro EM on the EV feed (fast local, vs Charge Amps' cloud value).
+        """EV power from the Shelly Pro 3EM on the EV feed (fast/local vs Charge Amps' cloud value).
 
-        Pro EM has 2 single-phase channels — sums whichever are configured.
-        Returns 0.0 if shelly_prefix not set or both channels unavailable.
+        Sums all three phases — Charge Amps sessions on this circuit have been
+        observed using only 2 of 3 phases (L1+L2, L3=0A), so summing all three
+        is required to not silently undercount real load; see module
+        docstring for the Pro EM -> Pro 3EM correction.
+        Returns 0.0 if shelly_prefix not set or all phases unavailable.
         """
         if not self.shelly_prefix:
             return 0.0
         total_w = 0.0
-        for ch in (0, 1):
-            current = self._state_by_id(f"sensor.{self.shelly_prefix}_channel_{ch}_current")
+        for phase in ("a", "b", "c"):
+            current = self._state_by_id(f"sensor.{self.shelly_prefix}_phase_{phase}_current")
             voltage = self._state_by_id(
-                f"sensor.{self.shelly_prefix}_channel_{ch}_voltage", default=230.0
+                f"sensor.{self.shelly_prefix}_phase_{phase}_voltage", default=230.0
             )
             total_w += current * voltage
         return total_w
 
     @property
     def power_w(self) -> float:
-        """EV charging power — prefers Shelly Pro EM (fast/local) over Charge Amps' own reading."""
+        """EV charging power — prefers Shelly Pro 3EM (fast/local) over Charge Amps' own reading."""
         shelly = self.shelly_power_w
         if shelly > 10:  # > 10W = valid reading, not noise
             return shelly
@@ -292,7 +393,7 @@ class ChargeAmpsAdapter(EVAdapter):
         self, *, max_current: float | None = None, mode: str | None = None
     ) -> bool:
         """PUT connector settings — covers both enable/disable (mode) and current limit."""
-        body: dict = {
+        body: dict[str, Any] = {
             "chargePointId": self.charge_point_id,
             "connectorId": self.connector_id,
         }
